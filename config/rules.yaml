@@ -37,14 +37,15 @@ categories:
     # The procedure does not say to remove existing branches for managers.
     clear_existing_branches: false
 
-# Optional per-ticket-type overrides, e.g. if a CREATE for a Checker should
-# get "supervising" instead of "monitoring" (Logic.docx says so, Mapping.xlsx
-# does not - Mapping.xlsx is used by default). Uncomment to activate:
-# overrides:
-#   CREATE:
-#     Checker:
-#       grants: [serving, supervising, alerts_receiving]
-overrides: {}
+# Per-ticket-type overrides of the category settings above.
+# CREATE + Checker: Logic.docx grants "supervising" in the انشاء/Checker step,
+# whereas the تعديل/Checker step (and Mapping.xlsx) use "monitoring". The
+# document is authoritative, so a CREATE for a Checker substitutes supervising
+# for monitoring; MODIFY for a Checker is unaffected and keeps monitoring.
+overrides:
+  CREATE:
+    Checker:
+      grants: [serving, supervising, alerts_receiving]
 
 # Ticket types for which the box
 # "تم الاطلاع على مصفوفة الصلاحيات و لا يوجد تعارض" must be ticked.

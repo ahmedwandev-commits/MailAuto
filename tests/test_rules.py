@@ -126,15 +126,16 @@ def test_create(rules):
     assert p.reason == "Other" and p.notes.startswith("لديه كود بالفعل")
 
 
-def test_override(rules):
-    rules.cfg["overrides"] = {"CREATE": {"Checker": {"grants": ["serving", "supervising", "alerts_receiving"]}}}
-    try:
-        p = rules.build_plan(T("انشاء", job="100056068"), False)
-        assert p.grants == ["serving", "supervising", "alerts_receiving"]
-        p = rules.build_plan(T("تعديل صلاحية", job="100056068"), True)
-        assert p.grants == ["serving", "monitoring", "alerts_receiving"]
-    finally:
-        rules.cfg["overrides"] = {}
+def test_create_checker_follows_document(rules):
+    # Logic.docx grants "supervising" in the انشاء/Checker step, while the
+    # تعديل/Checker step (and Mapping.xlsx) use "monitoring". The document wins:
+    # CREATE+Checker gets supervising; MODIFY+Checker keeps monitoring
+    # (config/rules.yaml `overrides`).
+    p = rules.build_plan(T("انشاء", job="100056068"), False)
+    assert p.category == "Checker"
+    assert p.grants == ["serving", "supervising", "alerts_receiving"]
+    p = rules.build_plan(T("تعديل صلاحية", job="100056068"), True)
+    assert p.grants == ["serving", "monitoring", "alerts_receiving"]
 
 
 def test_new_user_name(rules):

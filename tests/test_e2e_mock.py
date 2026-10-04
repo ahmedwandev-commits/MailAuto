@@ -92,7 +92,7 @@ def test_live_run(servers, tmp_path):
     # ---- CREATE
     for login, name, roles, br in [
         ("300110", "هاني جديد صبري", [], {"151": ["serving"]}),
-        ("300111", "دينا جديدة عادل", ["Branch Superviser"], {"424": ["alerts_receiving", "monitoring", "serving"]}),
+        ("300111", "دينا جديدة عادل", ["Branch Superviser"], {"424": ["alerts_receiving", "serving", "supervising"]}),
         ("300112", "مروان جديد فتحي", ["Branch Manager (Component)"],
          {"521": ["alerts_receiving", "monitoring", "supervising"]}),
     ]:

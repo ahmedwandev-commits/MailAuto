@@ -79,8 +79,13 @@ Category (column **المسمى الوظيفى** → job code → `Word File` in
 | Category | Role | Branch permissions |
 |---|---|---|
 | Maker | none (roles list emptied) | Grant Serving |
-| Checker | Branch Superviser | Grant Serving, Grant Monitoring, Grant Alerts Receiving |
+| Checker | Branch Superviser | Grant Serving, Grant Monitoring, Grant Alerts Receiving (تعديل صلاحية) · Grant Serving, **Grant Supervising**, Grant Alerts Receiving (انشاء) |
 | Manager | Branch Manager (Component) | Grant Supervising, Grant Monitoring, Grant Alerts Receiving |
+
+> **Checker note:** Logic.docx grants *supervising* (not *monitoring*) in the
+> انشاء/Checker step, so **انشاء + Checker** gets *serving + supervising + alerts*,
+> while **تعديل صلاحية + Checker** keeps *serving + monitoring + alerts*. This is
+> wired via the `overrides` block in `config/rules.yaml`.
 
 **Branch id** = the number in **الفرع / الادارة**, first 3 digits: `حلوان - 15100` → `151`
 (matched exactly against the *Identity* column in CEM, so `1510` is never picked for `151`).
@@ -137,8 +142,10 @@ After any change, run `python -m cem_bot run --profile real --dry-run`, then
 ## 6. Points to confirm (differences found between Logic.docx and Mapping.xlsx)
 
 1. **انشاء + Checker permissions** — Logic.docx says *serving + supervising + alerts*,
-   Mapping.xlsx (and the تعديل section) say *serving + monitoring + alerts*. The bot uses
-   Mapping.xlsx. To follow the document instead, uncomment the `overrides` block in `rules.yaml`.
+   while Mapping.xlsx (and the تعديل section) say *serving + monitoring + alerts*. The
+   document is authoritative, so the bot now follows it: **انشاء + Checker** grants
+   *serving + supervising + alerts* and **تعديل صلاحية + Checker** keeps *serving +
+   monitoring + alerts* (wired via the `overrides` block in `rules.yaml`).
 2. **Job 100056192** (Manager) has *grant monitoring* twice and no *grant supervising* in
    Mapping.xlsx. The bot gives it the normal Manager permissions; `check-mapping` lists it.
 3. **تعديل صلاحية + Manager** — the document does not say to remove old branches, so the
