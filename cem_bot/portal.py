@@ -241,17 +241,22 @@ class Portal:
         self.web.click_in(self.web.row_locator(table, pos), ui["choose_text"])
         self.web.settle()
 
-        dec = self.web.field_by_label(ui["decision_label"], "select", selectors=ui["decision_select_selectors"])
-        self.web.choose(dec, plan.decision)
+        self.web.choose_by_label(ui["decision_label"], plan.decision, selectors=ui["decision_select_selectors"])
         if plan.reason:
-            rs = self.web.field_by_label(ui["reasons_label"], "select", selectors=ui["reasons_select_selectors"])
-            self.web.choose(rs, plan.reason)
+            self.web.choose_by_label(ui["reasons_label"], plan.reason, selectors=ui["reasons_select_selectors"])
         if plan.notes:
             ta = self.web.field_by_label(ui["notes_label"], "textarea", selectors=ui["notes_selectors"])
             self.web.fill(ta, plan.notes)
         if plan.confirm_matrix:
             self.web.set_checkbox(self._matrix_checkbox(), True)
-        self._click_after(dec, ui["execute_text"])
+        # click the "تنفيذ" that follows the decision panel (re-find a fresh,
+        # non-stale anchor - the select may have been replaced by a post-back)
+        anchor = self.web.field_by_label(ui["decision_label"], "select",
+                                         selectors=ui["decision_select_selectors"], required=False)
+        if anchor is not None:
+            self._click_after(anchor, ui["execute_text"])
+        else:
+            self.web.click_text(ui["execute_text"])
         self.web.settle()
 
     def _matrix_checkbox(self):

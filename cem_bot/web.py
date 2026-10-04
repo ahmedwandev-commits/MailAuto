@@ -303,6 +303,29 @@ class Web:
             raise UIError(f"Dropdown did not take value '{target}' (now '{after['selectedText']}')")
         log.debug("  chose '%s' -> '%s'", target, after["selectedText"])
 
+    def choose_by_label(self, label: str, target: str, field: str = "select", selectors=None,
+                        type_text: str | None = None, tries: int = 3):
+        """Find the <select> next to *label* and choose *target*, re-finding and
+        settling between attempts.
+
+        Real ASP.NET decision panels post back when the row link ("إختر") is
+        clicked and again when a value is picked, which can leave a just-found
+        control stale or raise a navigation timeout mid-evaluate. Re-finding the
+        control from the label on each try (instead of reusing one locator)
+        rides those post-backs out. On the mock the first attempt succeeds, so
+        behaviour there is unchanged."""
+        last = None
+        for attempt in range(max(1, tries)):
+            try:
+                sel = self.field_by_label(label, field, selectors=selectors)
+                self.choose(sel, target, type_text=type_text)
+                return
+            except Exception as e:   # UIError / navigation / timeout -> settle and retry
+                last = e
+                log.debug("  choose '%s'='%s' attempt %d failed: %s", label, target, attempt + 1, e)
+                self.settle()
+        raise UIError(f"Could not set '{label}' to '{target}' after {tries} tries: {last}")
+
     def _choose_select2(self, select: Locator, target: str, type_text: str | None):
         page = self.page
         container = select.locator(
