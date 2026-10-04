@@ -124,3 +124,19 @@ def test_second_run_is_idempotent(servers, tmp_path):
     rep = Runner(make_cfg(tmp_path), dry_run=False, headless=True, slow_mo=0, types=["MODIFY", "CANCEL"]).run()
     c = rep.counts()
     assert c["DONE"] == 0 and c["REJECTED"] == 0 and c["SKIPPED"] == 2
+
+
+def test_single_user_filter(servers, tmp_path):
+    """--user processes only that user's ticket and re-assigns only their row."""
+    S.reset()
+    rep = Runner(make_cfg(tmp_path), dry_run=False, headless=True, slow_mo=0, only_user="300106").run()
+    c = rep.counts()
+    assert (c["DONE"], c["REJECTED"], c["SKIPPED"], c["ERROR"]) == (1, 0, 0, 0), c
+    # the targeted user was reactivated and its ticket closed
+    assert ticket("300106")["decision"] == "تم التنفيذ"
+    assert (user("300106")["active"], user("300106")["locked"]) == (True, False)
+    # every other ticket is left open - even ones already assigned to the operator
+    for uid in ("300101", "300102", "300108", "300110"):
+        assert ticket(uid)["status"] == "open"
+    # re-assign only touched the one user: an unrelated unassigned ticket stays unassigned
+    assert ticket("300101")["assigned_to"] is None

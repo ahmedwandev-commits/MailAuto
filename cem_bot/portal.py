@@ -107,26 +107,39 @@ class Portal:
                 return
 
     # ------------------------------------------------------------ re-assign
-    def reassign_all(self) -> int:
-        """إعادة اسناد: assign every CEM ticket to the operator."""
+    def reassign_all(self, only_user: str | None = None) -> int:
+        """إعادة اسناد: assign CEM tickets to the operator.
+
+        With *only_user* set, only that user's row(s) are re-assigned (and the
+        "select all" header checkbox is NOT used). If the user's row cannot be
+        located on the re-assign page, nothing is re-assigned - never everyone."""
         ui = self.ui
         op = self.cfg.creds.operator_id
-        log.info("Portal: re-assigning all CEM tickets to %s", op)
+        log.info("Portal: re-assigning %s to %s", f"user {only_user}" if only_user else "all CEM tickets", op)
         self._go_menu(ui["menu"]["reassign_text"], "portal_reassign")
         self._search_system()
         self._set_page_size()
         table = self.web.find_table([ui["columns"]["ticket_type"], ui["columns"]["system"]],
                                     selectors=ui["search"]["results_table_selectors"], timeout_ms=10000,
                                     required=False)
-        rows = [i for i, r in enumerate(table.rows) if len(r) > 1] if table else []
-        if not rows:
+        data_rows = [i for i, r in enumerate(table.rows) if len(r) > 1] if table else []
+        if not data_rows:
             log.info("Portal: nothing to re-assign")
             return 0
+        if only_user:
+            rows = self._rows_for_user(table, data_rows, only_user)
+            if not rows:
+                log.warning("Portal: no row for user %s on the re-assign page - nothing re-assigned "
+                            "(assign it manually, or run without --user)", only_user)
+                return 0
+        else:
+            rows = data_rows
         tloc = self.web.table_locator(table)
-        head_cb = tloc.locator("xpath=(./thead//input[@type='checkbox'] | ./tbody/tr[1]/th//input[@type='checkbox'])[1]")
-        if head_cb.count():
-            self.web.set_checkbox(head_cb.first, True)
-        for i in rows:   # make sure every row is ticked
+        if not only_user:   # tick everything via the header checkbox
+            head_cb = tloc.locator("xpath=(./thead//input[@type='checkbox'] | ./tbody/tr[1]/th//input[@type='checkbox'])[1]")
+            if head_cb.count():
+                self.web.set_checkbox(head_cb.first, True)
+        for i in rows:   # make sure the wanted row(s) are ticked
             cb = self.web.row_locator(table, i).locator("input[type=checkbox]")
             if cb.count() and not cb.first.is_checked():
                 self.web.set_checkbox(cb.first, True)
@@ -137,6 +150,23 @@ class Portal:
         self.web.settle()
         log.info("Portal: re-assigned %d ticket(s)", len(rows))
         return len(rows)
+
+    def _rows_for_user(self, table: Table, data_rows: list[int], user_id: str) -> list[int]:
+        """Row positions whose user-id cell equals *user_id* (already normalised).
+        The re-assign grid may label the id column رقم المستخدم / رقم الموظف rather
+        than رقم الوظيفى, so several candidate headers are tried."""
+        c = self.ui["columns"]
+        candidates, seen = [], set()
+        for name in [c["user_id"], "رقم المستخدم", "رقم الموظف"]:
+            if name and compact(name) not in seen:
+                seen.add(compact(name))
+                idx = table.col(name, required=False)
+                if idx is not None:
+                    candidates.append(idx)
+        if not candidates:
+            return []
+        return [i for i in data_rows
+                if any(ci < len(table.rows[i]) and norm(table.rows[i][ci]) == user_id for ci in candidates)]
 
     def _click_after(self, anchor, text: str):
         """Click the first element with *text* that comes after *anchor* in the page."""

@@ -24,6 +24,7 @@ def _cmd_run(a) -> int:
     from .runner import Runner   # imported late so check-mapping works without Playwright
     types = [x.strip().upper() for x in a.types.split(",")] if a.types else None
     r = Runner(cfg, dry_run=a.dry_run, max_tickets=a.max, types=types,
+               only_user=a.user,
                reassign=False if a.no_reassign else None,
                headless=True if a.headless else (False if a.headed else None),
                slow_mo=a.slowmo, verbose=a.verbose).run()
@@ -49,7 +50,8 @@ def _cmd_demo(a) -> int:
     state.reset()
     print(f"Mock portal {cfg.portal_base} | mock CEM {cfg.cem_base} (fake data, reset)")
     try:
-        r = Runner(cfg, dry_run=a.dry_run, headless=True if a.headless else None,
+        r = Runner(cfg, dry_run=a.dry_run, only_user=getattr(a, "user", None),
+                   headless=True if a.headless else None,
                    slow_mo=a.slowmo, verbose=a.verbose).run()
     finally:
         servers.stop()
@@ -85,6 +87,7 @@ def main(argv=None) -> int:
     r.add_argument("--profile", choices=["mock", "real"], help="override 'profile' in settings.yaml")
     r.add_argument("--dry-run", action="store_true", help="read tickets + look users up, change NOTHING")
     r.add_argument("--max", type=int, help="stop after N tickets")
+    r.add_argument("--user", help="only process the ticket(s) for this user id (رقم الوظيفى), e.g. 300106")
     r.add_argument("--types", help="only these types, e.g. MODIFY,CREATE (MODIFY, REACTIVATE, CANCEL, CREATE)")
     r.add_argument("--no-reassign", action="store_true", help="skip the 'إعادة اسناد' step")
     r.add_argument("--headless", action="store_true", help="hide the browser")
@@ -96,6 +99,7 @@ def main(argv=None) -> int:
 
     d = sub.add_parser("demo", help="run the bot on the built-in mock portal + mock CEM")
     d.add_argument("--dry-run", action="store_true")
+    d.add_argument("--user", help="only process the ticket(s) for this user id, e.g. 300106")
     d.add_argument("--headless", action="store_true", help="hide the browser")
     d.add_argument("--slowmo", type=int, help="ms delay between browser actions")
     d.add_argument("-v", "--verbose", action="store_true")

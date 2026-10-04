@@ -46,12 +46,18 @@ More commands:
 
 ```bash
 python -m cem_bot run --profile real --types MODIFY,REACTIVATE   # only some ticket types
+python -m cem_bot run --profile real --user 300106              # only this one user (رقم الوظيفى)
 python -m cem_bot check-mapping               # validate Mapping.xlsx, show rules
 python -m mock.server                         # just the fake systems, to click around yourself
-python -m pytest tests                        # 33 tests incl. full browser run on the mocks
+python -m pytest tests                        # 34 tests incl. full browser run on the mocks
 ```
 
-Other `run` options: `--no-reassign`, `--headless`, `--slowmo 300`, `--yes`, `-v`.
+Other `run` options: `--user 300106` (one user only), `--no-reassign`, `--headless`, `--slowmo 300`, `--yes`, `-v`.
+
+> `--user` processes only that user's ticket(s) and, during the إعادة اسناد step,
+> re-assigns only that user's row (not everyone's). If the user's row can't be found
+> on the re-assign page nothing is re-assigned, so combine it with `--no-reassign`
+> when the ticket is already assigned to you.
 
 ---
 

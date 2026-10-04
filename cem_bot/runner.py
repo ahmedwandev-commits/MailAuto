@@ -14,6 +14,7 @@ from .models import Action, Outcome, Plan, Ticket, TicketResult, TicketType
 from .portal import Portal
 from .report import Report, new_run_dir, setup_logging
 from .rules import Rules
+from .textnorm import norm
 from .web import Web
 
 log = logging.getLogger("cem_bot")
@@ -21,12 +22,13 @@ log = logging.getLogger("cem_bot")
 
 class Runner:
     def __init__(self, cfg: Config, dry_run: bool = False, max_tickets: int | None = None,
-                 types: list[str] | None = None, reassign: bool | None = None, headless: bool | None = None,
-                 slow_mo: int | None = None, verbose: bool = False):
+                 types: list[str] | None = None, only_user: str | None = None, reassign: bool | None = None,
+                 headless: bool | None = None, slow_mo: int | None = None, verbose: bool = False):
         self.cfg = cfg
         self.dry_run = dry_run
         run = cfg.settings["run"]
         self.max_tickets = run.get("max_tickets", 0) if max_tickets is None else max_tickets
+        self.only_user = norm(only_user) if only_user else None
         order = [TicketType(t) for t in run["processing_order"]]
         self.order = [t for t in order if not types or t.value in types]
         self.reassign = cfg.settings["portal"].get("do_reassign", True) if reassign is None else reassign
@@ -44,6 +46,8 @@ class Runner:
             "Mode": "DRY-RUN (nothing changed)" if dry_run else "LIVE",
             "Ticket types": ", ".join(t.value for t in self.order), "Mapping": self.mapping.source,
         })
+        if self.only_user:
+            self.report.meta["Only user"] = self.only_user
         self._shots = 0
 
     # ------------------------------------------------------------------ main
@@ -86,14 +90,23 @@ class Runner:
                 pass
         page.on("dialog", on_dialog)
 
+    def _list_tickets(self) -> list[Ticket]:
+        """Portal tickets, narrowed to --user when that filter is set."""
+        tickets = self.portal.list_tickets()
+        if self.only_user:
+            tickets = [t for t in tickets if t.user_id == self.only_user]
+        return tickets
+
     def _run_in(self, context):
         timeout = self.cfg.settings["browser"].get("default_timeout_ms", 20000)
         portal_page = context.new_page()
         self.portal = Portal(Web(portal_page, timeout), self.cfg, self.rules, context)
         self.portal.login()
         self.portal.open_provisioning()
+        if self.only_user:
+            log.info("Only processing tickets for user %s", self.only_user)
         if self.reassign and not self.dry_run:
-            self.portal.reassign_all()
+            self.portal.reassign_all(only_user=self.only_user)
         elif self.reassign:
             log.info("Portal: re-assign skipped in dry-run")
 
@@ -105,8 +118,10 @@ class Runner:
 
         handled: set[str] = set()
         processed = 0
-        tickets = self.portal.list_tickets()
+        tickets = self._list_tickets()
         log.info("Portal: %d CEM ticket(s) in the list", len(tickets))
+        if self.only_user and not tickets:
+            log.warning("No ticket for user %s in the list (is it assigned to you?)", self.only_user)
         for t in tickets:   # tickets that no rule covers are reported once
             if t.ticket_type is None:
                 handled.add(t.key)
@@ -132,11 +147,11 @@ class Runner:
                 if not self.dry_run:   # list changes after each decision
                     try:
                         self.portal.refresh()
-                        tickets = self.portal.list_tickets()
+                        tickets = self._list_tickets()
                     except Exception as e:
                         log.error("Could not refresh the ticket list: %s", e)
                         self._recover()
-                        tickets = self.portal.list_tickets()
+                        tickets = self._list_tickets()
 
     # ------------------------------------------------------------------ one ticket
     def _skip(self, t: Ticket, why: str, plan: Plan | None = None) -> TicketResult:
