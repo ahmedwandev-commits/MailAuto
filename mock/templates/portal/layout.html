@@ -1,0 +1,26 @@
+{% extends "portal/base.html" %}
+{% block body %}
+<div class="topbar"><span class="brand">تسليم طلبات الاكواد السرية</span><span style="margin-right:auto">{{ user }} | <a href="/App_Security_Login/Login.aspx">خروج</a></span></div>
+<div class="layout">
+  <div class="side">
+    <h4>لوحة المراقبة</h4>
+    <a href="#">لوحة المراقبة</a>
+    <h4>الطلبات</h4>
+    <a href="#">اسناد الطلبات الجديدة</a>
+    <a href="/SecurityCodeRequest/Security_Assign_Maker/Request_ReAssign.aspx" class="{{ 'active' if page=='reassign' }}">اعادة اسناد</a>
+    <a href="/SecurityCodeRequest/Security_Assign_Maker/Request_Making.aspx" class="{{ 'active' if page=='making' }}">الطلبات الجديدة-مستخدم سرية</a>
+    <a href="#">الطلبات المطلوب تعديلها</a>
+    <a href="#">تسجيل طلبات الغاء الخارجين عن الخدمة و انشاء الموظفين الجدد</a>
+    <h4>الاستفسارات</h4>
+    <a href="#">الاستفسار عن النماذج</a>
+    <a href="#">الاستفسار عن الطلبات</a>
+    <h4>التقارير</h4>
+    <a href="#">عــرض</a>
+  </div>
+  <div class="main">
+    {% if message %}<div class="msg ok" id="resultMessage">{{ message }}</div>{% endif %}
+    {% if error %}<div class="msg err" id="errorMessage">{{ error }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </div>
+</div>
+{% endblock %}

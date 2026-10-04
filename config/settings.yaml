@@ -1,0 +1,62 @@
+# =====================================================================
+#  CEM Provisioning Bot - general settings
+#  Credentials are NOT stored here. Put them in the ".env" file
+#  (copy ".env.example" to ".env").
+# =====================================================================
+
+# Which environment to run against:
+#   mock -> the local fake portal + fake CEM shipped with this project
+#   real -> the real Security Code Request portal + CEM
+profile: mock
+
+profiles:
+  mock:
+    portal_base: "http://127.0.0.1:8701"
+    cem_base: "http://127.0.0.1:8702"
+  real:
+    portal_base: "https://nbesrv.nbe.ahly.bank"
+    cem_base: "https://cem-api_lb2.nbe.ahly.bank"
+
+# Page addresses (appended to the base URLs above)
+paths:
+  portal_login: "/App_Security_Login/Login.aspx"
+  portal_home: "/SecurityCodeRequest/Security_Assign_Maker/Default.aspx"
+  portal_reassign: "/SecurityCodeRequest/Security_Assign_Maker/Request_ReAssign.aspx"
+  portal_making: "/SecurityCodeRequest/Security_Assign_Maker/Request_Making.aspx"
+  cem_login: "/CVMServer/Login?returnUrl=%2Fcvmserver"
+  cem_home: "/cvmserver"
+  cem_users: "/CVMServer/List/EntityList?pSelectedTab=User&pEntitieName=User"
+  cem_users_filter: "/CVMServer/List/EntityList?pSelectedTab=User&pEntitieName=User&pFilter={user_id}&pFilterBy=User_Name_L1_Locked|User_LoginName_Default|Department_Name_L1_Default"
+  cem_user_create: "/CVMServer/User/Create?pSelectedTab=User&pEntityName=User&pID="
+
+browser:
+  # "" = Playwright's bundled Chromium. On a company PC set "chrome" or "msedge"
+  # to drive the browser that is already installed (no download needed).
+  channel: ""
+  headless: false
+  slow_mo_ms: 150           # small delay between actions - easier to watch
+  ignore_https_errors: true # internal certificates
+  default_timeout_ms: 20000
+  navigation_timeout_ms: 45000
+  viewport: {width: 1600, height: 900}
+
+portal:
+  system_search_text: "cem"     # typed into the "النظام" dropdown
+  # Row on the "الأنظمة المتاحة / الحزم المسندة" page that opens the portal
+  user_group_keywords: ["User Provisioning Portal", "موظف اسناد", "مستخدم السرية"]
+  do_reassign: true             # step "إعادة اسناد" before processing
+  # Results table "Show N" - the bot picks the first of these that exists
+  page_size_preference: ["All", "الكل", "100", "50", "30", "20"]
+  verify_ticket_closed: true    # re-search after each decision and confirm the ticket disappeared
+
+cem:
+  user_search_mode: searchbox   # searchbox (as in the procedure) or url (pFilter=... address)
+
+run:
+  # Order in which ticket types are processed (as in the procedure)
+  processing_order: [MODIFY, REACTIVATE, CANCEL, CREATE]
+  max_tickets: 0                # 0 = no limit
+  stop_on_error: false          # true = stop the whole run at the first error
+  output_dir: "runs"
+  screenshot_on_error: true
+  mapping_file: "data/Mapping.xlsx"

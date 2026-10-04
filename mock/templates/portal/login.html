@@ -1,0 +1,12 @@
+{% extends "portal/base.html" %}
+{% block body %}
+<div style="display:flex;justify-content:center;padding-top:90px">
+  <form method="post" class="panel" style="width:330px;padding:18px">
+    <div style="text-align:center;margin-bottom:14px">نظام السرية الموحد (SSO)<br>تسجيل الدخول</div>
+    {% if error %}<div class="msg err">{{ error }}</div>{% endif %}
+    <div class="fg"><label>كود المستخدم :</label><input type="text" name="ctl00$txtUserName" id="txtUserName" placeholder="كود المستخدم"></div>
+    <div class="fg" style="margin-top:10px"><label>كلمة المرور :</label><input type="password" name="ctl00$txtPassword" id="txtPassword" placeholder="كلمة المرور" style="width:100%;padding:6px"></div>
+    <div style="margin-top:18px"><button class="btn green" type="submit">دخــول</button></div>
+  </form>
+</div>
+{% endblock %}

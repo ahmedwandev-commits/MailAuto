@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ title or 'CEM' }} (MOCK)</title>
+<style>
+  :root { --blue:#0d63a5; --orange:#f0a32a; --line:#d8dde3; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI", Arial, sans-serif; font-size:13px; color:#222; background:#fff; }
+  .mockbar { background:#b00020; color:#fff; text-align:center; padding:3px; font-size:12px; }
+  header { background:var(--blue); color:#fff; height:52px; display:flex; align-items:center; }
+  header .logo { width:190px; font-size:28px; font-weight:900; padding-left:10px; letter-spacing:1px; }
+  header .title { font-size:17px; font-weight:600; flex:1; }
+  header .who { padding-right:18px; }
+  .wrap { display:flex; min-height:calc(100vh - 74px); }
+  .sidebar { width:190px; background:#e9e9e9; border-right:1px solid #c9c9c9; flex:none; }
+  .sidebar .org { background:var(--orange); color:#222; font-weight:600; padding:12px; }
+  .sidebar .sec { padding:10px 12px; border-bottom:1px solid #d0d0d0; font-weight:600; }
+  .sidebar a { display:block; padding:6px 22px; color:#222; text-decoration:none; }
+  .sidebar a:hover { background:#dcdcdc; }
+  main { flex:1; min-width:0; }
+  .breadcrumb { padding:7px 10px; color:var(--blue); }
+  .breadcrumb a { color:var(--blue); }
+  .toolbar { background:var(--blue); padding:6px 10px; }
+  .toolbar a { color:#fff; text-decoration:none; margin-right:12px; cursor:pointer; }
+  .toolbar a.hidden { display:none; }
+  .search { margin:6px 8px; padding:4px 6px; width:250px; border:1px solid #bbb; }
+  table.grid { width:100%; border-collapse:collapse; }
+  table.grid th { text-align:left; font-weight:normal; color:#444; padding:7px 10px; border-bottom:1px solid var(--line); border-right:1px solid var(--line); }
+  table.grid td { padding:6px 10px; border-bottom:1px solid #eee; border-right:1px solid #eee; }
+  table.grid tbody tr:hover td { background:#cfe3f7; cursor:pointer; }
+  .nodata { text-align:center; padding:60px; color:#555; }
+  .section { border-top:1px solid var(--line); margin:0 10px; }
+  .section h3 { font-size:14px; margin:12px 4px; }
+  table.form td { padding:6px 12px; }
+  table.form td.lbl { width:320px; }
+  table.form input[type=text], table.form select { width:340px; padding:3px 5px; border:1px solid #aaa; }
+  .ok { color:#3b9b3b; font-weight:bold; } .no { color:#999; font-weight:bold; }
+  .btnbar { text-align:right; padding:14px; border-top:1px solid var(--line); }
+  .btn { padding:6px 26px; border:1px solid #bbb; background:#f2f2f2; cursor:pointer; }
+  .err { margin:10px; padding:8px; background:#fdecec; border:1px solid #e59a9a; color:#8a1414; }
+  /* toggle switch: real checkbox hidden, slider visible */
+  .switch { position:relative; display:inline-block; width:32px; height:16px; }
+  .switch input { opacity:0; width:0; height:0; position:absolute; }
+  .slider { position:absolute; inset:0; background:#ccc; border-radius:3px; cursor:pointer; }
+  .slider:before { content:""; position:absolute; width:14px; height:14px; left:1px; top:1px; background:#fff; border-radius:2px; transition:.1s; }
+  .switch input:checked + .slider { background:#6abf69; }
+  .switch input:checked + .slider:before { transform:translateX(16px); }
+  /* modal */
+  .modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:50; }
+  .modal.show { display:block; }
+  .modal .box { background:#fff; width:1000px; margin:120px auto; padding:10px 14px; }
+  .modal .bar { background:var(--blue); height:18px; margin:8px 0; }
+</style>
+<script src="/static/widgets.js"></script>
+</head>
+<body>
+<div class="mockbar">MOCK / TEST SYSTEM - all data is fake</div>
+<header><div class="logo">SEDCO</div><div class="title">Customer Experience Management (CEM)</div>
+  {% if who %}<div class="who">&#128100; {{ who }}</div>{% endif %}</header>
+{% if who %}
+<div class="wrap">
+  <nav class="sidebar">
+    <div class="org">CVM Organization</div>
+    <div class="sec">Business Intelligence</div>
+    <div class="sec">Queuing &amp; Routing</div>
+    <div class="sec">Notifications and Alerts</div>
+    <div class="sec">Security</div>
+    <a href="/CVMServer/List/EntityList?pSelectedTab=User&pEntitieName=User">Users</a>
+    <a href="#">Roles</a>
+    <div class="sec">Settings</div>
+  </nav>
+  <main>{% block main %}{% endblock %}</main>
+</div>
+{% else %}
+{% block login %}{% endblock %}
+{% endif %}
+</body>
+</html>

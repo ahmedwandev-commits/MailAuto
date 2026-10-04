@@ -1,0 +1,14 @@
+{% extends "cem/base.html" %}
+{% block login %}
+<form method="post" style="width:640px;margin:100px auto;border:1px solid #ddd">
+  <div style="background:#0d63a5;color:#fff;padding:12px;font-weight:600">Login</div>
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  <table class="form" style="width:100%;margin:10px 0">
+    <tr><td class="lbl" style="width:200px">User Name</td><td><input type="text" id="UserName" name="UserName"></td></tr>
+    <tr><td class="lbl">Password</td><td><input type="password" id="Password" name="Password" style="width:340px"></td></tr>
+    <tr><td class="lbl">Language</td><td><select name="Language"><option>English</option><option>Arabic</option></select></td></tr>
+    <tr><td><label><input type="checkbox" name="RememberMe"> Remember Me</label></td>
+        <td style="text-align:right"><input class="btn" type="submit" value="Login"></td></tr>
+  </table>
+</form>
+{% endblock %}

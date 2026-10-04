@@ -1,0 +1,30 @@
+{% extends "portal/base.html" %}
+{% block body %}
+<div class="topbar"><span class="brand">نظام السرية الموحد (SSO)</span></div>
+<div class="main">
+  <div class="panel"><div class="ph">الأنظمة المتاحة</div>
+    <div class="pb grid">
+      <div class="fg"><label>كود المستخدم :</label><input type="text" value="{{ user }}" readonly></div>
+      <div class="fg"><label>الاسم :</label><input type="text" value="Mock Operator" readonly></div>
+    </div>
+    <div class="pb" style="background:#eceff2">برجى السماح للنوافذ المنبثقة في المتصفح (Popup Windows) للدخول على الأنظمة</div>
+    <div class="pb">
+      <div class="panel" style="max-width:820px;margin:auto"><div class="ph">الحزم المسندة</div>
+        <div class="pb">
+          <div class="dt-tools"><span>Show <select><option>10</option></select></span>
+            <span>Search <input class="dt-search" data-table="groups" type="text"></span></div>
+          <table class="dt" id="groups">
+            <thead><tr><th>الحزمة</th><th>تاريخ انتهاء الصلاحية</th><th></th><th></th></tr></thead>
+            <tbody>
+            {% for g in groups %}
+              <tr><td>{{ g.name }}</td><td>04/06/2058</td><td>حزمة اساسية</td>
+                <td>{% if g.target %}<a href="{{ g.target }}" target="_blank">دخول</a>{% else %}<a href="javascript:void(0)">دخول</a>{% endif %}</td></tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

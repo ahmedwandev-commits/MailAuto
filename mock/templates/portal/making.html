@@ -1,0 +1,67 @@
+{% extends "portal/layout.html" %}
+{% block content %}
+<form method="post" id="form1">
+<div class="panel"><div class="ph grey">تنفيذ الطلبات المعطاة من قبل الفرع / المنطقة</div></div>
+{% include "portal/_search.html" %}
+{% if searched %}
+<div class="panel"><div class="ph">نتيجة البحث عن النماذج</div>
+  <div class="pb">
+    <div class="dt-tools"><span>Show <select id="pageSize"><option>20</option><option>50</option><option>All</option></select></span>
+      <span>Search: <input class="dt-search" data-table="gvRequests" type="text"></span></div>
+    <table class="dt" id="gvRequests">
+      <thead><tr>
+        <th>طلب تكليف</th><th>تاريخ الطلب</th><th>تاريخ الارسال للسرية</th><th>الفرع / الادارة</th><th>نوع النموذج</th>
+        <th>نوع الطلب</th><th>رقم الوظيفى</th><th>اسم الموظف</th><th>رقم الموظف TP</th><th>النظام</th>
+        <th>الوظيفة / القسم الذى يعمل به</th><th>EIAM Position</th><th>المسمى الوظيفى</th><th>الفترة من / الى</th>
+        <th>الحالة</th><th></th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for t in tickets %}
+        <tr id="row{{ t.id }}">
+          <td>لا</td><td>{{ t.request_date }}</td><td>{{ t.sent_date }}</td><td>{{ t.branch }}</td><td>{{ t.form_type }}</td>
+          <td>{{ t.ticket_type }}</td><td>{{ t.user_id }}</td><td>{{ t.user_name }}</td><td>{{ t.tp_id }}</td><td>{{ t.system }}</td>
+          <td>{{ t.dept }}</td><td>{{ t.eiam }}</td><td>{{ t.job_title }}</td><td>{{ t.period }}</td>
+          <td><span class="badge">إعادة اسناد لمستخدم السرية</span></td>
+          <td><a href="javascript:void(0)">تفاصيل الطلب</a></td>
+          <td><a href="javascript:void(0)" onclick="openDecision({{ t.id }})">إختر</a></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="17" style="text-align:center">No data available in table</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div style="margin:6px 0">Showing 1 to {{ tickets|length }} of {{ tickets|length }} records</div>
+  </div>
+</div>
+
+<div class="panel" id="decisionPanel" style="display:none"><div class="ph grey">القرار</div>
+  <div class="pb" style="max-width:700px">
+    <input type="hidden" name="ticket_id" id="hfTicketId">
+    <div class="fg"><label>القرار *</label>
+      <select class="select2" name="decision" id="ddlDecision">
+        <option value="">إختر</option><option value="1">تم التنفيذ</option><option value="2">لم يتم التنفيذ</option>
+      </select></div>
+    <div class="fg" style="margin-top:10px"><label>الأسباب *</label>
+      <select class="select2" name="reason" id="ddlReason">
+        <option value="">إختر</option><option value="11">ليس لدية كود</option><option value="12">الطلب غير مستوفى</option><option value="99">Other</option>
+      </select></div>
+    <div class="fg" style="margin-top:10px"><label>ملاحظات</label><textarea name="notes" id="txtNotes" rows="4"></textarea></div>
+    <div style="margin-top:10px;border:1px solid #c9ced6;padding:6px">
+      <input type="checkbox" name="matrix" id="chkMatrix" value="1">
+      <span style="color:#c00">تم الاطلاع على مصفوفة الصلاحيات و لا يوجد تعارض</span>
+    </div>
+    <div style="margin-top:12px"><button class="btn blue" type="submit" name="action" value="decide"
+         onclick="return confirm('هل أنت متأكد من تنفيذ القرار؟')">تنفيذ</button></div>
+  </div>
+</div>
+{% endif %}
+</form>
+<script>
+function openDecision(id) {
+  document.querySelectorAll('#gvRequests tr.selected').forEach(function (r) { r.classList.remove('selected'); });
+  document.getElementById('row' + id).classList.add('selected');
+  document.getElementById('hfTicketId').value = id;
+  document.getElementById('decisionPanel').style.display = 'block';
+}
+</script>
+{% endblock %}

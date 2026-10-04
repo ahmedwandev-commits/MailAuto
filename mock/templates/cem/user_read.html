@@ -1,0 +1,27 @@
+{% extends "cem/base.html" %}
+{% block main %}
+<div class="breadcrumb">&#8962; <a href="/CVMServer/List/EntityList?pSelectedTab=User&pEntitieName=User">Users</a> / {{ u.name_en }}</div>
+<div class="toolbar">
+  <a href="/CVMServer/User/Create?pSelectedTab=User&pEntityName=User&pID=">New</a>
+  <a href="/CVMServer/User/Edit?pSelectedTab=User&pID={{ u.pid }}&pEntitieName=User">Edit</a>
+  <a href="/CVMServer/List/ManyToManyRelationList?pSelectedTab=User&pEntitieName=Role&pOwnerEntityName=User&pRelatedMTMID={{ u.pid }}">Roles</a>
+  <a href="/CVMServer/List/ManyToManyRelationList?pSelectedTab=User&pEntitieName=QueueBranchUser&pOwnerEntityName=User&pRelatedMTMID={{ u.pid }}">Branches</a>
+  <a>Set Password</a>
+</div>
+<div class="section"><h3>&#8863; Name</h3>
+  <table class="form"><tr><td class="lbl">Name (English)</td><td>{{ u.name_en }}</td></tr>
+    <tr><td class="lbl">Name (Arabic)</td><td>{{ u.name_ar }}</td></tr></table></div>
+<div class="section"><h3>&#8863; Login Settings</h3>
+  <table class="form">
+    <tr><td class="lbl">Type</td><td>Normal</td></tr>
+    <tr><td class="lbl">Authentication Type</td><td>{{ u.auth_type }}</td></tr>
+    <tr><td class="lbl">Login Name</td><td>{{ u.login }}</td></tr>
+    <tr><td class="lbl">Department</td><td>{{ u.department }}</td></tr>
+    <tr><td class="lbl">User Active</td><td>{% if u.active %}<span class="ok">&#10004;</span>{% else %}<span class="no">&#10006;</span>{% endif %}</td></tr>
+    <tr><td class="lbl">User Locked</td><td>{% if u.locked %}<span class="ok">&#10004;</span>{% else %}<span class="no">&#10006;</span>{% endif %}</td></tr>
+  </table></div>
+<div class="section"><h3>&#8863; General Information</h3>
+  <table class="form"><tr><td class="lbl">ID</td><td>{{ u.pid }}</td></tr>
+    <tr><td class="lbl">Created by</td><td>{{ u.created_by }}</td></tr>
+    <tr><td class="lbl">Modified by</td><td>{{ u.modified_by }}</td></tr></table></div>
+{% endblock %}

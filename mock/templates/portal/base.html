@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>{% block title %}نظام السرية{% endblock %} (MOCK)</title>
+<style>
+  :root { --orange:#ee8a00; --green:#0f6b3a; --side:#3a4450; --teal:#2bb7c9; --line:#d9dde3; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: Tahoma, "Segoe UI", Arial, sans-serif; font-size:13px; background:#eef0f3; color:#222; }
+  .mockbar { background:#b00020; color:#fff; text-align:center; padding:3px; font-size:12px; letter-spacing:.3px; }
+  .topbar { background:#fff; border-bottom:1px solid var(--line); height:46px; display:flex; align-items:center; padding:0 16px; gap:12px; }
+  .topbar .brand { font-weight:bold; color:var(--green); }
+  .layout { display:flex; min-height: calc(100vh - 70px); }
+  .side { width:230px; background:var(--side); color:#fff; flex:none; }
+  .side h4 { margin:0; background:var(--teal); padding:9px 12px; font-size:13px; }
+  .side a { display:block; color:#dfe6ec; text-decoration:none; padding:7px 22px; font-size:12.5px; }
+  .side a:hover, .side a.active { background:#2c343d; color:#fff; }
+  .main { flex:1; padding:14px; }
+  .panel { background:#fff; border:1px solid var(--line); margin-bottom:14px; }
+  .panel > .ph { background:var(--orange); color:#fff; padding:8px 12px; font-weight:bold; }
+  .panel > .ph.grey { background:#5d6d7e; }
+  .panel > .pb { padding:12px; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px 40px; max-width:900px; }
+  .fg label { display:block; margin-bottom:4px; font-size:12px; }
+  .fg input[type=text], .fg textarea, .fg select { width:100%; padding:6px; border:1px solid #c9ced6; font-family:inherit; }
+  .btn { background:var(--teal); color:#fff; border:0; padding:8px 26px; cursor:pointer; font-family:inherit; font-size:13px; }
+  .btn.green { background:var(--green); }
+  .btn.blue { background:#2d7fd3; }
+  table.dt { width:100%; border-collapse:collapse; font-size:12px; }
+  table.dt th { background:var(--green); color:#fff; padding:7px 5px; font-weight:normal; border:1px solid #0c5530; }
+  table.dt td { border:1px solid var(--line); padding:6px 5px; vertical-align:top; }
+  table.dt tr.selected td { background:#a9c1e0; }
+  .badge { background:#f5c400; padding:2px 5px; font-size:11px; white-space:nowrap; }
+  .dt-tools { display:flex; justify-content:space-between; margin-bottom:8px; }
+  .msg { padding:9px 12px; margin-bottom:12px; border:1px solid; }
+  .msg.ok { background:#e6f5ea; border-color:#7cc08f; color:#13532b; }
+  .msg.err { background:#fdecec; border-color:#e59a9a; color:#8a1414; }
+  a { color:#1b62b5; }
+  /* select2 look-alike */
+  .select2-hidden-accessible { border:0 !important; clip:rect(0 0 0 0) !important; height:1px !important; margin:-1px !important;
+     overflow:hidden !important; padding:0 !important; position:absolute !important; width:1px !important; white-space:nowrap !important; }
+  .select2-container { display:inline-block; width:100%; position:relative; }
+  .select2-selection { display:flex; justify-content:space-between; border:1px solid #c9ced6; padding:6px 8px; cursor:pointer; background:#fff; min-height:30px; }
+  .select2-dropdown { display:block; background:#fff; border:1px solid #9aa4b1; }
+  .select2-search__field { width:calc(100% - 8px); margin:4px; padding:5px; border:1px solid #c9ced6; }
+  .select2-results__options { list-style:none; margin:0; padding:0; max-height:220px; overflow:auto; }
+  .select2-results__option { padding:6px 8px; cursor:pointer; }
+  .select2-results__option--highlighted { background:#2d7fd3; color:#fff; }
+</style>
+<script src="/static/widgets.js"></script>
+</head>
+<body>
+<div class="mockbar">MOCK / TEST SYSTEM - all data is fake</div>
+{% block body %}{% endblock %}
+</body>
+</html>

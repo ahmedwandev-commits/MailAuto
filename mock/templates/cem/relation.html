@@ -1,0 +1,57 @@
+{% extends "cem/base.html" %}
+{% block main %}
+<div class="breadcrumb">&#8962; <a href="/CVMServer/List/EntityList?pSelectedTab=User&pEntitieName=User">Users</a> /
+  <a href="/CVMServer/User/Read?pSelectedTab=User&pEntityName=User&pID={{ u.pid }}">{{ u.name_en }}</a> / {{ heading }}</div>
+<div class="toolbar">
+  <a onclick="document.getElementById('addModal').classList.add('show')">Add Existing</a>
+  <a id="btnRemove" class="hidden" onclick="removeSelected()">Remove from User</a>
+  <a>Export List</a>
+  {% if kind == 'branch' %}<a>Grant Serving and Random Call For Centralized Branches</a>{% endif %}
+</div>
+<input type="search" class="search" placeholder="&#128269;">
+<form method="post" id="removeForm"><input type="hidden" name="action" value="remove">
+<table class="grid" id="relGrid">
+  <thead><tr><th style="width:30px"><input type="checkbox" class="select-all"></th>
+    {% for c in cols %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr {% if r.href %}onclick="location.href='{{ r.href }}'"{% endif %}>
+      <td><input type="checkbox" name="ids" value="{{ r.id }}" onclick="event.stopPropagation()" onchange="syncRemove()"></td>
+      {% for v in r.cells %}<td>{% if loop.first and r.href %}<a href="{{ r.href }}" style="color:#222;text-decoration:none">{{ v }}</a>{% else %}{{ v }}{% endif %}</td>{% endfor %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</form>
+{% if not rows %}<div class="nodata">No Data Found</div>{% endif %}
+<div style="padding:8px;border-top:1px solid #ddd">{{ rows|length }}/{{ rows|length }}</div>
+
+<div class="modal" id="addModal"><div class="box">
+  <div>{{ modal_title }}</div><div class="bar"></div>
+  <input type="text" class="search dt-search" data-table="availGrid" placeholder="&#128269;" style="margin:4px 0">
+  <form method="post"><input type="hidden" name="action" value="add">
+  <div style="max-height:260px;overflow:auto;border:1px solid #ddd">
+  <table class="grid" id="availGrid">
+    <thead><tr><th style="width:30px"><input type="checkbox" class="select-all"></th>{% for c in avail_cols %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+    <tbody>
+    {% for r in avail %}
+      <tr><td><input type="checkbox" name="ids" value="{{ r.id }}"></td>{% for v in r.cells %}<td>{{ v }}</td>{% endfor %}</tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <div style="padding:4px">{{ avail|length }}/{{ avail|length }}</div>
+  <div style="text-align:right;padding:8px"><input class="btn" type="submit" value="OK">
+    <button type="button" class="btn" onclick="document.getElementById('addModal').classList.remove('show')">Cancel</button></div>
+  </form>
+</div></div>
+<script>
+function syncRemove() {
+  var any = document.querySelectorAll('#relGrid tbody input[type=checkbox]:checked').length > 0;
+  document.getElementById('btnRemove').classList.toggle('hidden', !any);
+}
+document.addEventListener('change', function (e) { if (e.target.closest('#relGrid')) syncRemove(); });
+function removeSelected() {
+  if (confirm('Are you sure you want to remove the selected item(s) from this user?')) document.getElementById('removeForm').submit();
+}
+</script>
+{% endblock %}

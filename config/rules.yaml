@@ -1,0 +1,77 @@
+# =====================================================================
+#  Business rules (from Logic.docx). Change these instead of the code.
+#  All Arabic text is compared after normalisation, so أ/إ/ا, ة/ه, ى/ي
+#  and extra spaces do not matter.
+# =====================================================================
+
+# Values of column "نوع الطلب" and the internal ticket type they map to.
+ticket_types:
+  MODIFY:
+    - "تعديل صلاحية"
+    - "تعديل صلاحية أكواد سريه بصفه استثنائيه"
+  REACTIVATE:
+    - "إعادة تشغيل"
+  CANCEL:
+    - "الغاء"
+  CREATE:
+    - "انشاء"
+    - "انشاء أكواد سريه بصفه استثنائيه"
+
+# Column "Word File" in Mapping.xlsx -> what to configure in CEM.
+#   role:   role to add in CEM (null = no role, roles list must be empty)
+#   grants: branch permissions to grant
+#           (serving | monitoring | supervising | alerts_receiving)
+#   clear_existing_branches: remove all current branches before adding the new one
+categories:
+  Maker:
+    role: null
+    grants: [serving]
+    clear_existing_branches: true
+  Checker:
+    role: "Branch Superviser"
+    grants: [serving, monitoring, alerts_receiving]
+    clear_existing_branches: true
+  Manager:
+    role: "Branch Manager (Component)"
+    grants: [supervising, monitoring, alerts_receiving]
+    # The procedure does not say to remove existing branches for managers.
+    clear_existing_branches: false
+
+# Optional per-ticket-type overrides, e.g. if a CREATE for a Checker should
+# get "supervising" instead of "monitoring" (Logic.docx says so, Mapping.xlsx
+# does not - Mapping.xlsx is used by default). Uncomment to activate:
+# overrides:
+#   CREATE:
+#     Checker:
+#       grants: [serving, supervising, alerts_receiving]
+overrides: {}
+
+# Ticket types for which the box
+# "تم الاطلاع على مصفوفة الصلاحيات و لا يوجد تعارض" must be ticked.
+confirm_matrix_for: [MODIFY, CREATE]
+
+# What CEM should look like for re-activation / cancellation tickets
+user_flags:
+  MODIFY:     {active: true,  locked: false}
+  REACTIVATE: {active: true,  locked: false}
+  CANCEL:     {active: false, locked: false}
+
+# Texts selected in the decision ("القرار") panel
+decision_text:
+  done: "تم التنفيذ"
+  not_done: "لم يتم التنفيذ"
+reason_text:
+  no_code: "ليس لدية كود"
+  other: "Other"
+notes_text:
+  already_has_code: "لديه كود بالفعل برجاء ارسال طلب تعديل صلاحية وليس إنشاء"
+
+# Branch id = digits found in column "الفرع / الادارة" (the number next to "-"),
+# first N digits from the left.  "حلوان - 15100" -> "151"
+branch_id_digits: 3
+
+# New CEM user
+new_user:
+  name_format: "{user_id} - {user_name}"   # used for Name (English) and Name (Arabic)
+  authentication_type: "Windows"
+  department: "Main"

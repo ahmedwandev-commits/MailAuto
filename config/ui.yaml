@@ -1,0 +1,95 @@
+# =====================================================================
+#  Screen texts and (optional) element selectors.
+#
+#  The bot finds buttons, fields and table columns by the text you see on
+#  the screen, so in most cases nothing here needs to change.  If one
+#  element on the real system cannot be found, add a Playwright selector
+#  for it in the matching "*_selectors" list (they are tried first, in
+#  order).  Selector syntax:  css=...   xpath=...   text=...
+#  Tip: right-click the element in Chrome -> Inspect -> Copy selector.
+# =====================================================================
+
+portal:
+  login:
+    username_selectors: ["css=input[placeholder*='كود المستخدم']", "css=input[id*='user' i]:not([type=hidden])", "css=input[name*='user' i]:not([type=hidden])"]
+    password_selectors: ["css=input[type=password]"]
+    button_text: "دخول"
+    failure_texts: ["خطأ", "غير صحيح", "invalid", "incorrect"]
+  groups:
+    enter_text: "دخول"
+  menu:
+    reassign_text: "إعادة اسناد"
+    making_text: "الطلبات الجديدة-مستخدم سرية"
+  search:
+    system_label: "النظام"
+    search_button_text: "بحث"
+    results_table_selectors: []        # leave empty = detect table by its column headers
+  reassign:
+    assignee_select_selectors: []      # leave empty = first dropdown under the results table
+    execute_text: "تنفيذ"
+  columns:
+    user_id: "رقم الوظيفى"
+    user_name: "اسم الموظف"
+    ticket_type: "نوع الطلب"
+    branch: "الفرع / الادارة"
+    job_title: "المسمى الوظيفى"
+    request_date: "تاريخ الطلب"
+    system: "النظام"
+  decision:
+    choose_text: "إختر"                # link in the ticket row that opens the decision panel
+    decision_label: "القرار"
+    reasons_label: "الأسباب"
+    notes_label: "ملاحظات"
+    matrix_checkbox_text: "تم الاطلاع على مصفوفة الصلاحيات"
+    execute_text: "تنفيذ"
+    decision_select_selectors: []
+    reasons_select_selectors: []
+    notes_selectors: []
+    matrix_checkbox_selectors: []
+    # Texts that mean the submit failed (searched on the page after "تنفيذ")
+    error_texts: ["حدث خطأ", "يجب", "مطلوب", "required"]
+
+cem:
+  login:
+    username_selectors: ["css=#UserName", "css=input[name='UserName']", "xpath=//*[normalize-space(text())='User Name']/following::input[1]"]
+    password_selectors: ["css=input[type=password]"]
+    button_text: "Login"
+  # Left menu - elements inside it are ignored when looking for toolbar buttons
+  sidebar_css: "nav, aside, .sidebar, .side-bar, .sidenav, .side-menu, #sidebar, .main-sidebar, .left-menu, #leftMenu, .menu-left"
+  users_search_selectors: ["css=input[type=search]", "css=input.search", "css=input[placeholder*='Search' i]"]
+  toolbar:
+    new: "New"
+    edit: "Edit"
+    roles: "Roles"
+    branches: "Branches"
+    add_existing: "Add Existing"
+    remove_from_user: "Remove from User"
+    ok: "OK"
+    cancel: "Cancel"
+    verify: "Verify"
+  fields:
+    name_en: "Name (English)"
+    name_ar: "Name (Arabic)"
+    auth_type: "Authentication Type"
+    login_name: "Login Name"
+    department: "Department"
+    user_active: "User Active"
+    user_locked: "User Locked"
+  verify:
+    success_selectors: ["css=.verified", "css=.text-success", "text=/\\bverified\\b/i", "css=.fa-check-circle"]
+    failure_selectors: ["css=.not-verified", "css=.text-danger", "text=/not\\s+(found|verified|valid)/i"]
+    wait_ms: 8000
+  modal:
+    container_selectors: [".modal.show", ".modal.in", ".modal[style*='block']", "[role=dialog]", ".ui-dialog", ".k-window", ".popup", ".modal"]
+    roles_title: "Available Roles"
+    branches_title: "Available Branches"
+  columns:
+    name: "Name"
+    login_name: "Login Name"
+    identity: "Identity"
+  # Branch permission page ("Branch Users Permissions")
+  grants:
+    serving:          {grant: "Grant Serving",          deny: "Deny Serving",          setting: "Serving"}
+    monitoring:       {grant: "Grant Monitoring",       deny: "Deny Monitoring",       setting: "Monitoring"}
+    supervising:      {grant: "Grant Supervising",      deny: "Deny Supervising",      setting: "Supervising"}
+    alerts_receiving: {grant: "Grant Alerts Receiving", deny: "Deny Alerts Receiving", setting: "Alerts Receiving"}

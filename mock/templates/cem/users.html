@@ -1,0 +1,20 @@
+{% extends "cem/base.html" %}
+{% block main %}
+<div class="breadcrumb">&#8962; Users</div>
+<div class="toolbar"><a href="/CVMServer/User/Create?pSelectedTab=User&pEntityName=User&pID=">New</a><a>Export List</a></div>
+<input type="search" class="search" id="txtSearch" value="{{ flt }}" placeholder="&#128269;"
+       onkeydown="if(event.key==='Enter'){location.href='/CVMServer/List/EntityList?pSelectedTab=User&pEntitieName=User&pFilter='+encodeURIComponent(this.value)+'&pFilterBy=User_Name_L1_Locked|User_LoginName_Default|Department_Name_L1_Default';}">
+<table class="grid" id="usersGrid">
+  <thead><tr><th style="width:30px"><input type="checkbox"></th><th>Name</th><th>Login Name</th><th>User Active</th><th>User Locked</th><th>Department Name</th></tr></thead>
+  <tbody>
+  {% for u in users %}
+    <tr onclick="location.href='/CVMServer/User/Read?pSelectedTab=User&pEntityName=User&pID={{ u.pid }}'">
+      <td><input type="checkbox" onclick="event.stopPropagation()"></td>
+      <td><a href="/CVMServer/User/Read?pSelectedTab=User&pEntityName=User&pID={{ u.pid }}" style="color:#222;text-decoration:none">{{ u.name_en }}</a></td>
+      <td>{{ u.login }}</td><td>{{ '•' if u.active }}</td><td>{{ '•' if u.locked }}</td><td>{{ u.department }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if not users %}<div class="nodata">No Data Found</div>{% endif %}
+<div style="padding:8px;border-top:1px solid #ddd">{{ users|length }}/{{ total }}</div>
+{% endblock %}

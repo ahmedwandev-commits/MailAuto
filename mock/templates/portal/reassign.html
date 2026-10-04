@@ -1,0 +1,45 @@
+{% extends "portal/layout.html" %}
+{% block content %}
+<form method="post" id="form1">
+<div class="panel"><div class="ph grey">اعادة اسناد الطلبات التي تمت اسنادها</div></div>
+{% include "portal/_search.html" %}
+{% if searched %}
+<div class="panel"><div class="ph">نتيجة البحث عن الطلبات</div>
+  <div class="pb">
+    <div class="dt-tools"><span>Show <select><option>All</option></select></span>
+      <span>Search: <input class="dt-search" data-table="gvResults" type="text"></span></div>
+    <table class="dt" id="gvResults">
+      <thead><tr>
+        <th><input type="checkbox" class="select-all" title="select all"></th>
+        <th>طلب تكليف</th><th>تاريخ الطلب</th><th>تاريخ الارسال للسرية</th><th>نوع النموذج</th><th>الفرع / الادارة</th>
+        <th>اسم الموظف</th><th>رقم الموظف</th><th>رقم الموظف TP</th><th>رقم المستخدم</th><th>المسمى الوظيفى</th>
+        <th>النظام</th><th>المجموعة</th><th>نوع الطلب</th><th>موظف الاسناد</th><th>مستخدم السرية</th><th>ملاحظات</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for t in tickets %}
+        <tr>
+          <td><input type="checkbox" name="ticket_ids" value="{{ t.id }}"></td>
+          <td>لا</td><td>{{ t.request_date }}</td><td>{{ t.sent_date }}</td><td>{{ t.form_type }}</td>
+          <td>{{ t.branch.split('-')[-1].strip() }}</td><td>{{ t.user_name }}</td><td>{{ t.user_id }}</td><td></td><td>{{ t.user_id }}</td>
+          <td>{{ t.job_title }}</td><td>{{ t.system }}</td><td></td><td>{{ t.ticket_type }}</td><td>موظف فرع تجريبي</td>
+          <td>{{ t.assigned_to or '-' }}</td><td>----</td><td><a href="javascript:void(0)">التفاصيل</a></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="18" style="text-align:center">لا توجد بيانات</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div style="margin:6px 0">Showing 1 to {{ tickets|length }} of {{ tickets|length }} records</div>
+    <div class="grid" style="margin-top:14px">
+      <div class="fg"><label>مستخدم السرية</label>
+        <select class="select2" name="assignee" id="ddlAssignee">
+          <option value="">إختر</option>
+          {% for e in employees %}<option value="{{ e }}">{{ e }} - موظف سرية تجريبي</option>{% endfor %}
+        </select></div>
+    </div>
+    <div style="margin-top:12px"><button class="btn blue" type="submit" name="action" value="assign">تنفيذ</button></div>
+  </div>
+</div>
+{% endif %}
+</form>
+{% endblock %}

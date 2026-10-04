@@ -1,0 +1,22 @@
+{% extends "cem/base.html" %}
+{% block main %}
+<div class="breadcrumb">&#8962; <a href="/CVMServer/List/EntityList?pSelectedTab=User&pEntitieName=User">Users</a> /
+  <a href="/CVMServer/User/Read?pSelectedTab=User&pEntityName=User&pID={{ u.pid }}">{{ u.name_en }}</a> /
+  <a href="/CVMServer/List/ManyToManyRelationList?pSelectedTab=User&pEntitieName=QueueBranchUser&pOwnerEntityName=User&pRelatedMTMID={{ u.pid }}">Branch Users Permissions</a> / {{ b.name }}</div>
+<form method="post" id="permForm"><input type="hidden" name="perm" id="hfPerm"><input type="hidden" name="op" id="hfOp"></form>
+<div class="toolbar">
+  {% for key, label in perms %}
+    {% if key in link.grants %}<a onclick="setPerm('{{ key }}','deny')">Deny {{ label }}</a>
+    {% else %}<a onclick="setPerm('{{ key }}','grant')">Grant {{ label }}</a>{% endif %}
+  {% endfor %}
+</div>
+<div class="section"><h3>&#8863; General Settings</h3>
+  <table class="form">
+  {% for key, label in perms %}
+    <tr><td class="lbl">{{ label }}</td><td>{% if key in link.grants %}<span class="ok fa-check">&#10004;</span>{% else %}<span class="no fa-times">&#10006;</span>{% endif %}</td></tr>
+  {% endfor %}
+  </table></div>
+<script>
+function setPerm(p, op) { document.getElementById('hfPerm').value = p; document.getElementById('hfOp').value = op; document.getElementById('permForm').submit(); }
+</script>
+{% endblock %}

@@ -1,0 +1,20 @@
+<div class="panel"><div class="ph">البحث عن الطلبات</div>
+  <div class="pb">
+    <div class="grid">
+      <div class="fg"><label>تاريخ الطلب من</label><input type="text" name="dateFrom" placeholder="تاريخ الطلب من"></div>
+      <div class="fg"><label>تاريخ الطلب الى</label><input type="text" name="dateTo" placeholder="تاريخ الطلب الى"></div>
+      <div class="fg"><label>نوع النموذج</label>
+        <select class="select2" name="formType"><option value="">إختر</option><option>نموذج (6)</option><option>نموذج (7)</option></select></div>
+      <div class="fg"><label>الفرع / الادارة</label>
+        <select class="select2" name="branch"><option value="">إختر</option><option>حلوان - 15100</option><option>المعادي - 25400</option></select></div>
+      <div class="fg"><label>النظام</label>
+        <select class="select2" name="system" id="ddlSystem">
+          <option value="">إختر</option>
+          {% for s in systems %}<option value="{{ s }}" {{ 'selected' if s == system }}>{{ s }}</option>{% endfor %}
+        </select></div>
+      <div class="fg"><label>نوع الطلب</label>
+        <select class="select2" name="reqType"><option value="">إختر</option><option>تعديل صلاحية</option><option>انشاء</option><option>الغاء</option></select></div>
+    </div>
+    <div style="margin-top:14px"><button class="btn" type="submit" name="action" value="search">بحــث</button></div>
+  </div>
+</div>

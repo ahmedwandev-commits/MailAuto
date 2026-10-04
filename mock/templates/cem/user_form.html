@@ -1,0 +1,54 @@
+{% extends "cem/base.html" %}
+{% block main %}
+<div class="breadcrumb">&#8962; <a href="/CVMServer/List/EntityList?pSelectedTab=User&pEntitieName=User">Users</a> /
+  {% if create %}New{% else %}<a href="/CVMServer/User/Read?pSelectedTab=User&pEntityName=User&pID={{ u.pid }}">{{ u.name_en }}</a> / Edit{% endif %}</div>
+{% if error %}<div class="err" id="formError">{{ error }}</div>{% endif %}
+<form method="post">
+<div class="section"><h3>&#8863; Name</h3>
+  <table class="form">
+    <tr><td class="lbl">Name (English)</td><td><input type="text" name="name_en" value="{{ u.name_en }}"></td></tr>
+    <tr><td class="lbl">Name (Arabic)</td><td><input type="text" name="name_ar" value="{{ u.name_ar }}"></td></tr>
+  </table></div>
+<div class="section"><h3>&#8863; Login Settings</h3>
+  <table class="form">
+    <tr><td class="lbl">Type</td><td>Normal</td></tr>
+    <tr><td class="lbl">Authentication Type</td><td><select name="auth_type">
+      {% for a in ['Normal', 'Windows', 'LDAP'] %}<option {{ 'selected' if a == u.auth_type }}>{{ a }}</option>{% endfor %}</select></td></tr>
+    <tr><td class="lbl">Login Name</td><td><input type="text" name="login" id="txtLogin" value="{{ u.login }}"></td></tr>
+    <tr><td></td><td style="text-align:right;width:340px"><button type="button" class="btn" onclick="verify()">Verify</button>
+      <span id="verifyResult"></span><input type="hidden" name="verified_login" id="hfVerified" value="{{ '' if create else u.login }}"></td></tr>
+    <tr><td class="lbl">Pin Code</td><td><input type="text" name="pin"></td></tr>
+    <tr><td class="lbl">Department</td><td>
+      {% if create %}<select name="department"><option value="">&#128269;</option><option>Branches</option><option>Call Center</option><option>Main</option></select>
+      {% else %}{{ u.department }}{% endif %}</td></tr>
+    <tr><td class="lbl">User Active</td><td><label class="switch"><input type="checkbox" name="active" value="1" {{ 'checked' if u.active }}><span class="slider"></span></label></td></tr>
+    <tr><td class="lbl">User Locked</td><td><label class="switch"><input type="checkbox" name="locked" value="1" {{ 'checked' if u.locked }}><span class="slider"></span></label></td></tr>
+    <tr><td class="lbl">Change password the next time user logs in</td><td><label class="switch"><input type="checkbox" name="chg"><span class="slider"></span></label></td></tr>
+  </table></div>
+<div class="section"><h3>&#8863; Personal Information</h3>
+  <table class="form">
+    <tr><td class="lbl">Language</td><td><select name="lang"><option>English</option><option>Arabic</option></select></td></tr>
+    <tr><td class="lbl">Mobile Number</td><td><input type="text" name="mobile"></td></tr>
+    <tr><td class="lbl">E-mail</td><td><input type="text" name="email"></td></tr>
+    <tr><td class="lbl">Job Title (English)</td><td><input type="text" name="jt_en"></td></tr>
+    <tr><td class="lbl">Job Title (Arabic)</td><td><input type="text" name="jt_ar"></td></tr>
+  </table></div>
+<div class="section"><h3>&#8863; General Information</h3>
+  <table class="form"><tr><td class="lbl">ID</td><td>{{ u.pid or '' }}</td></tr></table></div>
+<div class="btnbar"><input class="btn" type="submit" value="OK">
+  <a class="btn" href="/CVMServer/List/EntityList?pSelectedTab=User&pEntitieName=User" style="text-decoration:none;color:#222">Cancel</a></div>
+</form>
+<script>
+function verify() {
+  var login = document.getElementById('txtLogin').value;
+  var out = document.getElementById('verifyResult');
+  out.className = ''; out.textContent = ' ...';
+  fetch('/CVMServer/api/verify?login=' + encodeURIComponent(login)).then(function (r) { return r.json(); }).then(function (j) {
+    setTimeout(function () {
+      if (j.ok) { out.className = 'verified ok'; out.textContent = ' ✔ Verified'; document.getElementById('hfVerified').value = login; }
+      else { out.className = 'not-verified'; out.style.color = '#c00'; out.textContent = ' ✖ User not found in directory'; document.getElementById('hfVerified').value = ''; }
+    }, 400);
+  });
+}
+</script>
+{% endblock %}
