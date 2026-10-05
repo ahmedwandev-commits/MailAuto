@@ -171,6 +171,55 @@ def _decide(form):
     return f"تم حفظ القرار بنجاح للطلب رقم {tid}", None
 
 
+def _as_date(text):
+    parts = (text or "").replace("/", "-").split("-")
+    if len(parts) != 3:
+        return None
+    try:
+        d, m, y = (int(p) for p in parts)
+        if y < 100:               # unlikely here, but be forgiving
+            y += 2000
+        return (y, m, d)
+    except ValueError:
+        return None
+
+
+@app.route(f"{BASE}/RequestDetails_Inquiry.aspx", methods=["GET", "POST"])
+def inquiry():
+    if _need_login():
+        return redirect(url_for("login"))
+    ctx = dict(user=session["user"], page="inquiry", headers=S.INQUIRY_HEADERS,
+               searched=False, rows=[], total=0, page_index=0, has_next=False, has_prev=False,
+               date_from="", date_to="", error=None)
+    if request.method == "POST":
+        date_from = (request.form.get("ctl00$ContentPlaceHolder1$UC_RequestDeatils_Inquiry1$txtFromDate") or "").strip()
+        date_to = (request.form.get("ctl00$ContentPlaceHolder1$UC_RequestDeatils_Inquiry1$txtToDate") or "").strip()
+        ctx["date_from"], ctx["date_to"] = date_from, date_to
+        try:
+            page_index = int(request.form.get("page", "0"))
+        except ValueError:
+            page_index = 0
+        if "ctl00$ContentPlaceHolder1$UC_RequestDeatils_Inquiry1$btnSearch" in request.form:
+            page_index = 0
+        elif "ctl00$ContentPlaceHolder1$UC_RequestDeatils_Inquiry1$btnNext" in request.form:
+            page_index += 1
+        elif "ctl00$ContentPlaceHolder1$UC_RequestDeatils_Inquiry1$btnPrevious" in request.form:
+            page_index = max(0, page_index - 1)
+
+        lo, hi = _as_date(date_from), _as_date(date_to)
+        rows = S.inquiry_rows()
+        if lo and hi:
+            rows = [r for r in rows if lo <= _as_date(r[0]) <= hi]
+        total = len(rows)
+        ps = S.INQUIRY_PAGE_SIZE
+        page_index = max(0, min(page_index, max(0, (total - 1) // ps)))
+        start = page_index * ps
+        ctx.update(searched=True, rows=rows[start:start + ps], total=total, page_index=page_index,
+                   has_prev=page_index > 0, has_next=start + ps < total)
+        S.log("portal", f"inquiry {date_from}..{date_to} page {page_index} ({total} total)")
+    return render_template("portal/inquiry.html", **ctx)
+
+
 # ---- test helpers -------------------------------------------------------
 @app.route("/__state")
 def get_state():

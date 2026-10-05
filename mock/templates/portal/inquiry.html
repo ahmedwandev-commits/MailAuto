@@ -1,0 +1,52 @@
+{% extends "portal/layout.html" %}
+{% set P = "ctl00$ContentPlaceHolder1$UC_RequestDeatils_Inquiry1$" %}
+{% set I = "ContentPlaceHolder1_UC_RequestDeatils_Inquiry1_" %}
+{% block content %}
+<form method="post" id="form1">
+<input type="hidden" name="page" value="{{ page_index }}">
+<div class="panel"><div class="ph">البحث عن الطلبات</div>
+  <div class="pb">
+    <div class="grid">
+      <div class="fg"><label>تاريخ الطلب من</label>
+        <input type="text" name="{{ P }}txtFromDate" id="{{ I }}txtFromDate" class="form-control"
+               value="{{ date_from }}" maxlength="10" placeholder="تاريخ الطلب من"></div>
+      <div class="fg"><label>تاريخ الطلب الى</label>
+        <input type="text" name="{{ P }}txtToDate" id="{{ I }}txtToDate" class="form-control"
+               value="{{ date_to }}" maxlength="10" placeholder="تاريخ الطلب الى"></div>
+    </div>
+    <div style="margin-top:14px">
+      <input class="btn green" type="submit" name="{{ P }}btnSearch" id="{{ I }}btnSearch" value="بحث"></div>
+  </div>
+</div>
+
+{% if searched %}
+<div class="panel"><div class="ph">نتيجة البحث عن الطلبات</div>
+  <div class="pb">
+    <div class="dt-tools"><span>Show <select id="pageSize"><option>20</option><option>50</option><option>All</option></select></span>
+      <span>Search: <input class="dt-search" data-table="{{ I }}GridView_RequestDetails" type="text"></span></div>
+    <table class="dt table" id="{{ I }}GridView_RequestDetails">
+      <thead><tr>{% for h in headers %}<th scope="col">{{ h }}</th>{% endfor %}<th></th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>{% for c in r %}<td>{{ c }}</td>{% endfor %}<td><a href="javascript:void(0)">استفسار</a></td></tr>
+      {% else %}
+        <tr><td colspan="{{ headers|length + 1 }}" style="text-align:center">No data available in table</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="form-actions" id="{{ I }}Panel_Paging" style="margin-top:10px">
+      <div style="display:inline-block">اجمالى عدد الطلبات : -
+        <span id="{{ I }}lblTotalCount">{{ total }}</span></div>
+      <div style="display:inline-block;margin-right:20px">
+        <input type="submit" class="btn blue" name="{{ P }}btnPrevious" id="{{ I }}btnPrevious"
+               value="السابق" {{ 'disabled' if not has_prev }}>
+        <input type="submit" class="btn blue" name="{{ P }}btnNext" id="{{ I }}btnNext"
+               value="التالى" {{ 'disabled' if not has_next }}>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+</form>
+{% endblock %}
