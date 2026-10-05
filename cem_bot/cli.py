@@ -2,6 +2,7 @@
 
   demo            start the mock portal + mock CEM and run the bot on them
   run             process tickets (use --dry-run first!)
+  extract         export "الاستفسار عن الطلبات" (a date range) to a CSV file
   check-mapping   validate Mapping.xlsx and show the rules per category
 """
 from __future__ import annotations
@@ -29,6 +30,20 @@ def _cmd_run(a) -> int:
                headless=True if a.headless else (False if a.headed else None),
                slow_mo=a.slowmo, verbose=a.verbose).run()
     return 1 if r.counts().get("ERROR") else 0
+
+
+def _cmd_extract(a) -> int:
+    cfg = load_config(profile=a.profile)
+    from .inquiry import extract_requests   # imported late so check-mapping works without Playwright
+    res = extract_requests(cfg, date_from=a.date_from, date_to=a.date_to, out=a.out,
+                           headless=True if a.headless else (False if a.headed else None),
+                           slow_mo=a.slowmo, verbose=a.verbose)
+    print(f"\nSaved {res['rows']} row(s) from {res['pages']} page(s) to:\n  {res['path']}")
+    if res.get("total_reported") and res["rows"] < res["total_reported"]:
+        print(f"WARNING: the page reported {res['total_reported']} requests but only "
+              f"{res['rows']} were exported.")
+        return 1
+    return 0
 
 
 def _cmd_demo(a) -> int:
@@ -96,6 +111,19 @@ def main(argv=None) -> int:
     r.add_argument("--yes", action="store_true", help="no confirmation prompt for live runs")
     r.add_argument("-v", "--verbose", action="store_true")
     r.set_defaults(func=_cmd_run)
+
+    e = sub.add_parser("extract", help="export the 'الاستفسار عن الطلبات' grid for a date range to CSV")
+    e.add_argument("--profile", choices=["mock", "real"], help="override 'profile' in settings.yaml")
+    e.add_argument("--from", dest="date_from", metavar="DD-MM-YYYY",
+                   help="request date from (default: inquiry.default_from in settings.yaml)")
+    e.add_argument("--to", dest="date_to", metavar="DD-MM-YYYY",
+                   help="request date to (default: inquiry.default_to in settings.yaml)")
+    e.add_argument("--out", help="CSV output path (default: exports/requests_<from>_to_<to>_<timestamp>.csv)")
+    e.add_argument("--headless", action="store_true", help="hide the browser")
+    e.add_argument("--headed", action="store_true", help="show the browser")
+    e.add_argument("--slowmo", type=int, help="ms delay between browser actions")
+    e.add_argument("-v", "--verbose", action="store_true")
+    e.set_defaults(func=_cmd_extract)
 
     d = sub.add_parser("demo", help="run the bot on the built-in mock portal + mock CEM")
     d.add_argument("--dry-run", action="store_true")

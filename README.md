@@ -47,9 +47,10 @@ More commands:
 ```bash
 python -m cem_bot run --profile real --types MODIFY,REACTIVATE   # only some ticket types
 python -m cem_bot run --profile real --user 300106              # only this one user (رقم الوظيفى)
+python -m cem_bot extract --profile real --from 01-07-2026 --to 30-09-2026   # export requests to CSV (§2b)
 python -m cem_bot check-mapping               # validate Mapping.xlsx, show rules
 python -m mock.server                         # just the fake systems, to click around yourself
-python -m pytest tests                        # 34 tests incl. full browser run on the mocks
+python -m pytest tests                        # tests incl. full browser runs on the mocks
 ```
 
 Other `run` options: `--user 300106` (one user only), `--no-reassign`, `--headless`, `--slowmo 300`, `--yes`, `-v`.
@@ -104,6 +105,42 @@ open, the bot recovers and continues with the next ticket.
 
 A user only counts as "found" when **Login Name equals the id exactly** (searching 300104
 must not match 1300104).
+
+---
+
+## 2b. Export the requests ("الاستفسار عن الطلبات") to CSV
+
+`extract` opens the provisioning portal → **الاستفسار عن الطلبات**
+(`RequestDetails_Inquiry.aspx`), types the two dates (**تاريخ الطلب من / الى**),
+presses **بحث**, and saves every matching request to one CSV file.
+
+```bash
+python -m cem_bot extract --profile real --from 01-07-2026 --to 30-09-2026
+python -m cem_bot extract --profile real --from 01-07-2026 --to 30-09-2026 --out requests.csv
+```
+
+> **بالعربي:** الأمر ده بيفتح صفحة "الاستفسار عن الطلبات"، بيحط تاريخ الطلب من/الى،
+> بيدوس بحث، وبيحفظ كل الطلبات في ملف CSV واحد تقدر تعمل عليه التحليل.
+
+The grid shows **1000 رقم per page** and the page footer shows the real total
+(**اجمالى عدد الطلبات**, e.g. `303,796`) — so "Show all" in the browser only ever
+reveals the current 1000. The tool handles that for you: it reads the 1000 rows of
+the current page, presses **التالى** to load the next 1000, and keeps going until it
+has collected the full total (or **التالى** is disabled). Rows are streamed to the
+CSV as each page is read, so the file is complete and openable even if a long export
+is interrupted. The CSV is written as UTF-8 with a BOM, so Arabic opens correctly in
+Excel.
+
+- Dates default to `inquiry.default_from` / `inquiry.default_to` in
+  `config/settings.yaml` when `--from` / `--to` are omitted (format `dd-mm-yyyy`).
+- Without `--out`, the file goes to `exports/requests_<from>_to_<to>_<timestamp>.csv`
+  next to `exports/run.log`.
+- `inquiry.max_pages` (safety cap, `0` = no cap) and `inquiry.page_pause_ms`
+  (politeness pause) are in `config/settings.yaml`.
+- Options: `--out`, `--headed` / `--headless`, `--slowmo`, `-v`.
+
+Try it first on the mock (`--profile mock` with the mock servers running): the mock
+serves 12 fake rows at 5 per page so you can watch the paging work end-to-end.
 
 ---
 
@@ -183,6 +220,7 @@ cem_bot/        the bot
   rules.py        decision engine (pure Python, unit-tested)
   mapping.py      reads Mapping.xlsx
   portal.py       Security Code Request portal steps
+  inquiry.py      "الاستفسار عن الطلبات" bulk export to CSV (paged)
   cem.py          CEM steps
   web.py          text-based element finding, select2, tables, checkboxes
   runner.py       orchestration, error recovery

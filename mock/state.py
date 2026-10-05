@@ -111,6 +111,42 @@ def _seed():
     return {"tickets": tickets, "users": {u["pid"]: u for u in users}, "events": []}
 
 
+INQUIRY_HEADERS = [
+    "تاريخ الطلب", "نوع الطلب", "الفرع / الادارة", "اسم الموظف", "رقم المستخدم",
+    "رقم المستخدم TP", "رقم الوظيفى", "تفاصيل الطلب", "النظام", "البرنامج",
+    "موظف الاسناد", "مستخدم السرية", "المسمى الوظيفى", "الحالة", "",
+]
+INQUIRY_PAGE_SIZE = 5   # small on purpose so the mock exercises multi-page paging
+
+
+def inquiry_rows(total: int = 12) -> list[list[str]]:
+    """Deterministic fake inquiry data (dates dd/mm/yyyy, inside 07..09/2026)."""
+    types = ["تعديل صلاحية", "انشاء", "الغاء", "إعادة تشغيل"]
+    systems = ["CEM", "TMS", "Essentis Issuer"]
+    rows = []
+    for i in range(total):
+        day = 1 + (i % 28)
+        month = 7 + (i % 3)
+        rows.append([
+            f"{day:02d}/{month:02d}/2026",
+            types[i % len(types)],
+            BRANCHES[i % len(BRANCHES)]["identity"],
+            f"موظف اختبار رقم {i + 1}",
+            str(500000 + i),
+            str(6000000 + i),
+            str(700000 + i),
+            f"{1000000 + i}-تفاصيل الطلب التجريبي رقم {i + 1}",
+            systems[i % len(systems)],
+            "INAB" if i % 2 else "",
+            "مستخدم الاسناد",
+            "مستخدم السرية",
+            "مصرفي / العمليات بالفروع",
+            "تم الاسناد الى السرية",
+            "",
+        ])
+    return rows
+
+
 STATE: dict = {}
 _ids = itertools.count(5000)
 

@@ -35,6 +35,19 @@ portal:
     job_title: "المسمى الوظيفى"
     request_date: "تاريخ الطلب"
     system: "النظام"
+  inquiry:
+    # "الاستفسار عن الطلبات" bulk export. Elements are matched by the stable
+    # ASP.NET id suffix (works regardless of the ContentPlaceHolder prefix);
+    # text fallbacks are used if the id is not found.
+    from_date_selectors: ["css=input[id$='_txtFromDate']", "css=input[name$='$txtFromDate']"]
+    to_date_selectors:   ["css=input[id$='_txtToDate']",   "css=input[name$='$txtToDate']"]
+    search_selectors:    ["css=input[id$='_btnSearch']",   "css=input[name$='$btnSearch']"]
+    search_button_text:  "بحث"
+    grid_selectors:      ["css=table[id$='_GridView_RequestDetails']", "css=table[id*='GridView']"]
+    next_selectors:      ["css=input[id$='_btnNext']",      "css=input[name$='$btnNext']"]
+    prev_selectors:      ["css=input[id$='_btnPrevious']",  "css=input[name$='$btnPrevious']"]
+    next_button_text:    "التالى"
+    total_count_selectors: ["css=span[id$='_lblTotalCount']", "css=[id$='_lblTotalCount']"]
   decision:
     choose_text: "إختر"                # link in the ticket row that opens the decision panel
     decision_label: "القرار"

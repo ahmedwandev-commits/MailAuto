@@ -23,6 +23,7 @@ paths:
   portal_home: "/SecurityCodeRequest/Security_Assign_Maker/Default.aspx"
   portal_reassign: "/SecurityCodeRequest/Security_Assign_Maker/Request_ReAssign.aspx"
   portal_making: "/SecurityCodeRequest/Security_Assign_Maker/Request_Making.aspx"
+  portal_inquiry: "/SecurityCodeRequest/Security_Assign_Maker/RequestDetails_Inquiry.aspx"
   cem_login: "/CVMServer/Login?returnUrl=%2Fcvmserver"
   cem_home: "/cvmserver"
   cem_users: "/CVMServer/List/EntityList?pSelectedTab=User&pEntitieName=User"
@@ -51,6 +52,17 @@ portal:
 
 cem:
   user_search_mode: searchbox   # searchbox (as in the procedure) or url (pFilter=... address)
+
+# "الاستفسار عن الطلبات" (RequestDetails_Inquiry.aspx) bulk export to CSV.
+# The grid returns 1000 rows per server page; "التالى / السابق" load the next /
+# previous page. The extractor walks every page and streams them to the CSV.
+inquiry:
+  date_format: "dd-mm-yyyy"   # how the two date boxes expect the date (as on the page)
+  default_from: "01-07-2026"  # used when --from is not given on the command line
+  default_to: "30-09-2026"    # used when --to is not given
+  output_dir: "exports"       # CSV + log go here (under the project root)
+  max_pages: 0                # safety cap on the number of 1000-row pages (0 = no cap)
+  page_pause_ms: 0            # extra pause after each page (politeness; 0 = none)
 
 run:
   # Order in which ticket types are processed (as in the procedure)
