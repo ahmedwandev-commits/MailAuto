@@ -938,6 +938,54 @@ def test_sla_feed_import(admin, tmp_path):
     assert admin.post("/api/ops/sla-feed/import", {}).get_json()["added"] == 0      # idempotent: nothing new on re-read
 
 
+def _sla_scan(ops, at, reqs):
+    """A live SLA snapshot (the Re-Assign scrape) holding ``reqs`` = [(key, security user, sent at)]."""
+    put_snapshot(ops, "sla", {"thresholds": {"warning_minutes": 60, "breach_minutes": 120}, "totals": {}, "by_user": [],
+                              "requests": [{"key": k, "security_user": u, "sent_at": t, "age_minutes": 0,
+                                            "status": "within", "fields": {"النظام": "Flexcube", "اسم الموظف": "x"}}
+                                           for k, u, t in reqs]}, at=at)
+
+
+def test_sla_analysis_records_a_request_that_left_the_queue_as_closed(admin, ops):
+    _sla_scan(ops, "2026-10-11T08:30:00", [("k1", "Alice", "2026-10-11T08:00:00"), ("k2", "Bob", "2026-10-11T08:10:00")])
+    body = admin.get("/api/ops/sla-analysis").get_json()             # the analysis folds the latest scan itself
+    assert body["available"] is True and body["buckets"] == {"open": 2, "awaiting": 0, "closed": 0}
+    _sla_scan(ops, "2026-10-11T08:45:00", [("k2", "Bob", "2026-10-11T08:10:00")])        # k1 left Alice's queue
+    body = admin.get("/api/ops/sla-analysis").get_json()
+    assert body["buckets"] == {"open": 1, "awaiting": 0, "closed": 1}
+    assert body["by_handler"][0]["handler"] == "Alice" and body["overall"]["median_minutes"] == 45.0
+    assert body["live"]["closed_today"] == 1 and body["live"]["open"] == 1
+    again = admin.get("/api/ops/sla-analysis").get_json()                                 # the same scan: no change
+    assert again["buckets"] == body["buckets"] and ops.read_sla_records()["last_scan"] == "2026-10-11T08:45:00"
+
+
+EXPORT_CSV = ("ReqID2,FStatusID1,DateF,SStatusID,DateT1,EmpNo,ApplicationName\n"
+              "9001,اسناد لمستخدم السرية,10/10/2026 08:00:00 AM,تم التعزيز على التنفيذ,10/10/2026 09:30:00 AM,239582,Flexcube\n"
+              "9002,اسناد لمستخدم السرية,10/10/2026 08:00:00 AM,تم التعزيز على عدم التنفيذ,10/10/2026 01:00:00 PM,228834,DWP\n")
+
+
+def _upload(who, data, name="ALL_2026.csv"):
+    return who.post("/api/ops/sla-feed/upload", data={"file": (io.BytesIO(data), name)}, content_type="multipart/form-data")
+
+
+def test_sla_upload_portal_export_adds_closed_requests(app, clock, admin, flex_mgr, ops):
+    assert _upload(flex_mgr, EXPORT_CSV.encode("utf-8")).status_code == 403              # administrators only
+    r = _upload(admin, ("\ufeff" + EXPORT_CSV).encode("utf-8")).get_json()
+    assert r["ok"] is True and r["portal_export"] is True and r["added"] == 2 and r["recorded"] == 2
+    body = admin.get("/api/ops/sla-analysis?from=2026-10-10&to=2026-10-10").get_json()
+    assert body["buckets"]["closed"] == 2 and body["overall"]["not_executed"] == 1
+    assert body["overall"]["median_minutes"] in (90.0, 300.0)                            # 1.5 h and 5 h full clocks
+    assert {h["handler"] for h in body["by_handler"]} == {"239582", "228834"}
+    assert _upload(admin, EXPORT_CSV.encode("utf-8")).get_json()["added"] == 0          # re-upload: nothing new
+    assert ("ops_sla_upload", "ALL_2026.csv", "admin") in audit_actions(app, clock)
+
+
+def test_sla_upload_rejects_the_wrong_file(admin):
+    assert _upload(admin, b"x", name="report.xlsx").status_code == 400
+    bad = _upload(admin, "a,b\n1,2\n".encode("utf-8"))
+    assert bad.status_code == 400 and "ALL_*.csv" in bad.get_json()["error"]
+
+
 def test_job_log_tail(admin, ops):
     for i in range(10):
         ops.append_log("sla", f"line {i}")

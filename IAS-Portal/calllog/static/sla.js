@@ -745,8 +745,9 @@
       columns: [
         { key: keyCol, label, sort: true, render: (r) => h("span", { dir: "auto" }, String(r[keyCol])), text: (r) => String(r[keyCol]) },
         { key: "n", label: "Requests", num: true, sort: true, render: (r) => fmtNum(r.n) },
-        { key: "executed", label: "Executed", num: true, sort: true, render: (r) => fmtNum(r.executed) },
-        { key: "executed_pct", label: "Executed %", num: true, sort: true, render: (r) => OPS.fmtPct(r.executed_pct) },
+        { key: "executed", label: "Executed", num: true, sort: true, render: (r) => (r.executed + r.not_executed ? fmtNum(r.executed) : "—") },
+        { key: "executed_pct", label: "Executed %", num: true, sort: true,
+          render: (r) => (r.executed + r.not_executed ? OPS.fmtPct(r.executed_pct) : h("span", { class: "hint", title: "Left the queue - executed or not comes from the export" }, "—")) },
         { key: "median_minutes", label: "Median", num: true, sort: true, render: (r) => fmtMin(r.median_minutes) },
         { key: "sla_pct", label: "Within SLA %", num: true, sort: true, render: (r) => pctChip(r.sla_pct) },
       ], rows,
@@ -800,34 +801,61 @@
 
   function liveStrip(d) {
     const L = d.live || {}, sla = (d.meta || {}).sla_minutes || 180, slaH = Math.round(sla / 60 * 10) / 10;
-    if (!L.open && !L.awaiting) {
-      return OPS.card("Open right now", { hint: "live from the collector's scan" },
-        h("p", { class: "hint" }, "No request is open right now — nothing is waiting with a security user."));
+    if (!L.open && !L.awaiting && !L.closed_today) {
+      return OPS.card("Right now", { hint: "live from the collector's scan" },
+        h("p", { class: "hint" }, "No request is open right now and none closed today — nothing is waiting with a security user."));
     }
     const kpis = h("div", { class: "sx-kpis" },
       OPS.kpi({ label: "Open now", value: fmtNum(L.open || 0), sub: "with the employee (live)", icon: "clock", hero: true }),
-      OPS.kpi({ label: "Awaiting confirmation", value: fmtNum(L.awaiting || 0), sub: "with the checker/manager", tone: L.awaiting ? "warn" : null, icon: "alert" }),
+      OPS.kpi({ label: "Closed today", value: fmtNum(L.closed_today || 0), sub: "left the queue or confirmed", tone: L.closed_today ? "ok" : null, icon: "check" }),
       OPS.kpi({ label: "Past target", value: fmtNum(L.breached || 0), sub: `open over ${slaH} h`, tone: L.breached ? "danger" : null, icon: "shield" }),
       OPS.kpi({ label: "Oldest open", value: fmtMin(L.oldest_minutes), sub: "waiting the longest", tone: (L.oldest_minutes != null && L.oldest_minutes > sla) ? "danger" : null, icon: "clock" }));
-    return OPS.card("Open right now", { hint: "live from the collector's scan · the assignment → execution clock is still running" },
-      h("div", { class: "sx-stack" }, kpis,
-        h("div", { class: "sx-two" },
-          OPS.card("By security user (open)", { hint: "مستخدم السرية · who is holding open requests now" }, liveRollup(L.by_employee, "executor", "Security user", "Open requests by security user")),
-          OPS.card("By team (open)", {}, liveRollup(L.by_team, "team", "Team", "Open requests by team")))));
+    const parts = [kpis];
+    if (L.open) {
+      parts.push(h("div", { class: "sx-two" },
+        OPS.card("By security user (open)", { hint: "مستخدم السرية · who is holding open requests now" }, liveRollup(L.by_employee, "executor", "Security user", "Open requests by security user")),
+        OPS.card("By team (open)", {}, liveRollup(L.by_team, "team", "Team", "Open requests by team"))));
+    }
+    if ((L.closed_today_by_employee || []).length) {
+      parts.push(OPS.card("Closed today by security user", { hint: "مستخدم السرية · requests that left their queue (or were confirmed) today, with the time each took" },
+        rollupTable(L.closed_today_by_employee, "executor", "Security user", "Requests closed today by security user")));
+    }
+    return OPS.card("Right now", { hint: `live from the collector's scan${L.awaiting ? ` · ${fmtNum(L.awaiting)} awaiting the checker` : ""}` },
+      h("div", { class: "sx-stack" }, ...parts));
+  }
+
+  function slaTools() {
+    if (!state.admin) return null;
+    const input = h("input", { type: "file", accept: ".csv,.txt", hidden: true, "aria-label": "Portal export file (ALL_*.csv)" });
+    input.addEventListener("change", async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        const r = await api("POST", "/api/ops/sla-feed/upload", fd);
+        toast(r.added ? `Imported ${fmtNum(r.added)} closed request(s) from ${file.name}.` : "Up to date — nothing new in that export.");
+        state.analysis = null;
+        loadAnalysis(true);
+      } catch (e) { toast(e.message, "error"); }
+      input.value = "";
+    });
+    return h("span", { class: "sx-analysis-tools" }, input,
+      h("button", { class: "btn btn-ghost btn-sm", type: "button", title: "The portal's closed-request export (ALL_*.csv)", onclick: () => input.click() }, "Upload export"),
+      h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: importFeed }, "Import feed"));
   }
 
   function analysisHead(d) {
     const m = d.meta || {}, slaH = Math.round((m.sla_minutes || 180) / 60 * 10) / 10;
     return h("div", { class: "sx-analysis-head" },
       h("p", { class: "hint sx-analysis-note", dir: "auto" }, `${fmtNum(m.requests || 0)} request(s) in view. Employee (مستخدم السرية) does «تم التنفيذ / لم يتم التنفيذ»; checker/manager (مراجع السرية) does «تم التعزيز على التنفيذ / عدم التنفيذ». SLA target ${slaH} hours. Edit the recording settings in System › Settings › Ticketing.`),
-      state.admin ? h("span", { class: "sx-analysis-tools" },
-        h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: importFeed }, "Import feed")) : null);
+      slaTools());
   }
 
   function renderAnalysis(d) {
     if (!d || !d.available) {
-      el.analysisPanel.replaceChildren(OPS.emptyState({ title: "No SLA data recorded yet", icon: "shield",
-        text: "The SLA analysis records each security request live as it moves from assignment to execution (the employee) to confirmation (the checker/manager). It fills in as the collector runs and from any export feed set in System › Settings › Ticketing." }));
+      el.analysisPanel.replaceChildren(h("div", { class: "sx-stack" }, slaTools(), OPS.emptyState({ title: "No SLA data recorded yet", icon: "shield",
+        text: "The SLA analysis fills in as the collector scans: a request on the Re-Assign page is open, and once it leaves its security user's queue it is recorded as closed with the time it took. For the closed requests' outcome and the checker's confirmation, upload the portal's ALL_*.csv export (administrators) or set its path in System › Settings › Ticketing." })));
       return;
     }
     const stack = [analysisHead(d), liveStrip(d), filterBar(d)];
@@ -844,7 +872,7 @@
     const kpis = h("div", { class: "sx-kpis" },
       OPS.kpi({ label: "Open", value: fmtNum(b.open || 0), sub: "with the employee", icon: "clock" }),
       OPS.kpi({ label: "Awaiting confirmation", value: fmtNum(b.awaiting || 0), sub: "with the checker/manager", tone: b.awaiting ? "warn" : null, icon: "alert" }),
-      OPS.kpi({ label: "Closed", value: fmtNum(b.closed || 0), sub: OPS.fmtPct(o.executed_pct) + " executed", icon: "check", hero: true }),
+      OPS.kpi({ label: "Closed", value: fmtNum(b.closed || 0), sub: (o.executed + o.not_executed) ? OPS.fmtPct(o.executed_pct) + " executed" : "outcome comes from the export", icon: "check", hero: true }),
       OPS.kpi({ label: `Within ${slaH} h SLA`, value: OPS.fmtPct(o.sla_pct), sub: `median ${fmtMin(o.median_minutes)}`, tone: slaTone, icon: "shield" }));
     const clocks = h("div", { class: "sx-kpis" },
       OPS.kpi({ label: "Employee clock", value: fmtMin(d.employee_clock.median_minutes), sub: "median · assignment → execution (مستخدم السرية)", icon: "user" }),
@@ -858,6 +886,7 @@
       h("div", { class: "sx-two" },
         OPS.card("By employee (executor)", { hint: "مستخدم السرية · who ran the request" }, rollupTable(d.by_employee, "executor", "Employee", "SLA by employee")),
         OPS.card("By checker / manager", { hint: "مراجع السرية · who confirmed it" }, rollupTable(d.by_checker, "checker", "Checker", "SLA by checker"))),
+      OPS.card("Closed requests by security user", { hint: "مستخدم السرية · who handled each closed request, and how long it took" }, rollupTable(d.by_handler, "handler", "Security user", "Closed requests by security user")),
       OPS.card("By team", {}, rollupTable(d.by_team, "team", "Team", "SLA by team")),
       h("div", { class: "sx-two" },
         OPS.card("By day", { hint: "newest first" }, rollupTable(d.by_day, "date", "Date", "SLA by day")),

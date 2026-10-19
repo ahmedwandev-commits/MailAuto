@@ -120,17 +120,89 @@ def test_record_live_requests_opens_and_ages():
     assert m2["live"]["by_employee"][0]["n"] == 1                          # one open request held by Alice
 
 
-def test_apply_sla_scan_replaces_scan_set_keeps_closed():
-    """A later scan replaces the previous OPEN scan rows; a CLOSED feed record is left alone."""
-    rec = {"closed1": {"id": "closed1", "assigned_at": "2026-10-16T08:00:00", "executed_at": "2026-10-16T08:30:00",
-                       "exec_outcome": "executed", "confirmed_at": "2026-10-16T09:00:00", "final_outcome": "executed"}}
-    sr.record_live_requests(rec, [_scan_req("k1"), _scan_req("k2")], CFG, "2026-10-17T10:00:00")
-    assert set(rec) == {"closed1", "k1", "k2"}
-    # emulate apply_sla_scan's "drop previous scan set, fold the new one"
-    for rid in [k for k, r in rec.items() if r.get("source") == sr.SCAN_SOURCE]:
-        del rec[rid]
-    sr.record_live_requests(rec, [_scan_req("k3")], CFG, "2026-10-17T10:15:00")
-    assert set(rec) == {"closed1", "k3"}                                   # old open rows gone, closed one kept
+def test_a_request_that_leaves_the_queue_is_closed_by_its_security_user():
+    rec = {}
+    sr.record_live_requests(rec, [_scan_req("k1"), _scan_req("k2", owner="Bob")], CFG, "2026-10-17T09:00:00")
+    # the next scan no longer shows k1: its security user (Alice) acted on it
+    sr.record_live_requests(rec, [_scan_req("k2", owner="Bob")], CFG, "2026-10-17T09:45:00")
+    assert sr.mark_left_queue(rec, {"k2"}, "2026-10-17T09:45:00") == 1
+    assert rec["k1"]["executed_at"] == "2026-10-17T09:45:00" and rec["k1"]["executor"] == "Alice"
+    assert rec["k1"]["exec_outcome"] == "" and rec["k2"]["executed_at"] == ""
+    assert sr.mark_left_queue(rec, {"k2"}, "2026-10-17T10:00:00") == 0          # already closed: idempotent
+    m = sr.analyze(rec, CFG, now="2026-10-17T10:00:00")
+    assert m["buckets"] == {"open": 1, "awaiting": 0, "closed": 1}
+    assert m["overall"]["n"] == 1 and m["overall"]["median_minutes"] == 105.0  # 08:00 sent -> 09:45 left the queue
+    assert m["overall"]["unknown"] == 1 and m["overall"]["executed_pct"] == 0.0  # executed or not: not known
+    assert m["by_handler"][0]["handler"] == "Alice" and m["employee_clock"]["n"] == 1
+    assert m["manager_clock"]["n"] == 0                                          # no confirmation seen
+    assert m["live"]["closed_today"] == 1 and m["live"]["closed_today_by_employee"][0]["executor"] == "Alice"
+
+
+def test_a_request_sent_back_to_the_queue_is_open_again():
+    rec = {}
+    sr.record_live_requests(rec, [_scan_req("k1")], CFG, "2026-10-17T09:00:00")
+    sr.mark_left_queue(rec, set(), "2026-10-17T09:15:00")
+    sr.record_live_requests(rec, [_scan_req("k1")], CFG, "2026-10-17T09:30:00")   # back on the Re-Assign page
+    assert rec["k1"]["executed_at"] == "" and sr.analyze(rec, CFG)["buckets"]["open"] == 1
+
+
+def test_housekeep_drops_old_live_closures_too():
+    rec = {}
+    sr.record_live_requests(rec, [_scan_req("old", sent="2026-01-01T08:00:00")], CFG, "2026-01-01T09:00:00")
+    sr.mark_left_queue(rec, set(), "2026-01-01T10:00:00")
+    sr.record_live_requests(rec, [_scan_req("now", sent="2026-03-01T08:00:00")], CFG, "2026-03-01T09:00:00")
+    assert sr.housekeep(rec, {"retention_days": 30, "max_records": 1000}, "2026-03-01T12:00:00") == 1
+    assert set(rec) == {"now"}                                                   # the open one is always kept
+
+
+# the portal's own export, as it comes out (US month-first dates with AM/PM, one line per system of a request)
+EXPORT = ("ReqID2,FStatusID1,DateF,SStatusID,DateT1,EmpNo,ApplicationName\n"
+          "5001,اسناد لمستخدم السرية,10/17/2026 08:00:00 AM,تم التعزيز على التنفيذ,10/17/2026 10:30:00 AM,239582,Flexcube\n"
+          "5001,اسناد لمستخدم السرية,10/17/2026 08:00:00 AM,تم التعزيز على التنفيذ,10/17/2026 10:30:00 AM,239582,GL\n"
+          "5002,اسناد لمستخدم السرية,10/17/2026 09:00:00 AM,تم التعزيز على عدم التنفيذ,10/17/2026 01:00:00 PM,228834,DWP\n"
+          "5003,اسناد لمستخدم السرية,10/17/2026 09:10:00 AM,حالة جديدة غير معروفة,10/17/2026 09:40:00 AM,228834,DWP\n")
+
+
+def test_decode_csv_handles_a_bom_and_the_arabic_code_page():
+    assert sr.decode_csv(("\ufeff" + EXPORT).encode("utf-8"))[0]["ReqID2"] == "5001"
+    rows = sr.decode_csv(EXPORT.replace(",", ";").encode("cp1256"))
+    assert rows[2]["SStatusID"] == "تم التعزيز على عدم التنفيذ" and len(rows) == 4
+
+
+def test_portal_export_is_recognised_and_its_dates_read():
+    rows = sr.decode_csv(EXPORT.encode("utf-8"))
+    assert sr.is_portal_export(rows) and not sr.is_portal_export([{"ReqID": "1", "الحالة": "x"}])
+    assert sr.export_time("10/17/2026 01:00:00 PM") == "2026-10-17T13:00:00"
+    assert sr.export_time("١٠/١٧/٢٠٢٦ ٠١:٠٠:٠٠ م") == "2026-10-17T13:00:00"     # Arabic digits and ص/م
+    assert sr.export_time("garbage") == ""
+
+
+def test_apply_export_records_closed_requests_with_outcome_and_full_clock():
+    rec = {}
+    out = sr.apply_export(rec, sr.decode_csv(EXPORT.encode("utf-8")), CFG, "2026-10-18T08:00:00",
+                          {"flexcube": "Flex Cube", "dwp": "Card Management"})
+    assert out["rows"] == 4 and out["added"] == 3                              # 5001 has two system lines
+    assert rec["5001"]["assigned_at"] == "2026-10-17T08:00:00" and rec["5001"]["confirmed_at"] == "2026-10-17T10:30:00"
+    assert rec["5001"]["executor"] == "239582" and rec["5001"]["team"] == "Flex Cube"
+    assert rec["5002"]["final_outcome"] == "not_executed"
+    assert rec["5003"]["final_outcome"] == "executed"                          # an unknown closing label still closes
+    m = sr.analyze(rec, CFG)
+    assert m["buckets"] == {"open": 0, "awaiting": 0, "closed": 3}
+    assert m["overall"]["executed"] == 2 and m["overall"]["not_executed"] == 1
+    assert {h["handler"]: h["n"] for h in m["by_handler"]} == {"239582": 1, "228834": 2}
+    assert {t["team"] for t in m["by_team"]} == {"Flex Cube", "Card Management"}
+    assert sr.apply_export(rec, sr.decode_csv(EXPORT.encode("utf-8")), CFG, "2026-10-18T09:00:00")["added"] == 0
+
+
+def test_the_export_replaces_live_closures_of_the_period_it_covers():
+    rec = {}
+    # a live closure on 17/10 (covered by the export) and one on 18/10 (after the export's last confirmation)
+    sr.record_live_requests(rec, [_scan_req("live17", sent="2026-10-17T08:30:00"),
+                                  _scan_req("live18", sent="2026-10-18T08:30:00")], CFG, "2026-10-18T09:00:00")
+    sr.mark_left_queue(rec, set(), "2026-10-18T09:15:00")
+    rec["live17"]["executed_at"] = "2026-10-17T11:00:00"
+    out = sr.apply_export(rec, sr.decode_csv(EXPORT.encode("utf-8")), CFG, "2026-10-18T10:00:00")
+    assert out["replaced_live"] == 1 and "live17" not in rec and "live18" in rec      # no double counting
 
 
 def test_feed_with_explicit_time_columns():

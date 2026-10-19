@@ -17,7 +17,8 @@ _ALLOWED_WHEN_PASSWORD_DUE = {"pages.password", "pages.logout", "static"}
 
 DEFAULT_UPLOAD_LIMIT = 2 * 1024 * 1024
 # The IP phone directory export (~42,000 rows) is bigger than the 2 MB every other request may carry: this route only.
-LARGE_UPLOADS = {("POST", "/api/admin/ip-phones/import"): 20 * 1024 * 1024}
+LARGE_UPLOADS = {("POST", "/api/admin/ip-phones/import"): 20 * 1024 * 1024,
+                 ("POST", "/api/ops/sla-feed/upload"): 60 * 1024 * 1024}     # the portal's whole-year ALL_*.csv
 
 
 class AppRequest(Request):

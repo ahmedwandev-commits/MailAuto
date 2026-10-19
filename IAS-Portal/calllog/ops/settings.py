@@ -113,22 +113,28 @@ DEFAULTS = {
     },
     "assign": {                                 # ticketing auto-assign (the portal RPA) - see calllog/ops/engines/assign_engine.py
         "enabled": True,
-        # the SSO portal + login (same as "sla"); an admin configures the portal once there and these mirror the defaults
+        # the SSO portal + login (base_url / login_path / login selectors are taken from "sla": one portal, one login)
         "base_url": "https://nbesrv.nbe.ahly.bank",
         "login_path": "/App_Security_Login/Login.aspx",
-        "app_url_fragment": "securitycoderequest",
-        "package_text": "موظف اسناد - مستخدم السرية",
-        "package_link_text": "تحويل",
         "login_button_text": "دخول",
-        "search_button_text": "بحث",
         "selectors": {},                        # login selectors: {"username": css, "password": css, "login_button": css}
-        # the "assign new requests" page itself (confirm assign_path against the live portal on first use)
-        "assign_path": "/SecurityCodeRequest/Security_Assign_Maker/Request_Assign.aspx",
-        "assign_menu_text": "اسناد الطلبات الجديدة",     # used only when assign_path is blank (click the menu link)
+        # the package that holds «اسناد الطلبات الجديدة»: the SUPERVISOR one (found by name, like the stand-alone bot)
+        "package_text": "مشرف البيانات بوحدة الأكواد السرية",
+        "package_link_text": "دخول",
+        "app_url_fragment": "securitycoderequest",
+        # the assign page: the menu link first, then the menu text, then (only if set) a direct path
+        "assign_link": "a[href$='Request_Assign.aspx']",
+        "assign_menu_text": "اسناد الطلبات الجديدة",
+        "assign_path": "",
+        "search_button_text": "بحث",
+        "form_types": [],                        # نوع النموذج values to run ([] = every option the page offers)
+        "assign_filter": "date",                 # "date" = never assign a future-dated request (the bot's rule); "all"
+        "assign_cutoff": "today",                # 'today' or a date: requests starting after it are not assigned
+        "period_header": "فتر",                  # the «الفتره من / الى» column (its «من» date is the start date)
         "app_header": "النظام",                  # the grid column matched against a rule's applications
         "decision_value": "6",                   # القرار → اسناد لمستخدم السرية (the ddlExecuteStatus option value)
         "execute_button_text": "تنفيذ",
-        "form_types": [],                        # نوع النموذج option values to run in turn ([] = one pass, no form filter)
+        "employee_wait_seconds": 8,              # how long to wait for «الموظفين» to fill after the decision post-back
         "selectors_assign": {                    # the proven ids from the stand-alone NBE auto-authorizer bot
             "form_type": "#ContentPlaceHolder1_ddlFormType",
             "search_button": "#ContentPlaceHolder1_btnSearch",
@@ -136,6 +142,9 @@ DEFAULTS = {
             "employee": "#ContentPlaceHolder1_ddlEmployee",
             "execute_button": "#ContentPlaceHolder1_btnExecute",
             "grid": "#ContentPlaceHolder1_GridView_RequestDetails",
+            "check_all": "#ContentPlaceHolder1_GridView_RequestDetails_CheckBox_All",
+            "length": "select[name='ContentPlaceHolder1_GridView_RequestDetails_length']",
+            "processing": "#ContentPlaceHolder1_GridView_RequestDetails_processing",
         },
         "browser_executable": "",
         "cdp_port": 0,
@@ -422,9 +431,11 @@ FIELDS = {
     "assign": {
         "enabled": _bool, "base_url": _str(300, False), "login_path": _str(300), "app_url_fragment": _str(100),
         "package_text": _str(200), "package_link_text": _str(100), "login_button_text": _str(100),
-        "search_button_text": _str(100), "selectors": _map(_str(300)), "assign_path": _str(300),
-        "assign_menu_text": _str(100), "app_header": _str(100), "decision_value": _str(20),
-        "execute_button_text": _str(100), "form_types": _strs(20), "selectors_assign": _map(_str(300)),
+        "search_button_text": _str(100), "selectors": _map(_str(300)), "assign_link": _str(300),
+        "assign_path": _str(300), "assign_menu_text": _str(100), "app_header": _str(100),
+        "period_header": _str(100), "assign_filter": _choice("date", "all"), "assign_cutoff": _str(20),
+        "decision_value": _str(20), "execute_button_text": _str(100), "employee_wait_seconds": _int(1, 60),
+        "form_types": _strs(20), "selectors_assign": _map(_str(300)),
         "browser_executable": _str(400), "cdp_port": _int(0, 65535), "timeout_seconds": _int(5, 600),
     },
 }

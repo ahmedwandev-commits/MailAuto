@@ -828,6 +828,10 @@ def sla_analysis_get():
     into the employee clock (assignment -> execution, by مستخدم السرية) and the manager clock (execution ->
     confirmation, by مراجع السرية). Sector-wide, read-only, shown as a tab on the Ticketing page (admins + managers)."""
     now = auth.now().isoformat(timespec="seconds")
+    try:
+        apply_sla_scan()                                    # fold the latest live scan first, so the view is current
+    except Exception:                                       # recording must never break the page
+        current_app.logger.exception("SLA scan recording failed")
     doc = ops().read_sla_records()
     records = doc.get("records") or {}
     scope = auth.team_scope()                               # a manager sees only their team(s); admin / all-teams -> everything
@@ -876,10 +880,25 @@ def _sla_system_team():
             for a in (_aa_config().get("applications") or []) if a.get("name") and a.get("team")}
 
 
+def _fold_sla_export(rows, stamp):
+    """Fold export rows into the live SLA recording atomically (under the store lock, on the freshest copy). Returns
+    sla_records.apply_export's counts."""
+    system_team = _sla_system_team()
+    result = {}
+
+    def change(d):
+        cfg = {**sla_records.default_config(), **(d.get("config") or {})}
+        records = d.setdefault("records", {})
+        result.update(sla_records.apply_export(records, rows, cfg, stamp, system_team))
+        sla_records.housekeep(records, cfg, stamp)          # keep the JSON store bounded (cap + retention)
+    ops().update_sla_records(change)
+    return result
+
+
 def apply_sla_feed(now=None, force=False):
-    """Fold the configured export feed (an ALL_*.csv / requests_*.csv the portal refreshes) into the live SLA
-    recording. Throttled to ~5 minutes unless forced; a missing path or read error is a quiet no-op. Returns the
-    number of NEW requests added. The LIVE portal scrape feeds the same record_scan when it exposes these columns."""
+    """Fold the configured export feed (the portal's ALL_*.csv, or a requests_*.csv in the Settings column names) into
+    the live SLA recording: the CLOSED requests with their outcome and full assignment -> confirmation clock. Throttled
+    to ~5 minutes unless forced; a missing path or read error is a quiet no-op. Returns the number of NEW requests."""
     doc = ops().read_sla_records()
     cfg = {**sla_records.default_config(), **(doc.get("config") or {})}
     path = (cfg.get("feed_path") or "").strip()
@@ -889,50 +908,41 @@ def apply_sla_feed(now=None, force=False):
     if not force and (time.monotonic() - memo.get("at", 0.0)) < 300:
         return 0
     memo["at"] = time.monotonic()
-    stamp = (now or auth.now()).isoformat(timespec="seconds")
-    records = doc.get("records") or {}
-    before = len(records)
     try:
-        sla_records.record_scan(records, sla_records.read_feed_rows(path), cfg, stamp, _sla_system_team())
+        rows = sla_records.read_feed_rows(path)
     except Exception:                                       # a bad/locked file must never break the refresher
         current_app.logger.exception("SLA feed import failed for %s", path)
         return 0
-    added = len(records) - before
-    sla_records.housekeep(records, cfg, stamp)              # keep the JSON store bounded (cap + retention)
-
-    def change(d):
-        d["records"] = records
-    ops().update_sla_records(change)
-    return added
+    return _fold_sla_export(rows, (now or auth.now()).isoformat(timespec="seconds")).get("added", 0)
 
 
 def apply_sla_scan(now=None, force=False):
     """Fold the latest LIVE SLA scan (the Re-Assign scrape the collector writes) into the live SLA recording, so the
-    SLA Analysis view fills in as the collector runs - no manual export feed needed. The scan is a full snapshot of the
-    requests open right now, so each fold REPLACES the previous scan-sourced records (the CSV feed's CLOSED records are
-    kept). Each scan is folded once (by generated_at). Returns how many requests are open in the current scan; a
-    missing scan is a quiet no-op."""
+    SLA Analysis fills in as the collector runs - no export needed. Requests on the page are open (their clock runs);
+    a request that is no longer on it has been acted on by its security user and is recorded as CLOSED at this scan's
+    time (accurate to one scan interval). Each scan is folded once (``last_scan`` in the shared file, so several web
+    processes agree); the fold runs under the store lock. Returns how many requests are open now."""
     snap, _ = read_snapshot("sla")
     if not snap:
         return 0
     requests = (snap.get("data") or {}).get("requests") or []
     generated = snap.get("generated_at") or (now or auth.now()).isoformat(timespec="seconds")
-    memo = current_app.extensions.setdefault("ops_sla_scan", {"at": ""})
-    if not force and memo.get("at") == generated:              # this scan was already folded
-        return 0
-    doc = ops().read_sla_records()
-    cfg = {**sla_records.default_config(), **(doc.get("config") or {})}
-    records = doc.get("records") or {}
-    for rid in [k for k, r in records.items() if r.get("source") == sla_records.SCAN_SOURCE]:
-        del records[rid]                                       # a full snapshot: drop the previous scan-sourced set
-    sla_records.record_live_requests(records, requests, cfg, generated, _sla_system_team())
-    sla_records.housekeep(records, cfg, generated)             # keep the JSON store bounded (CLOSED only)
-    memo["at"] = generated
+    if not force and (ops().read_sla_records().get("last_scan") or "") >= generated:
+        return 0                                            # this scan (or a newer one) was already folded
+    keys = {str(r.get("key") or "").strip() for r in requests if r.get("key")}
+    system_team = _sla_system_team()
 
     def change(d):
-        d["records"] = records
+        if not force and (d.get("last_scan") or "") >= generated:
+            return                                          # another process folded it a moment ago
+        cfg = {**sla_records.default_config(), **(d.get("config") or {})}
+        records = d.setdefault("records", {})
+        sla_records.record_live_requests(records, requests, cfg, generated, system_team)
+        sla_records.mark_left_queue(records, keys, generated)
+        sla_records.housekeep(records, cfg, generated)
+        d["last_scan"] = generated
     ops().update_sla_records(change)
-    return sum(1 for r in records.values() if r.get("source") == sla_records.SCAN_SOURCE)
+    return len(keys)
 
 
 @bp.post("/sla-feed/import")
@@ -942,6 +952,35 @@ def sla_feed_import():
     added = apply_sla_feed(force=True)
     scanned = apply_sla_scan(force=True)                       # also fold the latest live scan
     return jsonify(ok=True, added=added, open_now=scanned,
+                   recorded=len(ops().read_sla_records().get("records") or {}))
+
+
+SLA_UPLOAD_LIMIT = 60 * 1024 * 1024                          # the portal's ALL_*.csv covers the whole year
+
+
+@bp.post("/sla-feed/upload")
+@auth.admin_required
+def sla_feed_upload():
+    """Upload the portal's closed-request export (ALL_*.csv) - or a CSV in the Settings column names - and fold it
+    into the live SLA recording (administrators). The closed requests then show in the SLA Analysis with their outcome
+    and full assignment -> confirmation clock."""
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        raise ApiError("Choose the export file (ALL_*.csv) to upload.")
+    if not upload.filename.lower().endswith((".csv", ".txt")):
+        raise ApiError("Upload the export as a .csv file (in Excel: Save As › CSV UTF-8).")
+    rows = sla_records.decode_csv(upload.read())
+    if not rows:
+        raise ApiError("The file has no rows.")
+    cfg = {**sla_records.default_config(), **(ops().read_sla_records().get("config") or {})}
+    portal_export = sla_records.is_portal_export(rows)
+    if not portal_export and not (cfg.get("fields") or {}).get("id") in rows[0]:
+        raise ApiError("This file is neither the portal's ALL_*.csv export (ReqID2, DateF, DateT1, SStatusID ...) "
+                       "nor in the column names set in System › Settings › Ticketing › SLA recording.")
+    result = _fold_sla_export(rows, auth.now().isoformat(timespec="seconds"))
+    auth.audit("ops_sla_upload", target=upload.filename[:120],
+               details={"rows": result.get("rows"), "added": result.get("added"), "export": portal_export})
+    return jsonify(ok=True, portal_export=portal_export, **result,
                    recorded=len(ops().read_sla_records().get("records") or {}))
 
 
@@ -1887,12 +1926,12 @@ def auto_assign_apply():
 
 # ----------------------------------------------------------- ticketing auto-assign (the portal RPA, manager-triggered)
 def _assign_settings(settings):
-    """The config the assign engine runs with: the saved ``assign`` block, with the portal login basics taken from the
-    ``sla`` block so an admin configures the SSO portal once (same site, same login)."""
+    """The config the assign engine runs with: the saved ``assign`` block, with the portal LOGIN basics taken from the
+    ``sla`` block so an admin configures the SSO portal once (same site, same login). The package / page settings are
+    NOT shared: assigning new requests lives in the supervisor package, not the SLA collector's Re-Assign package."""
     assign = dict(settings.get("assign") or {})
     sla = settings.get("sla") or {}
-    for key in ("base_url", "login_path", "app_url_fragment", "package_text", "package_link_text",
-                "login_button_text", "search_button_text", "selectors", "timeout_seconds", "browser_executable"):
+    for key in ("base_url", "login_path", "login_button_text", "selectors", "timeout_seconds", "browser_executable"):
         if sla.get(key) not in (None, "", {}):
             assign[key] = sla[key]
     return assign

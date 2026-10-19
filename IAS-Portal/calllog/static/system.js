@@ -469,7 +469,25 @@
         { path: "sla.browser_channel", type: "text", max: 40, label: "Browser", hint: "chrome or msedge." },
         { path: "sla.browser_executable", type: "text", max: 400, label: "Browser program (optional)", dir: "ltr" },
         { path: "sla.timeout_seconds", type: "number", min: 5, max: 600, label: "Page timeout (seconds)" },
-        { path: "sla.ignore_https_errors", type: "switch", label: "Ignore certificate errors" }] }] },
+        { path: "sla.ignore_https_errors", type: "switch", label: "Ignore certificate errors" }] },
+      { title: "Ticketing auto-assign", text: "How “Run now” on the Auto Assign page reaches «اسناد الطلبات الجديدة». The sign-in page, portal address and browser are the SLA monitor's above; each manager types their own portal login per run.", fields: [
+        { path: "assign.package_text", type: "text", max: 200, label: "Package that holds the assign page", hint: "Matched by name on the packages page (the supervisor package). If an account does not hold it, the run stops and lists the packages it has." },
+        { path: "assign.form_types", type: "lines", kind: "text", label: "«نوع النموذج» values to run", hint: "One option value per line, e.g. 1, 2, 3, 4. Leave empty to run every form type the page offers." },
+        { path: "assign.assign_filter", type: "select", label: "Which requests to assign", options: () => [["date", "Not future-dated (start date today or earlier, or none)"], ["all", "Every request the search returns"]] },
+        { path: "assign.assign_cutoff", type: "text", max: 20, label: "Start-date cutoff", hint: "today, or a date like 25/10/2026: requests starting after it are left for later." }] },
+      { title: "Ticketing auto-assign page details", details: true, text: "Change only when the portal changed: the words, links and ids the auto-assign looks for.", fields: [
+        { path: "assign.package_link_text", type: "text", max: 100, label: "Package link text" },
+        { path: "assign.app_url_fragment", type: "text", max: 100, label: "Application address contains", dir: "ltr" },
+        { path: "assign.assign_link", type: "text", max: 300, label: "Assign menu link (CSS)", dir: "ltr" },
+        { path: "assign.assign_menu_text", type: "text", max: 100, label: "Assign menu text" },
+        { path: "assign.assign_path", type: "text", max: 300, label: "Assign page address (optional)", dir: "ltr", hint: "Only if the menu link cannot be found." },
+        { path: "assign.period_header", type: "text", max: 100, label: "Period column contains", hint: "«الفتره من / الى»: its «من» date is the request's start date." },
+        { path: "assign.app_header", type: "text", max: 100, label: "Application column", hint: "Matched against a rule's applications." },
+        { path: "assign.decision_value", type: "text", max: 20, label: "Decision value («اسناد لمستخدم السرية»)", dir: "ltr" },
+        { path: "assign.execute_button_text", type: "text", max: 100, label: "Execute button text" },
+        { path: "assign.employee_wait_seconds", type: "number", min: 1, max: 60, label: "Wait for «الموظفين» (seconds)" },
+        { path: "assign.selectors_assign", type: "kv", label: "Page element ids", wide: true, hint: "form_type, search_button, decision, employee, execute_button, grid, check_all, length, processing -> CSS selector.",
+          kv: { key: "text", value: "text", keyPlaceholder: "grid", valuePlaceholder: "#ContentPlaceHolder1_GridView_RequestDetails", add: "Add an id", empty: "The defaults are used.", mono: true } }] }] },
     { id: "itsm", title: "ITSM", cards: [
       { title: "ITSM status", text: "Implementation and rollback requests per role, from the ITSM scoreboard.", fields: [
         { path: "itsm.enabled", type: "switch", label: "ITSM scan is on" },

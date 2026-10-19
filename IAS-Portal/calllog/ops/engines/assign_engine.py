@@ -2,46 +2,52 @@
 """Ticketing auto-assign: a native CDP RPA that assigns NEW security requests to the team's employees.
 
 This is the executor behind the Auto-Assign page's *ticketing* target. A manager presses "Run now", types THEIR portal
-username + password (used for that one run only - never stored), and this engine:
+username + password (used for that one run only - never stored), and this engine walks the portal exactly the way the
+stand-alone NBE auto-authorizer bot (``nbe_auto_assign.py``) proved on the live site:
 
-  1. logs in to the SSO portal (the same login the SLA job uses) and opens the "assign new requests"
-     («اسناد الطلبات الجديدة») page;
-  2. for each configured form type («نوع النموذج») searches + reads the new-request grid;
-  3. plans who gets what with ``auto_assign.plan_ticketing`` (the manager's rules: which applications, which employees,
-     which daily window - balanced across the chosen employees);
-  4. for each employee selects the decision «اسناد لمستخدم السرية» + that employee in «الموظفين», ticks exactly their
-     planned rows, and presses Execute (تنفيذ), verifying the commit by the grid shrinking - the same careful order the
-     stand-alone NBE auto-authorizer bot proved on the real portal.
+  1. log in, then on the packages page enter the SUPERVISOR package («مشرف البيانات بوحدة الأكواد السرية») - found by
+     its NAME, never a row position; when the account does not hold it the run stops and lists the packages it does hold;
+  2. click the «اسناد الطلبات الجديدة» menu link (``Request_Assign.aspx``);
+  3. for every «نوع النموذج» (all the options the page offers, or the ones set in Settings): select it, Search, switch
+     the grid to "show all", and read every request row;
+  4. keep only the rows the bot would assign - by default NEVER a future-dated request (the «من» date of «الفتره من /
+     الى» after today) - and plan who gets what with ``auto_assign.plan_ticketing`` (the manager's rules: which
+     applications, which employees, which daily window - balanced across the chosen employees);
+  5. for each employee: choose the decision «اسناد لمستخدم السرية», then that employee in «الموظفين» (only if the portal
+     offers them for this form type), re-read the grid (the post-backs re-render it), tick EXACTLY their planned rows,
+     check the tick count matches, press Execute (تنفيذ) once, and verify the commit by the grid shrinking.
 
-It is driven over the DevTools protocol (``calllog.ops.engines.cdp``) - no Playwright, no Node.js, no browser download -
-and reuses the SLA engine's login/table-reading helpers so the two stay consistent. The browser work is behind two
-injectable seams (``scraper`` / ``assigner``) so the whole orchestration is unit-tested with a fake portal and the pure
-planning logic is tested on its own (``tests/test_auto_assign.py``).
+Nothing is ever executed when there is nothing eligible to assign. Every step is written to the run log, including why
+nothing was planned (no active rule, no portal number, no rule for these applications, ...), so an "assigned 0" run
+explains itself.
 
-The portal element ids (``ddlExecuteStatus`` = the decision, ``ddlEmployee`` = the security user, ``btnSearch`` /
-``btnExecute``, the ``GridView_RequestDetails`` grid, the ``ch_Select`` row check-boxes) and the decision value ("6" =
-«اسناد لمستخدم السرية») are the ones the stand-alone bot uses; they live in ``settings["assign"]`` so an admin can tune
-them from System › Settings without a code change. The exact page path / menu for THIS portal must be confirmed against
-the live site on first use (see docs: the defaults follow the known layout).
-
-No secret is ever logged, put in an error text, a file name or a saved page (the SLA engine's ``scrub`` is used).
+It is driven over the DevTools protocol (``calllog.ops.engines.cdp``) - no Playwright, no Selenium, no browser download
+- and reuses the SLA engine's login helpers. The browser work is behind two injectable seams (``scraper`` /
+``assigner``) so the orchestration is unit-tested with a fake portal; the pure helpers (date filter, signature) are
+tested on their own. Element ids / values live in ``settings["assign"]`` (the stand-alone bot's ids by default) so an
+admin can tune them from System › Settings without a code change. No secret is ever logged, put in an error text, a
+file name or a saved page.
 """
 import hashlib
-import time
+import json
+import re
+from collections import Counter
 from contextlib import suppress
+from datetime import date, datetime
 
 from . import cdp, sla_engine as S
-from .. import auto_assign
+from .. import auto_assign, overlay
 from ..settings import DEFAULTS, deep_merge
-from .common import CredentialError, JobResult
+from .common import JobResult
 
 SETTLE_MS = 1500
-POSTBACK_MS = 1200          # wait after an ASP.NET post-back (form-type / decision / employee change, search, execute)
+POSTBACK_MS = 1500          # wait after an ASP.NET post-back (form type / decision / employee, search, execute)
 MAX_FORM_TYPES = 20
+PLACEHOLDER_VALUES = ("", "0", "-1")
 
 # A JavaScript ``norm`` that reproduces common.norm_arabic EXACTLY (Arabic-Indic digits -> ASCII, tatweel + diacritics
 # removed, alef/taa-marbuta/alef-maqsura folded, whitespace collapsed, lower-cased) so a row signature computed in the
-# page (js_tick_rows) matches one computed in Python (row_sig). Any drift here means a row never gets ticked.
+# page matches one computed in Python (row_sig). Any drift here means a planned row is never found again.
 _JS_NORM = r"""
   const _AR = {'٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9'};
   const norm = s => (s || '').replace(/[٠-٩]/g, d => _AR[d]).replace(/ـ/g, '')
@@ -61,21 +67,92 @@ def _config(ctx):
 
 def row_sig(cells):
     """A stable signature of a grid row from its visible cell texts, so a row can be matched again after an ASP.NET
-    post-back re-renders the grid. The SAME join is computed in JavaScript when ticking, so the two always agree."""
+    post-back re-renders the grid (the check-box ids are positional and re-index)."""
     raw = "|".join(S.norm(c) for c in cells)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
+# --------------------------------------------------------------------------- the date filter (ported from the bot)
+_DMY = re.compile(r"(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})")
+_YMD = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+
+
+def parse_ddmmyyyy(text):
+    """First DD/MM/YYYY (or DD-MM-YYYY / DD.MM.YYYY) date in ``text`` -> date, else None. Arabic-Indic digits allowed."""
+    m = _DMY.search(S.norm(text))
+    if not m:
+        return None
+    try:
+        return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    except ValueError:
+        return None
+
+
+def start_date(period):
+    """The request's START date = the «من» of a «من / الى» cell ("DD/MM/YYYY - DD/MM/YYYY"), or None when the request
+    has no validity period ("-" or blank)."""
+    if not period:
+        return None
+    return parse_ddmmyyyy(re.split(r"\s[-–]\s", S.norm(period), maxsplit=1)[0])
+
+
+def looks_like_date(period):
+    """True when the «من» part has date-like digits we could not read - such a row is skipped for a human to check."""
+    if not period:
+        return False
+    return bool(re.search(r"\d{1,2}\s*[/.\-]\s*\d{1,2}", re.split(r"\s[-–]\s", S.norm(period), maxsplit=1)[0]))
+
+
+def resolve_cutoff(value, today):
+    """``assign_cutoff`` ('today' | DD/MM/YYYY | YYYY-MM-DD) -> date. Anything unreadable -> today (never wider)."""
+    v = str(value or "today").strip()
+    if v.lower() in ("", "today"):
+        return today
+    d = parse_ddmmyyyy(v)
+    if d is None:
+        m = _YMD.match(v)
+        if m:
+            with suppress(ValueError):
+                d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    return d or today
+
+
+def classify(rows, cutoff, mode="date"):
+    """Split grid rows into those to assign vs skipped - the stand-alone bot's rule. ``mode`` "all" takes every row;
+    "date" (default) skips a request whose start date is AFTER ``cutoff`` (never assign a future-dated request) and one
+    whose start date cannot be read; a request with no start date is assigned. Returns (eligible, stats)."""
+    eligible, future, unreadable, no_start, no_period = [], 0, 0, 0, 0
+    for row in rows:
+        if mode == "all":
+            eligible.append(row)
+            continue
+        if row.get("period_missing"):         # the grid has no period column: the start date cannot be checked
+            no_period += 1
+            continue
+        period = (row.get("period") or "").strip()
+        frm = start_date(period)
+        if frm is not None and frm > cutoff:
+            future += 1
+        elif frm is not None:
+            eligible.append(row)
+        elif looks_like_date(period):
+            unreadable += 1
+        else:
+            no_start += 1
+            eligible.append(row)
+    return eligible, {"total": len(rows), "eligible": len(eligible), "future": future, "unreadable": unreadable,
+                      "no_start": no_start, "no_period": no_period}
+
+
 # --------------------------------------------------------------------------- browser JavaScript
 def js_select_value(selector, value):
-    """Set a <select> (by CSS selector) to ``value`` and fire input/change so the ASP.NET AutoPostBack runs. Returns the
-    value actually selected, or null when the option is not offered (e.g. an employee not valid for this form type)."""
-    import json
+    """Set a <select> to ``value`` and fire input/change so the ASP.NET AutoPostBack runs. Returns the selected value,
+    or null when that option is not offered."""
     return ("(() => {"
             + "const el = document.querySelector(" + json.dumps(selector) + ");"
             + "if (!el) return null;"
             + "const want = " + json.dumps(str(value)) + ";"
-            + "const opt = [...el.options].find(o => String(o.value) === want);"
+            + "const opt = [...el.options].find(o => String(o.value).trim() === want);"
             + "if (!opt) return null;"
             + "el.value = opt.value;"
             + "el.dispatchEvent(new Event('input', {bubbles:true}));"
@@ -83,66 +160,95 @@ def js_select_value(selector, value):
             + "return el.value; })()")
 
 
-def js_grid_rows(grid_selector, app_header):
-    """Read the request grid: for each row that carries a ``ch_Select`` check-box, return its cell texts and the
-    detected application/system (the column whose header contains ``app_header``). The caller hashes the cells into the
-    same signature as :func:`row_sig`."""
-    import json
-    return ("(() => {" + S.JS_NORM
+def js_select_options(selector):
+    """[{value, text}] of a <select>'s options (null when the select is not on the page)."""
+    return ("(() => { const el = document.querySelector(" + json.dumps(selector) + ");"
+            + "if (!el) return null;"
+            + "return [...el.options].map(o => ({value: String(o.value || '').trim(),"
+            + " text: (o.text || '').replace(/\\s+/g, ' ').trim()})); })()")
+
+
+def js_exists(selector):
+    return "!!document.querySelector(" + json.dumps(selector) + ")"
+
+
+def js_landing_packages():
+    """The package names on the after-login packages page (rows that carry an Enter link) - only to tell the manager
+    which packages their account holds when the supervisor one is missing."""
+    return ("(() => { const out = [];"
+            + "for (const tr of document.querySelectorAll('table tr')) {"
+            + "  if (!tr.querySelector(\"a[id*='btnSubmit'], a, input[type=submit], button\")) continue;"
+            + "  const t = (tr.innerText || tr.textContent || '').replace(/\\s+/g, ' ').trim();"
+            + "  if (t && t.length < 200 && !out.includes(t)) out.push(t); }"
+            + "return out.slice(0, 15); })()")
+
+
+def js_show_all(length_selector, grid_selector):
+    """Switch the grid's DataTables page length to "All" (-1), through its length <select> when present, else through
+    the DataTables API. Returns how it was done, or '' when neither was possible (then only the first page is read)."""
+    return ("(() => {"
+            + "const s = document.querySelector(" + json.dumps(length_selector) + ");"
+            + "if (s && [...s.options].some(o => String(o.value) === '-1')) {"
+            + "  if (String(s.value) !== '-1') { s.value = '-1';"
+            + "    s.dispatchEvent(new Event('change', {bubbles:true})); }"
+            + "  return 'select'; }"
+            + "const g = document.querySelector(" + json.dumps(grid_selector) + ");"
+            + "try { if (g && window.jQuery && jQuery.fn.dataTable && jQuery.fn.dataTable.isDataTable(g)) {"
+            + "  jQuery(g).DataTable().page.len(-1).draw(); return 'api'; } } catch (e) {}"
+            + "return ''; })()")
+
+
+def js_busy(processing_selector):
+    """Is the DataTables 'processing' overlay showing (a server-side reload still running)?"""
+    return ("(() => { const p = document.querySelector(" + json.dumps(processing_selector) + ");"
+            + "return !!(p && (p.offsetWidth || p.offsetHeight || p.getClientRects().length)"
+            + " && getComputedStyle(p).display !== 'none'); })()")
+
+
+def js_grid_rows(grid_selector, app_header, period_header):
+    """Read the request grid: its header names, which column is the application (``app_header``) and which the
+    «الفتره من / الى» period (``period_header``), and for every row that carries a ``ch_Select`` check-box: the box id,
+    the cell texts, the application and the period."""
+    return ("(() => {" + _JS_NORM
             + "const grid = document.querySelector(" + json.dumps(grid_selector) + ");"
             + "if (!grid) return {error: 'grid-not-found'};"
             + "const cell = n => { if (!n) return ''; const c = n.cloneNode(true);"
             + "  c.querySelectorAll('br').forEach(b => b.replaceWith(' '));"
             + "  c.querySelectorAll('script,style').forEach(s => s.remove());"
             + "  return (c.textContent || '').replace(/\\s+/g,' ').trim(); };"
-            + "const head = [...grid.querySelectorAll('thead th, thead td')].map(cell);"
-            + "const want = norm(" + json.dumps(app_header) + ");"
-            + "let appIdx = head.findIndex(h => norm(h) === want);"
-            + "if (appIdx < 0) appIdx = head.findIndex(h => norm(h).includes(want));"
-            + "const bodies = grid.tBodies.length ? [...grid.tBodies] : [grid];"
-            + "const out = [];"
-            + "for (const b of bodies) for (const tr of b.rows) {"
+            + "let head = [...grid.querySelectorAll('thead th, thead td')].map(cell);"
+            + "if (!head.filter(Boolean).length) { const first = grid.querySelector('tr');"
+            + "  head = first ? [...first.cells].map(cell) : []; }"
+            + "const find = w => { const want = norm(w); if (!want) return -1;"
+            + "  let i = head.findIndex(h => norm(h) === want); if (i < 0) i = head.findIndex(h => norm(h).includes(want));"
+            + "  return i; };"
+            + "const appIdx = find(" + json.dumps(app_header) + "), perIdx = find(" + json.dumps(period_header) + ");"
+            + "const rows = [];"
+            + "for (const tr of grid.querySelectorAll('tr')) {"
             + "  const cb = tr.querySelector(\"input[type=checkbox][id*='ch_Select']\");"
             + "  if (!cb) continue;"
             + "  const cells = [...tr.cells].map(cell);"
-            + "  out.push({cells: cells, system: appIdx >= 0 ? (cells[appIdx] || '') : ''});"
-            + "}"
-            + "return {rows: out}; })()")
+            + "  rows.push({cb: cb.id, cells: cells, system: appIdx >= 0 ? (cells[appIdx] || '') : '',"
+            + "             period: perIdx >= 0 ? (cells[perIdx] || '') : ''}); }"
+            + "return {headers: head, app_col: appIdx, period_col: perIdx, rows: rows}; })()")
 
 
-def js_tick_rows(grid_selector, sigs):
-    """Tick the ``ch_Select`` box of every row whose signature is in ``sigs`` (and untick the rest), returning how many
-    were ticked. The signature is recomputed in JS from the row's cell texts with the same normalisation + join + a
-    SHA-256 as :func:`row_sig`, so Python and the page agree on which row is which."""
-    import json
-    return ("(async () => {" + _JS_NORM
+def js_tick_ids(grid_selector, ids, check_all_selector):
+    """Tick EXACTLY these check-box ids (a manual tick - the server reads the posted boxes), untick every other row box
+    and the select-all box, then return how many row boxes are ticked."""
+    return ("(() => {"
             + "const grid = document.querySelector(" + json.dumps(grid_selector) + ");"
             + "if (!grid) return -1;"
-            + "const cell = n => { if (!n) return ''; const c = n.cloneNode(true);"
-            + "  c.querySelectorAll('br').forEach(b => b.replaceWith(' '));"
-            + "  c.querySelectorAll('script,style').forEach(s => s.remove());"
-            + "  return (c.textContent || '').replace(/\\s+/g,' ').trim(); };"
-            + "const enc = new TextEncoder();"
-            + "const sha = async s => { const h = await crypto.subtle.digest('SHA-256', enc.encode(s));"
-            + "  return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2,'0')).join('').slice(0,16); };"
-            + "const wanted = new Set(" + json.dumps(list(sigs)) + ");"
-            + "const bodies = grid.tBodies.length ? [...grid.tBodies] : [grid];"
-            + "let n = 0;"
-            + "for (const b of bodies) for (const tr of b.rows) {"
-            + "  const cb = tr.querySelector(\"input[type=checkbox][id*='ch_Select']\");"
-            + "  if (!cb) continue;"
-            + "  const sig = await sha([...tr.cells].map(cell).map(norm).join('|'));"
-            + "  const on = wanted.has(sig);"
-            + "  if (cb.checked !== on) { cb.click(); }"
-            + "  if (on) n++;"
-            + "}"
-            + "return n; })()")
+            + "const want = new Set(" + json.dumps(list(ids)) + ");"
+            + "const boxes = [...grid.querySelectorAll(\"input[type=checkbox][id*='ch_Select']\")];"
+            + "for (const b of boxes) b.checked = want.has(b.id);"
+            + "const all = document.querySelector(" + json.dumps(check_all_selector) + ");"
+            + "if (all) all.checked = false;"
+            + "return boxes.filter(b => b.checked).length; })()")
 
 
-def js_count_rows(grid_selector):
-    import json
-    return ("(() => { const g = document.querySelector(" + json.dumps(grid_selector) + ");"
-            + "return g ? g.querySelectorAll(\"input[type=checkbox][id*='ch_Select']\").length : 0; })()")
+JS_ARM_DIALOGS = ("(() => { window.confirm = () => true; window.alert = () => {}; window.prompt = () => '';"
+                  " return true; })()")
 
 
 # --------------------------------------------------------------------------- browser orchestration
@@ -152,13 +258,35 @@ def open_browser(ctx, cfg, headless):
     return cdp.CdpBrowser(bcfg, log=ctx.log, headless=headless, profile_leaf="assign_profile")
 
 
+def _settle(browser, cfg, ms=None):
+    """Let an ASP.NET post-back / DataTables reload finish: a short pause, the document ready, the overlay gone."""
+    S._sleep_ms(POSTBACK_MS if ms is None else ms)
+    with suppress(Exception):
+        browser.wait_ready(int(cfg["timeout_seconds"]))
+    _wait_js(browser, "!(" + js_busy(cfg["selectors_assign"]["processing"]) + ")", 15)
+
+
+def _wait_js(browser, expr, timeout_s, step_ms=300):
+    """Re-run ``expr`` until it is truthy or ``timeout_s`` passes. Returns the last value (falsy on timeout)."""
+    loops = max(1, int(timeout_s * 1000 / step_ms))
+    value = None
+    for _ in range(loops):
+        with suppress(Exception):
+            value = browser.eval(expr)
+            if value:
+                return value
+        S._sleep_ms(step_ms)
+    return value
+
+
 def _login_and_open(ctx, browser, cfg, username, password):
-    """Log in to the SSO portal and open the assign-new-requests page. Mirrors sla_engine.scrape's login, then either
-    navigates to ``assign_path`` directly or (when it is blank) clicks the menu link ``assign_menu_text``."""
+    """Log in, enter the supervisor package by NAME, and open the assign-new-requests page."""
     timeout_s = int(cfg["timeout_seconds"])
     base = cfg["base_url"].rstrip("/")
     sel = cfg.get("selectors") or {}
+    sa = cfg["selectors_assign"]
     login_marker = S.url_marker(cfg["login_path"], "login.aspx", keep_extension=True)
+
     browser.navigate(base + cfg["login_path"], timeout=timeout_s)
     browser.eval(S.js_fill_login(sel.get("username"), sel.get("password"), username, password))
     if sel.get("login_button"):
@@ -168,101 +296,216 @@ def _login_and_open(ctx, browser, cfg, username, password):
     if browser.wait_url(lambda u: login_marker not in u.lower(), timeout=timeout_s) is None:
         raise S.LoginError("Login failed - still on the login page. Check the portal user and password you typed.")
     browser.wait_ready(timeout_s)
-    if cfg.get("package_text"):
-        pkg = browser.eval(S.js_open_package(cfg["package_text"], cfg.get("package_link_text")))
-        if isinstance(pkg, dict):
-            browser.click_at(pkg["x"], pkg["y"])
-            browser.attach(cfg["app_url_fragment"].lower(), timeout=timeout_s)
-    if cfg.get("assign_path"):
+    ctx.log("login OK")
+
+    package = cfg.get("package_text") or ""
+    if package:
+        S._sleep_ms(SETTLE_MS)
+        pkg = browser.eval(S.js_open_package(package, cfg.get("package_link_text")))
+        if not isinstance(pkg, dict):
+            held = browser.eval(js_landing_packages()) or []
+            raise AssignError(f"Your portal account does not hold the «{package}» package, which the assign page lives "
+                              f"in. Packages found: {' | '.join(held) or 'none'}. Run with an account that has it, or "
+                              f"set the package name in System › Settings › Ticketing auto-assign.")
+        browser.click_at(pkg["x"], pkg["y"])
+        try:
+            browser.attach((cfg.get("app_url_fragment") or "").lower(), timeout=timeout_s)
+        except cdp.CdpError:
+            ctx.log("the package did not open a recognisable new window - continuing in the current one")
+        browser.wait_ready(timeout_s)
+        ctx.log(f"entered the «{package}» package")
+
+    S._sleep_ms(SETTLE_MS)
+    opened = S._click(browser, S.js_click_selector(cfg["assign_link"])) if cfg.get("assign_link") else False
+    if not opened and cfg.get("assign_menu_text"):
+        opened = S._click(browser, S.js_click_text(cfg["assign_menu_text"]))
+    if not opened and cfg.get("assign_path"):
         browser.navigate(base + cfg["assign_path"], timeout=timeout_s)
-    elif not S._click(browser, S.js_click_text(cfg["assign_menu_text"])):
-        raise AssignError(f"Could not open the assign page (menu '{cfg['assign_menu_text']}' not found).")
-    browser.wait_ready(timeout_s)
+        opened = True
+    if not opened:
+        raise AssignError(f"Could not find the «{cfg.get('assign_menu_text')}» menu link on "
+                          f"{S.scrub(browser.current_url(), [password])}.")
+    _settle(browser, cfg, SETTLE_MS)
+    if not _wait_js(browser, js_exists(sa["form_type"]) + " || " + js_exists(sa["grid"]), timeout_s):
+        raise AssignError("The assign page did not open (no «نوع النموذج» list and no request grid) - ended on "
+                          + S.scrub(browser.current_url(), [password]))
+    ctx.log("assign page open")
 
 
-def _search_form(browser, cfg, form_type):
-    """Select the form type and search; return the grid's current rows as ``[{sig, system}]``."""
-    sel = cfg["selectors_assign"]
-    S._sleep_ms(SETTLE_MS)
-    if form_type:
-        browser.eval(js_select_value(sel["form_type"], form_type))
-        S._sleep_ms(POSTBACK_MS)
-    if not S._click(browser, S.js_click_selector(sel["search_button"])):
-        S._click(browser, S.js_click_text(cfg["search_button_text"]))
-    S._sleep_ms(SETTLE_MS)
-    browser.wait_ready(int(cfg["timeout_seconds"]))
-    S._sleep_ms(POSTBACK_MS)
-    return _read_rows(browser, cfg)
+def _form_types(ctx, browser, cfg):
+    """The «نوع النموذج» values to run: the ones set in Settings, else every real option the page offers."""
+    configured = [str(t).strip() for t in (cfg.get("form_types") or []) if str(t).strip()]
+    options = browser.eval(js_select_options(cfg["selectors_assign"]["form_type"])) if browser else None
+    labels = {}
+    real = []
+    for o in options or []:
+        value, text = o.get("value", ""), o.get("text", "")
+        if value in PLACEHOLDER_VALUES or "اختر" in S.norm(text) or "select" in text.lower():
+            continue
+        labels[value] = text
+        real.append(value)
+    chosen = configured or real or [""]
+    ctx.log("form types: " + ", ".join(f"{v} ({labels.get(v, '?')})" if v else "(page default)" for v in chosen))
+    return chosen[:MAX_FORM_TYPES], labels
 
 
-def _read_rows(browser, cfg):
-    res = browser.eval(js_grid_rows(cfg["selectors_assign"]["grid"], cfg["app_header"]))
-    if not isinstance(res, dict) or res.get("error"):
+def _read_grid(browser, cfg):
+    sa = cfg["selectors_assign"]
+    info = browser.eval(js_grid_rows(sa["grid"], cfg["app_header"], cfg["period_header"]))
+    if not isinstance(info, dict) or info.get("error"):
+        return [], {}
+    missing = info.get("period_col", -1) < 0
+    rows = [{"id": row_sig(r.get("cells") or []), "cb": r.get("cb"), "system": r.get("system") or "",
+             "period": r.get("period") or "", "period_missing": missing} for r in info.get("rows") or []]
+    return rows, info
+
+
+def _show_all_and_read(browser, cfg):
+    """Switch the grid to "show all" (an ASP.NET post-back resets it to its first page, so this is redone after every
+    post-back - as the stand-alone bot does) and read it. Returns (rows, info, how)."""
+    sa = cfg["selectors_assign"]
+    how = browser.eval(js_show_all(sa["length"], sa["grid"]))
+    if how:
+        _settle(browser, cfg)
+    rows, info = _read_grid(browser, cfg)
+    return rows, info, how
+
+
+def _search_form(ctx, browser, cfg, form_type, notes=None):
+    """Select the form type, Search, show every row, and read the grid. Returns the rows ([{id, cb, system, period}]).
+    ``notes`` (a per-run set) makes each grid warning appear once per run."""
+    notes = notes if notes is not None else set()
+
+    def note(key, text):
+        if key not in notes:
+            notes.add(key)
+            ctx.log(text)
+    sa = cfg["selectors_assign"]
+    if form_type and browser.eval(js_select_value(sa["form_type"], form_type)) is None:
+        ctx.log(f"form type {form_type} is not offered on the assign page - skipped")
         return []
-    out = []
-    for r in res.get("rows") or []:
-        out.append({"id": row_sig(r.get("cells") or []), "system": r.get("system") or ""})
-    return out
+    if form_type:
+        _settle(browser, cfg)
+    if not S._click(browser, S.js_click_selector(sa["search_button"])):
+        S._click(browser, S.js_click_text(cfg["search_button_text"]))
+    _settle(browser, cfg, SETTLE_MS)
+    rows, info, how = _show_all_and_read(browser, cfg)
+    if rows and info.get("app_col", -1) < 0:
+        note("app", f"warning: no «{cfg['app_header']}» column on the grid, so rules limited to applications cannot "
+                    f"match - columns seen: {', '.join(h for h in info.get('headers') or [] if h)}")
+    if rows and cfg.get("assign_filter") != "all" and info.get("period_col", -1) < 0:
+        note("period", f"warning: no «{cfg['period_header']}» period column on the grid, so a request's start date "
+                       f"cannot be checked and NOTHING is assigned (like the stand-alone bot). Fix the period column "
+                       f"name in System › Settings, or choose 'Every request the search returns'.")
+    if not how and rows:
+        note("length", "note: could not switch the grid to 'show all' - only the rows on its first page are read")
+    return rows
 
 
-def _assign_group(ctx, browser, cfg, group):
-    """Select the decision + this employee, tick their planned rows, press Execute, and verify by the grid shrinking.
-    Returns the number committed (verified by the drop in row count, else the number ticked)."""
-    sel = cfg["selectors_assign"]
-    if browser.eval(js_select_value(sel["decision"], cfg["decision_value"])) is None:
-        raise AssignError(f"The decision value {cfg['decision_value']} is not offered on the assign page.")
-    S._sleep_ms(POSTBACK_MS)
-    if browser.eval(js_select_value(sel["employee"], group["portal_id"])) is None:
-        ctx.log(f"employee {group['portal_id']} ({group.get('name')}) is not offered for this form type - skipped")
+def _assign_group(ctx, browser, cfg, group, form_type, offered_logged, notes=None):
+    """Decision -> employee -> re-read -> tick exactly this employee's rows -> verify the count -> Execute once ->
+    verify by the grid shrinking. Returns the number committed."""
+    sa = cfg["selectors_assign"]
+    who = f"{group.get('name') or '?'} ({group['portal_id']})"
+    if browser.eval(js_select_value(sa["decision"], cfg["decision_value"])) is None:
+        raise AssignError(f"The decision value {cfg['decision_value']} («اسناد لمستخدم السرية») is not offered.")
+    _settle(browser, cfg)
+    wait_s = int(cfg.get("employee_wait_seconds") or 8)
+    options = _wait_js(browser, "(" + js_select_options(sa["employee"]) + " || []).filter(o => o.value).length ? "
+                       + js_select_options(sa["employee"]) + " : null", wait_s) or []
+    offered = {o["value"]: o["text"] for o in options if o.get("value") and o["value"] not in PLACEHOLDER_VALUES}
+    if not offered_logged.get(form_type):
+        offered_logged[form_type] = True
+        ctx.log("offered employees: " + (", ".join(f"{v} - {t}" for v, t in offered.items()) or "none"))
+    if group["portal_id"] not in offered:
+        ctx.log(f"{who} is not in «الموظفين» for this form type - skipped (set the right 'Number in the security "
+                f"portal' in Admin › Users; the offered values are listed above)")
         return 0
-    S._sleep_ms(POSTBACK_MS)
-    before = browser.eval(js_count_rows(sel["grid"]))
-    ticked = browser.eval(js_tick_rows(sel["grid"], group["ids"]))
-    if not isinstance(ticked, int) or ticked <= 0:
-        ctx.log(f"employee {group['portal_id']}: none of their {len(group['ids'])} planned row(s) are on the grid now - skipped")
+    browser.eval(js_select_value(sa["employee"], group["portal_id"]))
+    _settle(browser, cfg)
+
+    rows, _info, _how = _show_all_and_read(browser, cfg)      # the post-backs re-rendered the grid: show all, re-read
+    want, ids = set(group["ids"]), []
+    for r in rows:
+        if r["id"] in want and r["cb"]:
+            ids.append(r["cb"])
+            want.discard(r["id"])                              # one box per planned request
+    if not ids:
+        ctx.log(f"{who}: none of the {len(group['ids'])} planned request(s) is on the grid any more - skipped")
+        return 0
+    ticked = browser.eval(js_tick_ids(sa["grid"], ids, sa["check_all"]))
+    if ticked != len(ids):
+        ctx.log(f"{who}: selection mismatch - {ticked} ticked but {len(ids)} intended; Execute NOT pressed")
         return 0
     if ctx.dry_run:
-        ctx.log(f"DRY-RUN: would assign {ticked} request(s) to {group.get('name') or group['portal_id']}")
-        return ticked
-    # Execute must fire exactly once; after the click the commit may already be server-side, so nothing after may raise.
-    S._click(browser, S.js_click_selector(sel["execute_button"])) or S._click(browser, S.js_click_text(cfg["execute_button_text"]))
-    S._sleep_ms(SETTLE_MS)
+        ctx.log(f"DRY-RUN: would assign {len(ids)} request(s) to {who}")
+        return len(ids)
+
+    before = len(rows)
+    browser.eval(JS_ARM_DIALOGS)                               # accept an "are you sure?" the button may raise
+    # Execute fires EXACTLY once: after the click the assignment may already be committed, so nothing may re-click.
+    if not S._click(browser, S.js_click_selector(sa["execute_button"])):
+        if not S._click(browser, S.js_click_text(cfg["execute_button_text"])):
+            raise AssignError("The Execute (تنفيذ) button was not found.")
+    ctx.log(f"Execute pressed: {len(ids)} request(s) -> {who}")
+    _settle(browser, cfg, SETTLE_MS)
+    committed = len(ids)
     with suppress(Exception):
-        browser.wait_ready(int(cfg["timeout_seconds"]))
-    S._sleep_ms(POSTBACK_MS)
-    committed = ticked
-    with suppress(Exception):
-        after = browser.eval(js_count_rows(sel["grid"]))
-        if isinstance(before, int) and isinstance(after, int) and before - after > 0:
-            committed = min(ticked, before - after)
-    ctx.log(f"assigned {committed} request(s) to {group.get('name') or group['portal_id']}")
+        after = len(_search_form(ctx, browser, cfg, form_type, notes))   # a fresh search: assigned rows are gone
+        dropped = before - after
+        if dropped >= len(ids):
+            ctx.log(f"verified: {len(ids)} assigned to {who} (grid {before} -> {after})")
+        elif dropped > 0:
+            committed = dropped
+            ctx.log(f"partly verified: grid {before} -> {after} for {len(ids)} ticked (new arrivals can mask this)")
+        else:
+            committed = 0
+            ctx.log(f"warning: Execute may NOT have committed for {who} - the grid did not shrink "
+                    f"({before} -> {after}); check the portal")
     return committed
 
 
 # --------------------------------------------------------------------------- planning (pure, across the run's teams)
 def plan_run(ctx, requests):
-    """Combine the manager's team(s) into one plan over the grid's ``requests`` ([{id, system}]). Each application
-    belongs to one team, so a request is claimed by at most one team's rules. Returns the grouped plan and a per-team
-    tally for the report."""
+    """Combine the manager's team(s) into one plan over the grid's ``requests`` ([{id, system}]). Returns the plan and
+    a per-team tally."""
     teams = (ctx.options or {}).get("teams") or {}
     now = ctx.now()
     load, plan, per_team = {}, [], {}
     for team, info in teams.items():
-        block = info.get("block") or {}
-        members = info.get("members") or {}
-        picks = auto_assign.plan_ticketing(block, requests, now, members, load)
+        taken = {p["id"] for p in plan}
+        picks = auto_assign.plan_ticketing(info.get("block") or {}, [r for r in requests if r["id"] not in taken],
+                                           now, info.get("members") or {}, load)
         for item in picks:
             load[item["portal_id"]] = load.get(item["portal_id"], 0) + 1
-        taken = {p["id"] for p in plan}
-        picks = [p for p in picks if p["id"] not in taken]          # a request is assigned once across teams
         plan.extend(picks)
         per_team[team] = len(picks)
     return plan, per_team
 
 
+def why_nothing_planned(ctx, requests):
+    """One line on why no request was planned - so an 'assigned 0' run explains itself."""
+    now = ctx.now()
+    systems = sorted({r.get("system") or "?" for r in requests})
+    out = []
+    for team, info in ((ctx.options or {}).get("teams") or {}).items():
+        block, members = info.get("block") or {}, info.get("members") or {}
+        rules = auto_assign.active_rules(block, now)
+        if not block.get("enabled"):
+            out.append(f"{team}: ticketing auto-assign is off")
+        elif not rules:
+            out.append(f"{team}: no rule is active at {now:%H:%M} (check the rules' time windows)")
+        elif not any(str((members.get(overlay.normalize_email(e)) or {}).get("portal_id") or "").strip()
+                     for r in rules for e in r.get("employees") or []):
+            out.append(f"{team}: the employees in the active rules have no 'Number in the security portal'")
+        else:
+            out.append(f"{team}: no active rule covers these applications: {', '.join(systems[:12])}")
+    return "; ".join(out) or "no team was given"
+
+
 # --------------------------------------------------------------------------- entry point
 def run(ctx, scraper=None, assigner=None):
-    """One ticketing auto-assign pass. ``scraper(ctx, browser, form_type) -> [{id, system}]`` and
+    """One ticketing auto-assign pass. ``scraper(ctx, browser, form_type) -> [{id, system, period}]`` and
     ``assigner(ctx, browser, group) -> committed`` replace the real browser in tests."""
     cfg = _config(ctx)
     opts = ctx.options or {}
@@ -275,26 +518,50 @@ def run(ctx, scraper=None, assigner=None):
     if live and (not username or not password):
         return _fail(ctx, "Type the portal username and password to run the ticketing auto-assign.", "auth")
     secrets = [password] if password else []
-    form_types = [t for t in (cfg.get("form_types") or [""])][:MAX_FORM_TYPES] or [""]
+    cutoff = resolve_cutoff(cfg.get("assign_cutoff"), ctx.now().date())
+    mode = "all" if cfg.get("assign_filter") == "all" else "date"
 
     browser = None
-    assigned, per_employee, per_team_total = 0, {}, {}
+    assigned, per_employee, per_team_total, found = 0, {}, {}, 0
     try:
         if live:
             browser = open_browser(ctx, cfg, headless=not ctx.headed)
             _login_and_open(ctx, browser, cfg, username, password)
+            form_types, labels = _form_types(ctx, browser, cfg)
+        else:
+            form_types = [str(t) for t in cfg.get("form_types") or []] or [""]
+            labels = {}
+        offered_logged, notes = {}, set()
         for form_type in form_types:
-            requests = (scraper(ctx, browser, form_type) if scraper else _search_form(browser, cfg, form_type))
-            if not requests:
+            name = f"form {form_type} ({labels[form_type]})" if form_type in labels else (
+                f"form {form_type}" if form_type else "the grid")
+            rows = scraper(ctx, browser, form_type) if scraper else _search_form(ctx, browser, cfg, form_type, notes)
+            found += len(rows)
+            if not rows:
+                ctx.log(f"{name}: no new requests")
                 continue
-            plan, per_team = plan_run(ctx, requests)
+            eligible, stats = classify(rows, cutoff, mode)
+            skipped = [f"{stats[k]} {label}" for k, label in (("future", "future-dated"),
+                                                              ("unreadable", "with an unreadable start date"),
+                                                              ("no_period", "whose start date cannot be read"))
+                       if stats[k]]
+            ctx.log(f"{name}: {stats['total']} new request(s), {stats['eligible']} to assign"
+                    + (f" (skipped {', '.join(skipped)})" if skipped else ""))
+            if not eligible:
+                ctx.log(f"{name}: nothing to assign - Execute not pressed")
+                continue
+            plan, per_team = plan_run(ctx, eligible)
             for team, n in per_team.items():
                 per_team_total[team] = per_team_total.get(team, 0) + n
+            if not plan:
+                ctx.log(f"{name}: nothing planned - {why_nothing_planned(ctx, eligible)}")
+                continue
             groups = auto_assign.group_by_employee(plan)
-            for i, group in enumerate(groups):
-                if live and i > 0:
-                    _search_form(browser, cfg, form_type)        # Execute removed the last employee's rows: refresh
-                got = (assigner(ctx, browser, group) if assigner else _assign_group(ctx, browser, cfg, group))
+            ctx.log(f"{name}: planned " + ", ".join(f"{len(g['ids'])} -> {g.get('name') or g['portal_id']}"
+                                                    for g in groups))
+            for group in groups:
+                got = (assigner(ctx, browser, group) if assigner
+                       else _assign_group(ctx, browser, cfg, group, form_type, offered_logged, notes))
                 assigned += got
                 if got:
                     label = group.get("name") or group["portal_id"]
@@ -311,12 +578,12 @@ def run(ctx, scraper=None, assigner=None):
             with suppress(Exception):
                 browser.close()
 
-    summary = (f"assigned {assigned} request(s)" + (" (dry-run)" if ctx.dry_run else "")
+    summary = (f"assigned {assigned} of {found} new request(s)" + (" (dry-run)" if ctx.dry_run else "")
                + (" - " + ", ".join(f"{k}: {v}" for k, v in sorted(per_employee.items())) if per_employee else ""))
     ctx.log(summary)
     return JobResult(ok=True, summary=summary,
-                     snapshot_data={"assigned": assigned, "by_employee": per_employee, "by_team": per_team_total,
-                                    "dry_run": bool(ctx.dry_run)})
+                     snapshot_data={"assigned": assigned, "found": found, "by_employee": per_employee,
+                                    "by_team": per_team_total, "dry_run": bool(ctx.dry_run)})
 
 
 def _fail(ctx, message, kind=None):

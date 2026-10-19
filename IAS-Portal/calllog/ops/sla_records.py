@@ -20,6 +20,7 @@ person. From the accumulated records both clocks are computed, split by executor
 Settings. docs/HUB-DESIGN.md section 5.1.
 """
 import csv
+import io
 from datetime import datetime, timedelta
 
 DEFAULT_SLA_MINUTES = 180            # 3 hours, assignment -> final confirmation
@@ -143,6 +144,8 @@ def record_scan(records, rows, cfg, now, system_team=None):
             rec["confirmed_at"] = col(row, "confirmed_at") or now
             rec["checker"] = col(row, "checker")
             rec["final_outcome"] = outcome or "executed"
+            if not rec["executor"] and col(row, "executor"):     # who handled it (an export names them), no clock
+                rec["executor"] = col(row, "executor")
     return records
 
 
@@ -156,9 +159,9 @@ def record_live_requests(records, requests, cfg, now, system_team=None):
     stage (the clock has started); a request's execution and confirmation leave that page and are picked up later from
     the export feed. Each live row therefore upserts an open record keyed by the scan's stable ``key`` and tagged
     ``source="scan"``; it stamps ``assigned_at`` from the request's sent date and remembers the system, the requester
-    and the security user currently holding it (``assignee``). ``apply_sla_scan`` first drops the previous scan-sourced
-    records, so the scan-sourced set always mirrors exactly the requests open right now (feed-sourced CLOSED records are
-    left untouched). Returns ``records``."""
+    and the security user currently holding it (``assignee``). A request that is no longer on the page has been acted
+    on by its security user - ``mark_left_queue`` records that as its close; one that shows up again (sent back to the
+    queue) is reopened here. Returns ``records``."""
     f = cfg.get("fields") or {}
     now = _clean(now) or datetime.now().strftime(_FMT)
     tmap = {str(k).strip().lower(): v for k, v in (system_team or {}).items()}
@@ -180,6 +183,8 @@ def record_live_requests(records, requests, cfg, now, system_team=None):
                                   "requester": _clean(flds.get(req_name)), "first_seen": now, "assigned_at": assigned_at,
                                   "executor": "", "executed_at": "", "exec_outcome": "", "checker": "",
                                   "confirmed_at": "", "final_outcome": "", "last_status": "", "last_seen": now}
+        if rec.get("source") == SCAN_SOURCE and rec.get("executed_at") and not rec.get("confirmed_at"):
+            rec["executed_at"], rec["executor"], rec["exec_outcome"] = "", "", ""     # back in the queue: open again
         rec["source"] = SCAN_SOURCE
         rec["assignee"] = assignee
         if system:
@@ -188,6 +193,35 @@ def record_live_requests(records, requests, cfg, now, system_team=None):
         rec["last_status"] = assignee and "assigned" or "unassigned"
         rec["last_seen"] = now
     return records
+
+
+def mark_left_queue(records, present_ids, now):
+    """Close the live-scan requests that are no longer on the Re-Assign page: their security user has acted on them
+    (executed or not - the queue does not say which), so stamp ``executed_at`` = this scan's time (accurate to one scan
+    interval) and ``executor`` = the user who was holding it. Only open scan-sourced records are touched. Returns how
+    many were closed."""
+    now = _clean(now) or datetime.now().strftime(_FMT)
+    present = {_clean(x) for x in present_ids or ()}
+    closed = 0
+    for rid, r in records.items():
+        if r.get("source") != SCAN_SOURCE or r.get("executed_at") or r.get("confirmed_at") or rid in present:
+            continue
+        r["executed_at"] = now
+        r["executor"] = r.get("assignee") or ""
+        r["exec_outcome"] = ""                    # unknown: «تم التنفيذ» or «لم يتم التنفيذ»
+        r["last_status"] = "left_queue"
+        closed += 1
+    return closed
+
+
+def _scan_handled(r):
+    """A live-scan request that has LEFT the Re-Assign queue: closed as far as the security user's clock goes."""
+    return r.get("source") == SCAN_SOURCE and bool(r.get("executed_at")) and not r.get("confirmed_at")
+
+
+def _closed_at(r):
+    """When a request closed: its confirmation, or - for a live-scan request - when it left the queue ("" = open)."""
+    return _clean(r.get("confirmed_at")) or (_clean(r.get("executed_at")) if _scan_handled(r) else "")
 
 
 def _minutes(a, b):
@@ -204,18 +238,20 @@ def _pct(part, whole):
 
 
 class _Agg:
-    __slots__ = ("n", "executed", "not_executed", "sla_ok", "sla_n", "_mins")
+    __slots__ = ("n", "executed", "not_executed", "unknown", "sla_ok", "sla_n", "_mins")
 
     def __init__(self):
-        self.n = self.executed = self.not_executed = self.sla_ok = self.sla_n = 0
+        self.n = self.executed = self.not_executed = self.unknown = self.sla_ok = self.sla_n = 0
         self._mins = []
 
     def add(self, outcome, minutes, sla_minutes):
         self.n += 1
         if outcome == "not_executed":
             self.not_executed += 1
-        else:
+        elif outcome:
             self.executed += 1
+        else:
+            self.unknown += 1                     # left the queue: executed or not is not known (yet)
         if minutes is not None:
             self.sla_n += 1
             self._mins.append(minutes)
@@ -224,8 +260,9 @@ class _Agg:
 
     def out(self, **extra):
         med = round(sorted(self._mins)[len(self._mins) // 2], 1) if self._mins else None
-        return dict(extra, n=self.n, executed=self.executed, not_executed=self.not_executed,
-                    executed_pct=_pct(self.executed, self.n), sla_pct=_pct(self.sla_ok, self.sla_n), median_minutes=med)
+        return dict(extra, n=self.n, executed=self.executed, not_executed=self.not_executed, unknown=self.unknown,
+                    executed_pct=_pct(self.executed, self.executed + self.not_executed),
+                    sla_pct=_pct(self.sla_ok, self.sla_n), median_minutes=med)
 
 
 def _live_groups(open_recs, group_by, out_key, sla, now):
@@ -262,14 +299,15 @@ def analyze(records, cfg, now=None, live_records=None):
     live_recs = list((live_records if live_records is not None else records or {}).values())
 
     buckets = {"open": 0, "awaiting": 0, "closed": 0}
-    overall = _Agg()                          # full clock assignment -> confirmation (closed only)
+    overall = _Agg()                          # closed: assignment -> confirmation (or -> left the queue, live scan)
     emp_clock, mgr_clock = _Agg(), _Agg()
-    by_exec, by_check, by_team, by_system, by_day = ({} for _ in range(5))
+    by_exec, by_check, by_team, by_system, by_day, by_handler = ({} for _ in range(6))
     first_day = last_day = None
 
     for r in recs:
-        if r.get("confirmed_at"):
-            stage = "closed"
+        handled = _scan_handled(r)
+        if r.get("confirmed_at") or handled:
+            stage = "closed"                  # confirmed by the checker, or (live scan) left the security user's queue
         elif r.get("executed_at"):
             stage = "awaiting"                # executed by the employee, waiting for the manager to confirm
         else:
@@ -278,21 +316,26 @@ def analyze(records, cfg, now=None, live_records=None):
 
         emp_min = _minutes(r.get("assigned_at"), r.get("executed_at")) if r.get("executed_at") else None
         mgr_min = _minutes(r.get("executed_at"), r.get("confirmed_at")) if r.get("confirmed_at") else None
-        total_min = _minutes(r.get("assigned_at"), r.get("confirmed_at")) if r.get("confirmed_at") else None
+        total_min = (_minutes(r.get("assigned_at"), r.get("confirmed_at")) if r.get("confirmed_at")
+                     else emp_min if handled else None)
+        outcome = r.get("final_outcome") if r.get("confirmed_at") else r.get("exec_outcome")
         team, system = r.get("team") or "Open System", r.get("system") or "—"
 
         if r.get("executed_at"):
             emp_clock.add(r.get("exec_outcome"), emp_min, sla)
             by_exec.setdefault(r.get("executor") or "—", _Agg()).add(r.get("exec_outcome"), emp_min, sla)
         if stage == "closed":
-            overall.add(r.get("final_outcome"), total_min, sla)
-            mgr_clock.add(r.get("final_outcome"), mgr_min, sla)
-            by_check.setdefault(r.get("checker") or "—", _Agg()).add(r.get("final_outcome"), mgr_min, sla)
-            by_team.setdefault(team, _Agg()).add(r.get("final_outcome"), total_min, sla)
-            by_system.setdefault(system, _Agg()).add(r.get("final_outcome"), total_min, sla)
-            day = _clean(r.get("confirmed_at"))[:10]
+            overall.add(outcome, total_min, sla)
+            if r.get("confirmed_at"):
+                mgr_clock.add(r.get("final_outcome"), mgr_min, sla)
+                by_check.setdefault(r.get("checker") or "—", _Agg()).add(r.get("final_outcome"), mgr_min, sla)
+            handler = _clean(r.get("executor")) or _clean(r.get("assignee")) or "—"
+            by_handler.setdefault(handler, _Agg()).add(outcome, total_min, sla)
+            by_team.setdefault(team, _Agg()).add(outcome, total_min, sla)
+            by_system.setdefault(system, _Agg()).add(outcome, total_min, sla)
+            day = _closed_at(r)[:10]
             if day:
-                by_day.setdefault(day, _Agg()).add(r.get("final_outcome"), total_min, sla)
+                by_day.setdefault(day, _Agg()).add(outcome, total_min, sla)
                 first_day = day if first_day is None or day < first_day else first_day
                 last_day = day if last_day is None or day > last_day else last_day
 
@@ -302,14 +345,27 @@ def analyze(records, cfg, now=None, live_records=None):
         return out[:n] if n else out
 
     open_recs = [r for r in live_recs if not r.get("executed_at") and not r.get("confirmed_at")]
-    awaiting_now = sum(1 for r in live_recs if r.get("executed_at") and not r.get("confirmed_at"))
+    awaiting_now = sum(1 for r in live_recs if r.get("executed_at") and not r.get("confirmed_at")
+                       and not _scan_handled(r))
+    today = now[:10]
+    closed_today = {}
+    for r in live_recs:                          # date-unfiltered: a request assigned earlier and closed today counts
+        if today and _closed_at(r)[:10] == today:
+            t_min = (_minutes(r.get("assigned_at"), r.get("confirmed_at")) if r.get("confirmed_at")
+                     else _minutes(r.get("assigned_at"), r.get("executed_at")))
+            out_ = r.get("final_outcome") if r.get("confirmed_at") else r.get("exec_outcome")
+            who = _clean(r.get("executor")) or _clean(r.get("assignee")) or "—"
+            closed_today.setdefault(who, _Agg()).add(out_, t_min, sla)
     open_ages = [_minutes(r.get("assigned_at"), now) for r in open_recs] if now else []
     open_ages = [a for a in open_ages if a is not None]
     live = {"open": len(open_recs), "awaiting": awaiting_now,
             "oldest_minutes": round(max(open_ages), 1) if open_ages else None,
             "breached": sum(1 for a in open_ages if a > sla),
             "by_employee": _live_groups(open_recs, "assignee", "executor", sla, now),
-            "by_team": _live_groups(open_recs, "team", "team", sla, now)}
+            "by_team": _live_groups(open_recs, "team", "team", sla, now),
+            "closed_today": sum(g.n for g in closed_today.values()),
+            "closed_today_by_employee": sorted((g.out(executor=k) for k, g in closed_today.items()),
+                                               key=lambda x: -x["n"])}
 
     return {
         "meta": {"requests": len(recs), "sla_minutes": sla, "date_from": first_day, "date_to": last_day},
@@ -320,6 +376,7 @@ def analyze(records, cfg, now=None, live_records=None):
         "manager_clock": mgr_clock.out(),       # execution -> confirmation (by مراجع السرية)
         "by_employee": top(by_exec, "executor"),     # the executor: who ran the request
         "by_checker": top(by_check, "checker"),      # the reviewer/manager: who confirmed it
+        "by_handler": top(by_handler, "handler"),    # closed requests by the security user who handled them
         "by_team": top(by_team, "team", 0),
         "by_system": top(by_system, "system"),
         "by_day": [by_day[d].out(date=d) for d in sorted(by_day)],
@@ -372,19 +429,117 @@ def filter_options(records):
             "date_from": min(days) if days else None, "date_to": max(days) if days else None}
 
 
-def read_feed_rows(path, encoding="utf-8"):
-    """Yield the rows of a configured export feed (an ALL_*.csv / requests_*.csv the portal refreshes), tolerating a
-    header BOM and whitespace, so ``record_scan`` can fold the feed into the live recording."""
-    with open(path, encoding=encoding, newline="") as f:
-        reader = csv.DictReader(f)
-        reader.fieldnames = [_clean(c) for c in (reader.fieldnames or [])]
-        for row in reader:
-            yield {_clean(k): v for k, v in row.items()}
+def decode_csv(data):
+    """Rows (dicts, headers trimmed) of a CSV given as bytes: UTF-8 (with or without a BOM) or the Arabic Windows code
+    page the portal's Excel exports often use; comma, semicolon or tab separated."""
+    for enc in ("utf-8-sig", "cp1256"):
+        try:
+            text = data.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = data.decode("utf-8", errors="replace")
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.DictReader(io.StringIO(text, newline=""), dialect=dialect)
+    reader.fieldnames = [_clean(c) for c in (reader.fieldnames or [])]
+    return [{_clean(k): v for k, v in row.items() if k is not None} for row in reader]
+
+
+def read_feed_rows(path):
+    """The rows of a configured export feed file (an ALL_*.csv / requests_*.csv the portal refreshes)."""
+    with open(path, "rb") as f:
+        return decode_csv(f.read())
+
+
+# The portal's own export (ALL_*.csv): one line per system of each CLOSED request (sla_analysis.py describes it).
+EXPORT_COLUMNS = {"id": ("ReqID2", "ReqID"), "status": ("SStatusID",), "executor": ("EmpNo",),
+                  "system": ("ApplicationName",), "requester": ("EmpName", "UserName"),
+                  "assigned_at": ("DateF",), "confirmed_at": ("DateT1",)}
+_EXPORT_TIME_FORMATS = ("%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y %I:%M %p", "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M",
+                        "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M")
+
+
+def is_portal_export(rows):
+    """Is this the portal's ALL_*.csv export (DateF / DateT1 / SStatusID columns) rather than a feed already in the
+    column names of the Settings mapping?"""
+    keys = set((rows[0] if rows else {}).keys())
+    return "SStatusID" in keys and bool(keys & {"DateF", "DateT1"})
+
+
+def export_time(text):
+    """A portal export date ('10/19/2026 01:05:22 PM', US month-first) -> 'YYYY-MM-DDTHH:MM:SS', or '' if unreadable."""
+    value = _clean(text).translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")).replace("ص", "AM").replace("م", "PM")
+    for fmt in _EXPORT_TIME_FORMATS:
+        try:
+            return datetime.strptime(value, fmt).strftime(_FMT)
+        except ValueError:
+            continue
+    return ""
+
+
+def normalize_export(rows, cfg):
+    """(rows, cfg) ready for ``record_scan``. A feed in the Settings column names passes through unchanged. The portal's
+    ALL_*.csv is translated: ReqID2 -> id, SStatusID -> the final decision, EmpNo -> who handled it, ApplicationName ->
+    system, DateF -> assigned at, DateT1 -> confirmed at (US dates turned into ISO). Every export line is a CLOSED
+    request, so a final decision missing from the configured labels still counts as closed (executed), like the
+    closed-request analysis of the same file always did."""
+    rows = list(rows or [])
+    if not is_portal_export(rows):
+        return rows, cfg
+    statuses = (cfg or {}).get("statuses") or default_config()["statuses"]
+    closing = set(statuses.get("confirmed_executed") or []) | set(statuses.get("confirmed_not") or [])
+    fallback = (statuses.get("confirmed_executed") or ["تم التعزيز على التنفيذ"])[0]
+
+    def pick(row, key):
+        for name in EXPORT_COLUMNS[key]:
+            if _clean(row.get(name)):
+                return _clean(row.get(name))
+        return ""
+
+    out = []
+    for row in rows:
+        status, confirmed = pick(row, "status"), export_time(pick(row, "confirmed_at"))
+        if confirmed and status not in closing:
+            status = fallback
+        out.append({"id": pick(row, "id"), "status": status, "executor": pick(row, "executor"), "checker": "",
+                    "system": pick(row, "system"), "requester": pick(row, "requester"),
+                    "assigned_at": export_time(pick(row, "assigned_at")), "confirmed_at": confirmed})
+    fields = {k: k for k in ("id", "status", "executor", "checker", "system", "requester", "assigned_at",
+                             "confirmed_at")}
+    fields["executed_at"] = ""
+    return out, {**(cfg or {}), "statuses": statuses, "fields": fields}
+
+
+def apply_export(records, rows, cfg, now, system_team=None):
+    """Fold an export (the portal's ALL_*.csv, or a feed in the Settings column names) into ``records``. The export is
+    authoritative for the period it covers: live-scan closures (requests that left the queue) assigned within its
+    date range and closed before its latest confirmation are replaced by the export's own lines, so nothing is counted
+    twice. Returns {"rows", "added", "replaced_live"}."""
+    rows, cfg2 = normalize_export(rows, cfg)
+    f = cfg2.get("fields") or {}
+    assigned = [_clean(r.get(f.get("assigned_at")))[:10] for r in rows if f.get("assigned_at")]
+    confirmed = [_clean(r.get(f.get("confirmed_at"))) for r in rows if f.get("confirmed_at")]
+    assigned, confirmed = [d for d in assigned if d], [c for c in confirmed if c]
+    replaced = 0
+    if assigned and confirmed:
+        lo, hi = min(assigned), max(confirmed)
+        for rid in [k for k, r in records.items() if _scan_handled(r)
+                    and _clean(r.get("assigned_at"))[:10] >= lo and _clean(r.get("executed_at")) <= hi]:
+            del records[rid]
+            replaced += 1
+    before = len(records)
+    record_scan(records, rows, cfg2, now, system_team)
+    return {"rows": len(rows), "added": len(records) - before, "replaced_live": replaced}
 
 
 def housekeep(records, cfg, now):
-    """Keep the JSON store bounded: drop CLOSED requests older than ``retention_days`` (by confirmed_at), and if still
-    over ``max_records`` drop the oldest closed ones. OPEN / AWAITING (still active) requests are always kept. Edits
+    """Keep the JSON store bounded: drop CLOSED requests (confirmed, or left the queue in the live scan) older than
+    ``retention_days`` (by when they closed), and if still over ``max_records`` drop the oldest closed ones. OPEN /
+    AWAITING (still active) requests are always kept. Edits
     ``records`` in place and returns how many were removed. ``now`` is an ISO string."""
     cfg = cfg or {}
     retention, cap = int(cfg.get("retention_days") or 0), int(cfg.get("max_records") or 0)
@@ -395,11 +550,10 @@ def housekeep(records, cfg, now):
         except ValueError:
             cutoff = None
         if cutoff:
-            for rid in [k for k, r in records.items() if r.get("confirmed_at") and _clean(r["confirmed_at"])[:10] < cutoff]:
+            for rid in [k for k, r in records.items() if _closed_at(r) and _closed_at(r)[:10] < cutoff]:
                 del records[rid]
     if cap and len(records) > cap:
-        closed = sorted((k for k, r in records.items() if r.get("confirmed_at")),
-                        key=lambda k: _clean(records[k].get("confirmed_at")))
+        closed = sorted((k for k, r in records.items() if _closed_at(r)), key=lambda k: _closed_at(records[k]))
         for rid in closed[:len(records) - cap]:
             del records[rid]
     return before - len(records)
