@@ -389,6 +389,7 @@
         h("option", { value: "manager" }, "Manager (follows teams, no call logging)"), h("option", { value: "admin" }, "Administrator")),
       email: h("input", { type: "email", value: user ? user.email || "" : "", autocomplete: "off", maxlength: "120", dir: "ltr", spellcheck: "false", "aria-label": "E-mail" }),
       secname: h("input", { value: user ? user.security_name || "" : "", autocomplete: "off", maxlength: "120", dir: "auto", "aria-label": "Name in the security portal" }),
+      portalid: h("input", { value: user ? user.portal_id || "" : "", autocomplete: "off", maxlength: "40", dir: "ltr", spellcheck: "false", "aria-label": "Number in the security portal" }),
       pw: h("input", { type: "text", autocomplete: "off", placeholder: "Leave empty to generate one", "aria-label": "Initial password" }),
     };
     f.role.value = user ? user.role : "user";
@@ -401,9 +402,10 @@
       h("label", { class: "field" }, "Work e-mail", f.email, h("span", { class: "hint" }, "Links this account to the e-mails assigned to or answered by this person.")),
       picker.el,
       h("label", { class: "field" }, "Name in the security portal", f.secname, h("span", { class: "hint" }, "Exactly as in the portal's “مستخدم السرية” column; shows this person their tickets.")),
+      h("label", { class: "field" }, "Number in the security portal", f.portalid, h("span", { class: "hint" }, "The value in the portal's “الموظفين” list; lets ticketing auto-assign hand this person requests.")),
       editing ? null : h("label", { class: "field" }, "Initial password", f.pw));
     const profile = () => {
-      const out = { name: f.name.value, department: f.dept.value, role: f.role.value, email: f.email.value, security_name: f.secname.value };
+      const out = { name: f.name.value, department: f.dept.value, role: f.role.value, email: f.email.value, security_name: f.secname.value, portal_id: f.portalid.value };
       const picked = picker.value();
       if (picked !== undefined) out.teams = picked;
       return out;

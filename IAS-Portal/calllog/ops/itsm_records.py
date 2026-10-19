@@ -77,6 +77,52 @@ def record_scan(records, data, now):
     return records
 
 
+def seen_numbers(data):
+    """{role: {"complete": bool, "numbers": {CR#, ...}}} for one scan's engine snapshot. A role is ``complete`` when it
+    was read without error and every category listed all of its rows (``count == len(rows)``) - only then is a CR's
+    ABSENCE meaningful (it really left the board, rather than the list being cut short)."""
+    out = {}
+    for role in (data or {}).get("roles") or []:
+        rname = _clean(role.get("role"))
+        if not rname:
+            continue
+        info = out.setdefault(rname, {"complete": True, "numbers": set()})
+        if role.get("error"):
+            info["complete"] = False
+            continue
+        for d in (role.get("categories") or {}).values():
+            if not isinstance(d, dict) or d.get("count") is None:
+                info["complete"] = False
+                continue
+            rows = d.get("rows") or []
+            if len(rows) != d.get("count"):
+                info["complete"] = False
+            for row in rows:
+                num = _clean(row.get("number"))
+                if num:
+                    info["numbers"].add(num)
+    return out
+
+
+def mark_missing_completed(records, data, now):
+    """Finish-on-disappear: a CR we were tracking as PENDING that is no longer on its role's fully-read board has been
+    implemented - stamp it completed. Only fires for a role whose scan was complete this round (so a short read never
+    wrongly closes requests), and only for records already seen as pending (a rollback is stamped by record_scan before
+    the CR leaves, so it is not overwritten). Returns how many were newly completed. Call AFTER record_scan."""
+    now = _clean(now) or datetime.now().strftime(_FMT)
+    seen = seen_numbers(data)
+    done = 0
+    for rec in records.values():
+        if (rec.get("conclusion") or "pending") != "pending":
+            continue
+        role = seen.get(_clean(rec.get("role")))
+        if role and role["complete"] and _clean(rec.get("number")) not in role["numbers"]:
+            rec["conclusion"] = "completed"
+            rec["completed_at"] = rec.get("completed_at") or now
+            done += 1
+    return done
+
+
 def _day(rec):
     """A CR's primary day: its execution day when completed, else the day it was first seen."""
     return (_clean(rec.get("completed_at")) or _clean(rec.get("first_seen")))[:10]

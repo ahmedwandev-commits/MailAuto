@@ -83,6 +83,10 @@ def start_refresher(app, interval=1.0):
             ops_api.calls_totals(app.config["CLOCK"]().date().isoformat())
             ops_api.apply_sla_feed()                                         # fold any configured SLA export feed into the recording
             try:
+                ops_api.apply_sla_scan()                                     # fold the live SLA scan so the analysis is live
+            except Exception:                                                # never let recording break warm-up
+                app.logger.exception("SLA live recording during warm-up failed")
+            try:
                 ops_api.apply_itsm_scan()                                    # fold the latest ITSM scan into the CR recording
             except Exception:                                                # never let recording break warm-up
                 app.logger.exception("ITSM recording during warm-up failed")

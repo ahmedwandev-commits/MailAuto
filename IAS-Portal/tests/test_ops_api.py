@@ -193,7 +193,8 @@ WRITE_ENDPOINTS = [
     ("POST", "/api/ops/email/assign", {"message_id": "<p1@x>", "assigned_to_email": "bob@example.test"}),
     ("POST", "/api/ops/email/no-action", {"message_id": "<p1@x>"}),
     ("DELETE", "/api/ops/email/no-action", {"message_id": "<p1@x>"}),
-    ("POST", "/api/ops/email/team", {"message_id": "<p1@x>", "team": "Card Management"}),
+    # /api/ops/email/team is NOT here: it is no longer ops-only - an employee may re-file a mail assigned to them
+    # (see test_done_flow.py::test_assignee_can_change_their_mails_team); only anonymous is denied, checked below.
     ("POST", "/api/ops/email/quality", {"message_id": "<r1@x>", "rating": "Good"}),
     ("POST", "/api/ops/email/quality/decision", {"message_id": "<r1@x>", "decision": "Accepted"}),
     ("POST", "/api/ops/email/classification/rule", {"keyword": "swift", "team": "Flex Cube"}),

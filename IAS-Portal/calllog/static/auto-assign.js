@@ -16,6 +16,7 @@
     try {
       state = await api("GET", "/api/ops/auto-assign");
       render();
+      pollTicketing();                            // show an in-progress / last ticketing run, if any
     } catch (e) {
       page.replaceChildren(OPS.emptyState({ title: "Auto Assign cannot be shown", text: e.message, icon: "alert",
         action: h("button", { class: "btn btn-ghost", type: "button", onclick: load }, I("refresh"), "Try again") }));
@@ -119,10 +120,10 @@
     }
     const applyBtn = kind === "email"
       ? h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: distributeNow }, I("refresh"), "Distribute now")
-      : null;
+      : h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: () => runTicketing(team) }, I("refresh"), "Run now");
     const note = kind === "ticketing"
       ? h("p", { class: "op-note op-t-info op-block" }, I("info"),
-        h("span", {}, "The ticketing collector applies these rules against the portal (assign-only)."))
+        h("span", {}, "These rules drive the portal. Press Run now and type your own portal login to assign new requests to your team — each employee needs a “Number in the security portal” set in Admin › Users."))
       : null;
     return h("section", { class: "card op-fieldset aa-target" },
       h("div", { class: "card-head" }, h("h3", {}, kind === "email" ? "E-mail auto-assign" : "Ticketing auto-assign"),
@@ -141,11 +142,64 @@
     catch (e) { toast(e.message, "error"); }
   }
 
+  // --------------------------------------------------------- ticketing: run the portal RPA with the manager's own login
+  const runHost = h("div", {});                 // a persistent panel: survives render(), updated live while a run polls
+  let polling = false;
+
+  async function runTicketing(team) {
+    const user = h("input", { type: "text", autocomplete: "off", spellcheck: "false", dir: "ltr", maxlength: "60", "aria-label": "Portal username" });
+    const pass = h("input", { type: "password", autocomplete: "off", dir: "ltr", maxlength: "200", "aria-label": "Portal password" });
+    const dry = h("input", { type: "checkbox" });
+    const body = h("div", { class: "dlg-body" },
+      h("p", { class: "muted", dir: "auto" }, `Assign new portal requests for “${team}” by your saved rules. Type your OWN portal login — it is used only for this run and never stored.`),
+      h("label", { class: "field" }, "Portal username", user),
+      h("label", { class: "field" }, "Portal password", pass),
+      h("label", { class: "aa-switch" }, dry, h("span", {}, "Dry run (do everything except the final Execute)")));
+    const ok = await CL.modal({
+      title: "Run ticketing auto-assign", submitLabel: "Run", body,
+      onSubmit: async () => {
+        if (!user.value.trim() || !pass.value) throw new Error("Type your portal username and password.");
+        await api("POST", "/api/ops/auto-assign/run-ticketing",
+          { team, username: user.value.trim(), password: pass.value, dry_run: dry.checked });
+        return true;
+      },
+    });
+    if (ok) { toast("Ticketing auto-assign started."); pollTicketing(); }
+  }
+
+  function drawRun(d) {
+    if (!d || (!d.running && !d.done)) { runHost.replaceChildren(); return; }
+    const rows = (d.log || []).map((ln) => h("div", { class: "aa-logline", dir: "auto" }, ln));
+    const head = d.running ? `Running for “${d.team}”…` : (d.error ? `Failed for “${d.team}”` : `Finished for “${d.team}”`);
+    const tone = d.running ? "op-t-info" : (d.error ? "op-t-danger" : "op-t-ok");
+    const summary = d.error ? d.error : (d.summary || (d.done ? "Done." : ""));
+    runHost.replaceChildren(OPS.card("Ticketing auto-assign", { hint: d.started_at ? `started ${d.started_at.replace('T', ' ')}` : "" },
+      h("p", { class: "op-note op-block " + tone }, I(d.running ? "refresh" : (d.error ? "alert" : "check")),
+        h("span", { dir: "auto" }, head + (summary ? " — " + summary : ""))),
+      rows.length ? h("div", { class: "aa-log" }, ...rows) : null));
+  }
+
+  async function pollTicketing() {
+    if (polling) return;
+    polling = true;
+    try {
+      for (;;) {
+        let d;
+        try { d = await api("GET", "/api/ops/auto-assign/run-ticketing"); }
+        catch (e) { drawRun({ done: true, error: e.message, team: "" }); break; }
+        drawRun(d);
+        if (!d.running) break;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    } finally { polling = false; }
+  }
+
   // --------------------------------------------------------- the page
   function render() {
     const parts = [h("header", { class: "op-head" }, h("div", { class: "op-head-title" },
       h("h1", {}, "Auto Assign"),
       h("p", { class: "muted" }, "Route pending work to your team's employees automatically, by application and time window.")))];
+    parts.push(runHost);
     if (IS_ADMIN) parts.push(applicationsCard());
     const teams = Object.keys(state.teams || {});
     if (!teams.length) {

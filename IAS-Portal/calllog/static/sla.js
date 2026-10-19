@@ -783,6 +783,39 @@
       fld("Checker", checkSel), fld("Team", teamSel), h("span", { class: "grow" }), today, clear);
   }
 
+  function liveRollup(rows, keyCol, label, caption) {
+    rows = rows || [];
+    return OPS.table({
+      search: rows.length > 12, copy: true, pageSize: 12, pageSizes: [12, 25, 100], caption,
+      sort: { key: "n", desc: true },
+      columns: [
+        { key: keyCol, label, sort: true, render: (r) => h("span", { dir: "auto" }, String(r[keyCol])), text: (r) => String(r[keyCol]) },
+        { key: "n", label: "Open now", num: true, sort: true, render: (r) => fmtNum(r.n) },
+        { key: "breached", label: "Past target", num: true, sort: true,
+          render: (r) => (r.breached ? OPS.chip(fmtNum(r.breached), "danger") : fmtNum(0)) },
+        { key: "oldest_minutes", label: "Oldest", num: true, sort: true, render: (r) => fmtMin(r.oldest_minutes) },
+      ], rows,
+    }).el;
+  }
+
+  function liveStrip(d) {
+    const L = d.live || {}, sla = (d.meta || {}).sla_minutes || 180, slaH = Math.round(sla / 60 * 10) / 10;
+    if (!L.open && !L.awaiting) {
+      return OPS.card("Open right now", { hint: "live from the collector's scan" },
+        h("p", { class: "hint" }, "No request is open right now — nothing is waiting with a security user."));
+    }
+    const kpis = h("div", { class: "sx-kpis" },
+      OPS.kpi({ label: "Open now", value: fmtNum(L.open || 0), sub: "with the employee (live)", icon: "clock", hero: true }),
+      OPS.kpi({ label: "Awaiting confirmation", value: fmtNum(L.awaiting || 0), sub: "with the checker/manager", tone: L.awaiting ? "warn" : null, icon: "alert" }),
+      OPS.kpi({ label: "Past target", value: fmtNum(L.breached || 0), sub: `open over ${slaH} h`, tone: L.breached ? "danger" : null, icon: "shield" }),
+      OPS.kpi({ label: "Oldest open", value: fmtMin(L.oldest_minutes), sub: "waiting the longest", tone: (L.oldest_minutes != null && L.oldest_minutes > sla) ? "danger" : null, icon: "clock" }));
+    return OPS.card("Open right now", { hint: "live from the collector's scan · the assignment → execution clock is still running" },
+      h("div", { class: "sx-stack" }, kpis,
+        h("div", { class: "sx-two" },
+          OPS.card("By security user (open)", { hint: "مستخدم السرية · who is holding open requests now" }, liveRollup(L.by_employee, "executor", "Security user", "Open requests by security user")),
+          OPS.card("By team (open)", {}, liveRollup(L.by_team, "team", "Team", "Open requests by team")))));
+  }
+
   function analysisHead(d) {
     const m = d.meta || {}, slaH = Math.round((m.sla_minutes || 180) / 60 * 10) / 10;
     return h("div", { class: "sx-analysis-head" },
@@ -797,11 +830,12 @@
         text: "The SLA analysis records each security request live as it moves from assignment to execution (the employee) to confirmation (the checker/manager). It fills in as the collector runs and from any export feed set in System › Settings › Ticketing." }));
       return;
     }
-    const stack = [analysisHead(d), filterBar(d)];
+    const stack = [analysisHead(d), liveStrip(d), filterBar(d)];
     if (!d.meta || !d.meta.requests) {
-      stack.push(OPS.emptyState({ title: "No requests match this filter", icon: "shield",
-        text: "Change the date or pick a different employee / checker / team — or press Clear to see every recorded request." }));
-      el.analysisPanel.replaceChildren(h("div", { class: "sx-stack" }, ...stack));
+      stack.push(OPS.card("Closed-request analysis", { hint: "the period view below" },
+        OPS.emptyState({ title: "No closed requests match this filter", icon: "shield",
+          text: "The live strip above is always current. For the closed-request clocks, widen the date range or pick a different employee / checker / team — or press Clear. Closed-request history also fills in from the export feed set in System › Settings › Ticketing." })));
+      el.analysisPanel.replaceChildren(h("div", { class: "sx-stack" }, ...stack.filter(Boolean)));
       return;
     }
     const o = d.overall, m = d.meta, b = d.buckets || {};

@@ -19,6 +19,36 @@ def scan(*cats_per_role):
     return {"roles": roles}
 
 
+def test_mark_missing_completed_finishes_a_pending_cr_that_left_a_full_board():
+    rec = {}
+    ir.record_scan(rec, scan({OPEN: [("1001", "add user A"), ("1002", "add user B")]}), "2026-10-18T09:00:00")
+    # next scan: 1001 is gone from a fully-read board -> finished; 1002 still pending
+    data = scan({OPEN: [("1002", "add user B")]})
+    ir.record_scan(rec, data, "2026-10-18T10:00:00")
+    done = ir.mark_missing_completed(rec, data, "2026-10-18T10:00:00")
+    assert done == 1
+    assert rec["1001"]["conclusion"] == "completed" and rec["1001"]["completed_at"] == "2026-10-18T10:00:00"
+    assert rec["1002"]["conclusion"] == "pending"
+
+
+def test_mark_missing_completed_ignores_an_incomplete_board():
+    rec = {}
+    ir.record_scan(rec, scan({OPEN: [("1001", "a"), ("1002", "b")]}), "2026-10-18T09:00:00")
+    # a board that was only partially read (count says 2 but one row) must NOT finish the missing CR
+    partial = {"roles": [{"role": "Role 1", "error": None,
+                          "categories": {OPEN: {"count": 2, "rows": [{"number": "1002", "summary": "b"}]}}}]}
+    assert ir.mark_missing_completed(rec, partial, "2026-10-18T10:00:00") == 0
+    assert rec["1001"]["conclusion"] == "pending"
+
+
+def test_mark_missing_completed_does_not_touch_a_rolled_back_cr():
+    rec = {}
+    ir.record_scan(rec, scan({ROLLBACK: [("2002", "risky change")]}), "2026-10-18T09:00:00")
+    assert rec["2002"]["conclusion"] == "rollback"
+    ir.mark_missing_completed(rec, scan({OPEN: []}), "2026-10-18T10:00:00")   # role fully read, 2002 gone
+    assert rec["2002"]["conclusion"] == "rollback"                            # a terminal CR is left alone
+
+
 def test_execution_time_and_conclusion_stamped_once():
     rec = {}
     ir.record_scan(rec, scan({OPEN: [("1001", "add user A")]}), "2026-10-18T09:00:00")

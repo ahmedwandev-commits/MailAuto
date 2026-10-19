@@ -112,12 +112,30 @@
     } catch (e) { toast(e.message, "error"); }
   }
 
+  async function changeTeamItem(item) {
+    const all = (state.data && state.data.all_teams) || [];
+    const select = h("select", { "aria-label": "Team" }, all.map((t) => h("option", { value: t, selected: t === item.team }, t)));
+    await OPS.modal({
+      title: "Move to another team", submitLabel: "Move",
+      body: h("div", {}, h("p", { class: "muted", dir: "auto" }, `Move "${item.subject || "(no subject)"}" to the team that should handle it.`),
+        h("label", { class: "my-field" }, h("span", {}, "Team"), select)),
+      onSubmit: async () => {
+        if (!select.value || select.value === item.team) throw new Error("Pick a different team.");
+        await api("POST", "/api/ops/email/team", { message_id: item.message_id, team: select.value });
+        toast(`Moved to ${select.value}.`);
+        await loader.refresh();
+      },
+    });
+  }
+
   function assignedActions(r) {
     const btns = [h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); openMail(r); } }, OPS.icon("mail"), "Open")];
     if (!READ_ONLY) {
       btns.push(r.assignment_done
         ? h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); reopenItem(r); } }, "Reopen")
         : h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); doneItem(r); } }, OPS.icon("check"), "Done"));
+      if ((state.data && state.data.all_teams || []).length)
+        btns.push(h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); changeTeamItem(r); } }, "Team"));
     }
     return h("div", { class: "op-row-actions" }, btns);
   }

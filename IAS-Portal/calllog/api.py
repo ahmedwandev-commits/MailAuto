@@ -26,6 +26,7 @@ bp = Blueprint("api", __name__)
 ROLES = ("user", "manager", "admin")
 ROLE_ORDER = {"admin": 0, "manager": 1, "user": 2}
 MAX_SECURITY_NAME = 120
+MAX_PORTAL_ID = 40
 MAX_TEAMS_PER_ACCOUNT = 40
 
 
@@ -35,7 +36,7 @@ def public_user(u):
     teams = user_teams(u)
     return {"user_id": u["user_id"], "name": u["name"], "department": u.get("department", ""),
             "role": u["role"], "email": u.get("email", ""), "team": legacy_team(teams), "teams": teams,
-            "security_name": u.get("security_name", "")}
+            "security_name": u.get("security_name", ""), "portal_id": u.get("portal_id", "")}
 
 
 def admin_user_row(u):
@@ -398,6 +399,11 @@ def _clean_profile(body, partial=False, current=None):
         if len(security_name) > MAX_SECURITY_NAME:
             raise ApiError(f"Security name is too long (max {MAX_SECURITY_NAME} characters).")
         out["security_name"] = security_name
+    if "portal_id" in body:
+        portal_id = " ".join(str(body["portal_id"] or "").split())
+        if len(portal_id) > MAX_PORTAL_ID:
+            raise ApiError(f"Portal number is too long (max {MAX_PORTAL_ID} characters).")
+        out["portal_id"] = portal_id
     return out
 
 
@@ -431,7 +437,7 @@ def create_user():
     teams = user_teams(user)
     auth.audit("user_created", target=uid, details={
         "name": user["name"], "role": user["role"], **({"teams": teams} if teams else {}),
-        **{k: user[k] for k in ("email", "security_name") if user.get(k)}})
+        **{k: user[k] for k in ("email", "security_name", "portal_id") if user.get(k)}})
     return jsonify(user=admin_user_row(user), temp_password=password), 201
 
 
@@ -498,6 +504,7 @@ _HEADER_ALIASES = {
     "team": {"team"},
     "teams": {"teams", "team list", "team names"},
     "security_name": {"security_name", "security name", "security user"},
+    "portal_id": {"portal_id", "portal id", "portal number", "employee number", "الموظفين"},
 }
 
 
@@ -551,7 +558,7 @@ def import_users():
         name, dept, password = cell(row, "name"), cell(row, "department"), cell(row, "password")
         problem, extra = None, {}
         try:
-            fields = {k: cell(row, k) for k in ("role", "email", "team", "teams", "security_name") if k in col}
+            fields = {k: cell(row, k) for k in ("role", "email", "team", "teams", "security_name", "portal_id") if k in col}
             if fields.get("role", "user") not in ("", "user", "manager"):
                 raise ApiError("Role must be 'user' or 'manager'")
             if fields.get("teams"):                  # `teams` (A;B or A,B) wins over the older single `team` column

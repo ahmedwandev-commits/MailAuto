@@ -15,6 +15,7 @@ Rules this file keeps:
 import hashlib
 import json
 import os
+import threading
 import time
 from datetime import date, datetime, timedelta
 from urllib.parse import quote
@@ -27,8 +28,11 @@ from ..queries import ApiError, decorate, json_body, parse_day, reasons_by_key
 from ..storage import STATUSES, StorageError, norm_uid
 from . import auto_assign, health, itsm_records, mailbox, notifications, overlay, schemas, sla_records
 from . import settings as hub_settings
+from .engines import common
 from .engines.common import norm_arabic
 from .store import now_iso
+
+_TICKETING_LOCK = threading.Lock()                 # one browser-driven ticketing auto-assign run at a time per process
 
 bp = Blueprint("ops_api", __name__)
 
@@ -575,6 +579,7 @@ def build_my(user, viewer=None):
     day = auth.today()
     return {"user": public_user(user), "read_only": viewer is not None, "viewer": viewer["user_id"] if viewer else None,
             "date": day, "server_time": auth.now().isoformat(timespec="seconds"),
+            "all_teams": [t for t in hub_cfg()["email"]["teams"] if t.casefold() != "unclassified"],
             "calls": my_calls(user["user_id"], day), "email": my_email(user, viewer), "quality": my_quality(user),
             "sla": my_sla(user), "shared": build_shared(user, viewer)}
 
@@ -836,9 +841,11 @@ def sla_analysis_get():
             "executor": request.args.get("executor", ""), "checker": request.args.get("checker", ""),
             "team": request.args.get("team", "")}
     filtered = sla_records.filter_records(records, filt)
+    # the "right now" open strip must not be date-bounded (a request assigned earlier is still open today)
+    live = sla_records.filter_records(records, {**filt, "date_from": "", "date_to": ""})
     return jsonify(available=True, server_time=now, scope=overlay.scope_label(scope),
                    options=options, filter={k: (v or "") for k, v in filt.items()},
-                   **sla_records.analyze(filtered, cfg))
+                   **sla_records.analyze(filtered, cfg, now=now, live_records=live))
 
 
 @bp.get("/sla-config")
@@ -899,12 +906,43 @@ def apply_sla_feed(now=None, force=False):
     return added
 
 
+def apply_sla_scan(now=None, force=False):
+    """Fold the latest LIVE SLA scan (the Re-Assign scrape the collector writes) into the live SLA recording, so the
+    SLA Analysis view fills in as the collector runs - no manual export feed needed. The scan is a full snapshot of the
+    requests open right now, so each fold REPLACES the previous scan-sourced records (the CSV feed's CLOSED records are
+    kept). Each scan is folded once (by generated_at). Returns how many requests are open in the current scan; a
+    missing scan is a quiet no-op."""
+    snap, _ = read_snapshot("sla")
+    if not snap:
+        return 0
+    requests = (snap.get("data") or {}).get("requests") or []
+    generated = snap.get("generated_at") or (now or auth.now()).isoformat(timespec="seconds")
+    memo = current_app.extensions.setdefault("ops_sla_scan", {"at": ""})
+    if not force and memo.get("at") == generated:              # this scan was already folded
+        return 0
+    doc = ops().read_sla_records()
+    cfg = {**sla_records.default_config(), **(doc.get("config") or {})}
+    records = doc.get("records") or {}
+    for rid in [k for k, r in records.items() if r.get("source") == sla_records.SCAN_SOURCE]:
+        del records[rid]                                       # a full snapshot: drop the previous scan-sourced set
+    sla_records.record_live_requests(records, requests, cfg, generated, _sla_system_team())
+    sla_records.housekeep(records, cfg, generated)             # keep the JSON store bounded (CLOSED only)
+    memo["at"] = generated
+
+    def change(d):
+        d["records"] = records
+    ops().update_sla_records(change)
+    return sum(1 for r in records.values() if r.get("source") == sla_records.SCAN_SOURCE)
+
+
 @bp.post("/sla-feed/import")
 @auth.admin_required
 def sla_feed_import():
     """Import the configured SLA export feed now (administrators)."""
     added = apply_sla_feed(force=True)
-    return jsonify(ok=True, added=added, recorded=len(ops().read_sla_records().get("records") or {}))
+    scanned = apply_sla_scan(force=True)                       # also fold the latest live scan
+    return jsonify(ok=True, added=added, open_now=scanned,
+                   recorded=len(ops().read_sla_records().get("records") or {}))
 
 
 # ----------------------------------------------------------------- live ITSM change-request recording (exec + conclusion)
@@ -922,6 +960,8 @@ def apply_itsm_scan():
     records = doc.get("records") or {}
     before = len(records)
     itsm_records.record_scan(records, snap["data"], generated)
+    if (hub_cfg().get("itsm") or {}).get("complete_when_missing"):
+        itsm_records.mark_missing_completed(records, snap["data"], generated)   # a pending CR that left the board is finished
     itsm_records.housekeep(records, {"max_records": itsm_records.DEFAULT_MAX_RECORDS,
                                      "retention_days": itsm_records.DEFAULT_RETENTION_DAYS}, generated)
 
@@ -1144,17 +1184,27 @@ def email_no_action_undo():
 
 
 @bp.post("/email/team")
-@auth.ops_act_required
+@auth.login_required
 def email_team():
+    """Move an e-mail to another team. A manager / administrator may re-file any mail of a team they look after to ANY
+    team; an employee may re-file a mail that is assigned to THEM (so a person who sees a mail landed in the wrong team
+    can route it on). The destination is any real team."""
     body = json_body()
     message_id = clean_message_id(body.get("message_id"))
     team = _clean_team(body.get("team"))
-    rows = current_rows(message_id)
+    if g.user["role"] in auth.OPS_ROLES:
+        rows = current_rows(message_id)                 # manager / admin: a mail of a team they look after
+        via = "manager"
+    else:
+        entry, rows, via = assignment_target(message_id)   # employee: only a mail assigned to them
+        if via != "assignee":
+            raise not_available()
     previous = rows[0].get("team", "")
     entry = ops().set_override("team", message_id, {
         "team": team, "marked_by": _who(), "marked_by_id": g.user["user_id"], "marked_at": _stamp(),
         "subject": _subject(rows)})
-    auth.audit("ops_team", target=message_id, details={"from": previous, "to": team, "subject": _subject(rows)[:80]})
+    auth.audit("ops_team", target=message_id, details={"from": previous, "to": team, "by": via,
+                                                       "subject": _subject(rows)[:80]})
     return jsonify(ok=True, team=entry, rev=overrides_rev(read_overrides()))
 
 
@@ -1730,12 +1780,19 @@ def _aa_config():
 
 def _aa_team_members(team):
     """{email: name} of the active employees of ``team`` (an auto-assign rule may only name these)."""
+    return {e: m["name"] for e, m in _aa_team_members_full(team).items()}
+
+
+def _aa_team_members_full(team):
+    """{email: {"name", "portal_id"}} of the active employees of ``team``. ``portal_id`` is the value the person has in
+    the portal's الموظفين drop-down (set per user in admin); the ticketing auto-assign can only hand work to a member
+    who has one."""
     out = {}
     for u in auth.store().users().values():
         email = overlay.normalize_email(u.get("email"))
         if u.get("role") == "user" and u.get("active", True) and email \
                 and any(overlay._same_team(t, team) for t in overlay.user_teams(u)):
-            out[email] = u.get("name") or u["user_id"]
+            out[email] = {"name": u.get("name") or u["user_id"], "portal_id": str(u.get("portal_id") or "").strip()}
     return out
 
 
@@ -1755,9 +1812,10 @@ def auto_assign_get():
     cfg = _aa_config()
     out = {}
     for team in _aa_viewer_teams():
-        members = _aa_team_members(team)
+        members = _aa_team_members_full(team)
         out[team] = {"applications": auto_assign.team_applications(cfg, team),
-                     "members": [{"email": e, "name": n} for e, n in sorted(members.items(), key=lambda kv: str(kv[1]).casefold())],
+                     "members": [{"email": e, "name": m["name"], "portal_id": m["portal_id"]}
+                                 for e, m in sorted(members.items(), key=lambda kv: str(kv[1]["name"]).casefold())],
                      "email": auto_assign.team_block(cfg, team, "email"),
                      "ticketing": auto_assign.team_block(cfg, team, "ticketing")}
     return jsonify(teams=out, is_admin=viewer_is_admin(), server_time=auth.now().isoformat(timespec="seconds"),
@@ -1825,6 +1883,98 @@ def auto_assign_del_app():
 def auto_assign_apply():
     """Distribute pending e-mails now (a manager: their own team; an administrator: every team)."""
     return jsonify(ok=True, assigned=apply_email_auto_assign(only_teams=_aa_viewer_teams(), actor=g.user, force=True))
+
+
+# ----------------------------------------------------------- ticketing auto-assign (the portal RPA, manager-triggered)
+def _assign_settings(settings):
+    """The config the assign engine runs with: the saved ``assign`` block, with the portal login basics taken from the
+    ``sla`` block so an admin configures the SSO portal once (same site, same login)."""
+    assign = dict(settings.get("assign") or {})
+    sla = settings.get("sla") or {}
+    for key in ("base_url", "login_path", "app_url_fragment", "package_text", "package_link_text",
+                "login_button_text", "search_button_text", "selectors", "timeout_seconds", "browser_executable"):
+        if sla.get(key) not in (None, "", {}):
+            assign[key] = sla[key]
+    return assign
+
+
+def _ticketing_run_state():
+    return current_app.extensions.setdefault("ops_ticketing_run", {"running": False})
+
+
+@bp.get("/auto-assign/run-ticketing")
+@auth.ops_act_required
+def auto_assign_run_ticketing_status():
+    """The live status of the current/last manual ticketing auto-assign run (polled by the page while it runs)."""
+    st = current_app.extensions.get("ops_ticketing_run") or {}
+    return jsonify(running=bool(st.get("running")), done=bool(st.get("done")), team=st.get("team", ""),
+                   started_at=st.get("started_at", ""), log=list(st.get("log") or [])[-200:],
+                   summary=st.get("summary", ""), assigned=int(st.get("assigned") or 0),
+                   by_employee=st.get("by_employee") or {}, error=st.get("error", ""), dry_run=bool(st.get("dry_run")))
+
+
+@bp.post("/auto-assign/run-ticketing")
+@auth.ops_act_required
+def auto_assign_run_ticketing():
+    """Run the ticketing auto-assign now for one team, with the MANAGER's portal credentials typed for this run only
+    (never stored). The engine drives the portal in a background thread; the page polls the GET above for progress."""
+    body = json_body()
+    team = _clean_team(body.get("team"))
+    if not auth.may_act_on_team(team):
+        raise ApiError("You can only run auto-assign for your own team.", 403)
+    username = clean_text(body.get("username"), "Portal username", 60, required=True)
+    password = str(body.get("password") or "")
+    if not password:
+        raise ApiError("Type your portal password for this run.")
+    dry_run = bool(body.get("dry_run"))
+    block = auto_assign.team_block(_aa_config(), team, "ticketing")
+    if not block.get("enabled") or not block.get("rules"):
+        raise ApiError("Ticketing auto-assign is off for this team, or has no rules. Enable it and save rules first.")
+    members = _aa_team_members_full(team)
+    if not any(m.get("portal_id") for m in members.values()):
+        raise ApiError("No employee of this team has a portal number yet. Set “Number in the security portal” in "
+                       "Admin › Users for the people who should receive requests.")
+    assign_settings = _assign_settings(hub_cfg())
+    store, data_dir, clock = ops(), str(ops().root.parent), current_app.config["CLOCK"]
+    app = current_app._get_current_object()
+    actor = g.user["user_id"]
+
+    with _TICKETING_LOCK:
+        st = _ticketing_run_state()
+        if st.get("running"):
+            raise ApiError("A ticketing auto-assign run is already in progress. Wait for it to finish.", 409)
+        st.clear()
+        st.update({"running": True, "team": team, "actor": actor, "started_at": now_iso(clock()),
+                   "log": [], "done": False, "summary": "", "assigned": 0, "by_employee": {}, "error": "",
+                   "dry_run": dry_run})
+    auth.audit("ops_auto_assign_run", target=team, details={"kind": "ticketing", "dry_run": dry_run})
+    teams_arg = {team: {"block": block, "members": members}}
+
+    def worker():
+        from .engines import assign_engine
+
+        def log(message):
+            state = app.extensions.get("ops_ticketing_run")
+            if state is not None:
+                state.setdefault("log", []).append(f"{clock().strftime('%H:%M:%S')} {message}")
+                del state["log"][:-300]
+
+        ctx = common.JobContext(job="assign", settings=assign_settings, general={}, store=store, now=clock, log=log,
+                                debug=False, dry_run=dry_run, headed=False, data_dir=data_dir,
+                                options={"teams": teams_arg, "username": username, "password": password})
+        try:
+            result = assign_engine.run(ctx)
+        except Exception as exc:                                  # noqa: BLE001 - the thread must always settle the state
+            result = common.JobResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        state = app.extensions.get("ops_ticketing_run")
+        if state is not None:
+            data = result.snapshot_data or {}
+            state.update({"running": False, "done": True, "summary": result.summary or "",
+                          "assigned": int(data.get("assigned") or 0), "by_employee": data.get("by_employee") or {},
+                          "error": result.error or ""})
+
+    threading.Thread(target=worker, name="ticketing-assign", daemon=True).start()
+    return jsonify(ok=True, started=True)
 
 
 def apply_email_auto_assign(only_teams=None, actor=None, force=False):

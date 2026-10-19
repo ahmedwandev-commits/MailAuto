@@ -105,10 +105,41 @@ DEFAULTS = {
             "Rollback Requests": r"^\s*rollback requests?\s*\(\d+\)",
         },
         "execution_time_header": "",            # the scoreboard column holding the CR's scheduled execution time ("" = not captured)
+        "complete_when_missing": False,         # a pending CR that leaves a fully-read board counts as completed (finished)
         "headless": True,
         "cdp_port": 9222,
         "browser_executable": "",
         "mail": {"send": True, "send_times": ["08:30"], "to": [], "cc": [], "display_only": False},
+    },
+    "assign": {                                 # ticketing auto-assign (the portal RPA) - see calllog/ops/engines/assign_engine.py
+        "enabled": True,
+        # the SSO portal + login (same as "sla"); an admin configures the portal once there and these mirror the defaults
+        "base_url": "https://nbesrv.nbe.ahly.bank",
+        "login_path": "/App_Security_Login/Login.aspx",
+        "app_url_fragment": "securitycoderequest",
+        "package_text": "موظف اسناد - مستخدم السرية",
+        "package_link_text": "تحويل",
+        "login_button_text": "دخول",
+        "search_button_text": "بحث",
+        "selectors": {},                        # login selectors: {"username": css, "password": css, "login_button": css}
+        # the "assign new requests" page itself (confirm assign_path against the live portal on first use)
+        "assign_path": "/SecurityCodeRequest/Security_Assign_Maker/Request_Assign.aspx",
+        "assign_menu_text": "اسناد الطلبات الجديدة",     # used only when assign_path is blank (click the menu link)
+        "app_header": "النظام",                  # the grid column matched against a rule's applications
+        "decision_value": "6",                   # القرار → اسناد لمستخدم السرية (the ddlExecuteStatus option value)
+        "execute_button_text": "تنفيذ",
+        "form_types": [],                        # نوع النموذج option values to run in turn ([] = one pass, no form filter)
+        "selectors_assign": {                    # the proven ids from the stand-alone NBE auto-authorizer bot
+            "form_type": "#ContentPlaceHolder1_ddlFormType",
+            "search_button": "#ContentPlaceHolder1_btnSearch",
+            "decision": "#ContentPlaceHolder1_ddlExecuteStatus",
+            "employee": "#ContentPlaceHolder1_ddlEmployee",
+            "execute_button": "#ContentPlaceHolder1_btnExecute",
+            "grid": "#ContentPlaceHolder1_GridView_RequestDetails",
+        },
+        "browser_executable": "",
+        "cdp_port": 0,
+        "timeout_seconds": 60,
     },
 }
 
@@ -384,8 +415,17 @@ FIELDS = {
     "itsm": {
         "enabled": _bool, "interval_minutes": _int(1, 1440), "schedule": _schedule, "url": _str(300, False),
         "username": _str(60), "roles": _strs(120), "categories": _map(_regex), "execution_time_header": _str(100),
+        "complete_when_missing": _bool,
         "headless": _bool, "cdp_port": _int(1024, 65535), "browser_executable": _str(400),
         "mail": {**_MAIL_BASE, "send_times": _times, "display_only": _bool},
+    },
+    "assign": {
+        "enabled": _bool, "base_url": _str(300, False), "login_path": _str(300), "app_url_fragment": _str(100),
+        "package_text": _str(200), "package_link_text": _str(100), "login_button_text": _str(100),
+        "search_button_text": _str(100), "selectors": _map(_str(300)), "assign_path": _str(300),
+        "assign_menu_text": _str(100), "app_header": _str(100), "decision_value": _str(20),
+        "execute_button_text": _str(100), "form_types": _strs(20), "selectors_assign": _map(_str(300)),
+        "browser_executable": _str(400), "cdp_port": _int(0, 65535), "timeout_seconds": _int(5, 600),
     },
 }
 

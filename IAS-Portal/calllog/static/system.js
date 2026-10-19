@@ -480,6 +480,7 @@
         { path: "itsm.categories", type: "kv", label: "Request categories", wide: true, hint: "The label shown on the page, and the pattern that matches its scoreboard line.",
           kv: { key: "text", value: "text", keyPlaceholder: "label", valuePlaceholder: "pattern", add: "Add a category", empty: "No categories.", mono: true } },
         { path: "itsm.execution_time_header", type: "text", max: 100, label: "Execution-time column (optional)", hint: "The scoreboard column that holds each change request's scheduled execution time (what the business asks). Leave blank if the scoreboard has no such column." },
+        { path: "itsm.complete_when_missing", type: "switch", label: "Count a request finished when it leaves the board", hint: "Turn on when the scoreboard has no “Implementation Completed” list: a pending request that disappears from a fully-read board is then recorded as completed." },
         SCHEDULE("itsm.schedule", "ITSM")] },
       { title: "Status e-mail", fields: [...MAIL("itsm.mail", [
         { path: "itsm.mail.send_times", type: "times", label: "Send at", hint: "24-hour times, comma separated, like 08:30." },

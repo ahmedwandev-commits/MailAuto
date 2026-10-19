@@ -30,6 +30,42 @@ def entry(scene, name):
     return scene.ops.overrides("assignments")[scene.mails[name]]
 
 
+def set_team(who, mid, team):
+    return who.post("/api/ops/email/team", {"message_id": mid, "team": team})
+
+
+# --------------------------------------------- re-filing a mail to another team (manager/admin any team; assignee own mail)
+def test_assignee_can_change_their_mails_team(app, clock, scene):
+    mid = scene.mails["alice_open"]
+    r = set_team(scene.alice, mid, "Card Management")
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    assert scene.ops.overrides("team")[mid]["team"] == "Card Management"
+    assert ("ops_team", mid, "1001") in audit_actions(app, clock)
+
+
+def test_employee_cannot_change_a_mail_that_is_not_theirs(scene):
+    mid = scene.mails["alice_open"]
+    r = set_team(scene.bob, mid, "Card Management")                            # bob is not the assignee
+    assert r.status_code in (403, 404, 409)
+    assert mid not in scene.ops.overrides("team")                              # nothing written
+
+
+def test_manager_can_move_a_mail_to_a_team_they_do_not_manage(scene):
+    mid = scene.mails["free_flex"]                                             # Flex Cube, nobody's
+    r = set_team(scene.fadi, mid, "Card Management")                           # Fadi manages Flex Cube, not Card Management
+    assert r.status_code == 200
+    assert scene.ops.overrides("team")[mid]["team"] == "Card Management"
+
+
+def test_anonymous_cannot_change_team(app, scene):
+    anon = app.test_client()
+    with anon.session_transaction() as s:
+        s["csrf"] = "tok"
+    r = anon.post("/api/ops/email/team", json={"message_id": scene.mails["alice_open"], "team": "Card Management"},
+                  headers={"X-CSRF-Token": "tok"})
+    assert r.status_code == 401
+
+
 def rows(who):
     return {r["message_id"]: r for r in who.get("/api/ops/email").get_json()["data"]["rows"]}
 

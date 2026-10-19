@@ -131,6 +131,61 @@ def plan_email(block, rows, now, members, load=None):
     return out
 
 
+# ---------------------------------------------------------------------- ticketing distribution (the portal RPA, pure)
+def plan_ticketing(block, requests, now, members, load=None):
+    """Which NEW portal requests to hand to which security employee, by the manager's ticketing rules.
+
+    The native CDP assign engine reads the "assign new requests" page into ``requests`` - each a dict with a stable
+    ``id`` (the grid row id the engine will tick) and a ``system`` (the request's application, matched against a rule's
+    applications). ``members`` maps a team member's e-mail to ``{"name", "portal_id"}``; ``portal_id`` is that person's
+    value in the portal's الموظفين drop-down (set per user in admin). ``load`` is an optional {portal_id: count} already
+    carried, for balance.
+
+    Returns ``[{"id", "portal_id", "email", "name"}]`` - one per request an active rule covers, balanced across that
+    rule's employees that have a portal id (fewest-loaded first, then portal id). A request matched by no rule, or whose
+    rule names no portal-mapped employee, is skipped (left for a human). Pure: no browser, no files, easy to test."""
+    if not block.get("enabled"):
+        return []
+    rules = active_rules(block, now)
+    if not rules:
+        return []
+    member_by_email = {overlay.normalize_email(e): m for e, m in (members or {}).items()}
+    carried = dict(load or {})
+    out, taken = [], set()
+    for req in requests or []:
+        rid = req.get("id")
+        if rid is None or rid in taken:
+            continue
+        rule = next((r for r in rules if _apps_match(r.get("applications"), req.get("system"))), None)
+        if rule is None:
+            continue
+        pool = []
+        for raw in rule.get("employees") or []:
+            m = member_by_email.get(overlay.normalize_email(raw))
+            pid = str((m or {}).get("portal_id") or "").strip()
+            if pid and (pid, raw) not in pool:
+                pool.append((pid, overlay.normalize_email(raw)))
+        if not pool:
+            continue
+        pid, email = min(pool, key=lambda pe: (carried.get(pe[0], 0), pe[0]))
+        carried[pid] = carried.get(pid, 0) + 1
+        taken.add(rid)
+        out.append({"id": rid, "portal_id": pid, "email": email,
+                    "name": (member_by_email.get(email) or {}).get("name", "")})
+    return out
+
+
+def group_by_employee(plan):
+    """``plan`` (plan_ticketing output) -> ordered ``[{"portal_id", "name", "email", "ids": [...]}]``: the request ids
+    to tick for each security employee, the busiest employee first (so one Execute per employee covers their share)."""
+    groups = {}
+    for item in plan or []:
+        g = groups.setdefault(item["portal_id"], {"portal_id": item["portal_id"], "name": item.get("name", ""),
+                                                   "email": item.get("email", ""), "ids": []})
+        g["ids"].append(item["id"])
+    return sorted(groups.values(), key=lambda g: (-len(g["ids"]), g["portal_id"]))
+
+
 # ---------------------------------------------------------------------- validation / normalisation (for the API)
 def clean_time(text):
     text = str(text or "").strip()

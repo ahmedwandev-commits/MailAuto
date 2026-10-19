@@ -73,6 +73,48 @@ def test_unknown_employee_dropped_from_pool():
     assert all(o["email"] == "a@x" for o in aa.plan_email(block, [row("1"), row("2")], NOW, MEMBERS))
 
 
+# ---------------------------------------------------------------------- ticketing distribution (the portal RPA, pure)
+TMEMBERS = {"a@x": {"name": "Alice", "portal_id": "111"}, "b@x": {"name": "Bob", "portal_id": "222"},
+            "c@x": {"name": "Carol", "portal_id": ""}}        # Carol has no portal id -> never pickable for ticketing
+
+
+def treq(rid, system=""):
+    return {"id": rid, "system": system}
+
+
+def test_ticketing_disabled_or_no_rule():
+    block = {"enabled": False, "rules": [{"employees": ["a@x"], "applications": [], "from": "", "to": ""}]}
+    assert aa.plan_ticketing(block, [treq("1")], NOW, TMEMBERS) == []
+    off = {"enabled": True, "rules": [{"employees": ["a@x"], "applications": [], "from": "08:00", "to": "09:00"}]}
+    assert aa.plan_ticketing(off, [treq("1")], NOW, TMEMBERS) == []     # window 08-09, now 15:00
+
+
+def test_ticketing_balances_across_portal_ids():
+    block = {"enabled": True, "rules": [{"employees": ["a@x", "b@x"], "applications": [], "from": "", "to": ""}]}
+    out = aa.plan_ticketing(block, [treq("1"), treq("2"), treq("3")], NOW, TMEMBERS)
+    assert [o["portal_id"] for o in out] == ["111", "222", "111"]       # round-robin by least-loaded
+    assert out[0]["name"] == "Alice"
+
+
+def test_ticketing_respects_load_and_skips_portalless():
+    block = {"enabled": True, "rules": [{"employees": ["a@x", "b@x"], "applications": [], "from": "", "to": ""}]}
+    assert aa.plan_ticketing(block, [treq("1")], NOW, TMEMBERS, load={"111": 5})[0]["portal_id"] == "222"
+    only_carol = {"enabled": True, "rules": [{"employees": ["c@x"], "applications": [], "from": "", "to": ""}]}
+    assert aa.plan_ticketing(only_carol, [treq("1")], NOW, TMEMBERS) == []   # Carol has no portal id -> skipped
+
+
+def test_ticketing_application_filter_and_grouping():
+    block = {"enabled": True, "rules": [
+        {"employees": ["a@x"], "applications": ["Flexcube"], "from": "", "to": ""},
+        {"employees": ["b@x"], "applications": [], "from": "", "to": ""}]}
+    rows = [treq("1", "Flexcube"), treq("2", "DWP"), treq("3", "Flexcube; GL")]
+    plan = aa.plan_ticketing(block, rows, NOW, TMEMBERS)
+    assert {o["id"]: o["portal_id"] for o in plan} == {"1": "111", "3": "111", "2": "222"}
+    groups = aa.group_by_employee(plan)
+    assert groups[0]["portal_id"] == "111" and sorted(groups[0]["ids"]) == ["1", "3"]   # busiest first
+    assert groups[1]["portal_id"] == "222" and groups[1]["ids"] == ["2"]
+
+
 def test_team_applications_scoped():
     cfg = {"applications": [{"name": "Flexcube", "team": "Flex Cube"}, {"name": "DWP", "team": "Card Management"},
                             {"name": "GL", "team": "Flex Cube"}]}

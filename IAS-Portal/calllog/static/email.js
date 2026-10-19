@@ -124,7 +124,7 @@
   }
 
   async function changeTeamDialog(row) {
-    const choices = teams().filter((t) => ROLE === "admin" || canActOnTeam(t) || t === row.team);
+    const choices = teams();          // any manager / admin may re-file a mail to ANY team (not only their own)
     const select = h("select", { "aria-label": "Team", required: true },
       choices.map((t) => h("option", { value: t, selected: t === row.team }, t)));
     await OPS.modal({

@@ -146,6 +146,50 @@ def record_scan(records, rows, cfg, now, system_team=None):
     return records
 
 
+SCAN_SOURCE = "scan"          # records created from the LIVE Re-Assign scrape (vs the CSV export feed)
+
+
+def record_live_requests(records, requests, cfg, now, system_team=None):
+    """Fold a LIVE Re-Assign scan (the ``sla`` snapshot's ``requests``) into ``records``.
+
+    The Re-Assign page only lists requests still WITH the security team, so every live row is at least at the ASSIGNED
+    stage (the clock has started); a request's execution and confirmation leave that page and are picked up later from
+    the export feed. Each live row therefore upserts an open record keyed by the scan's stable ``key`` and tagged
+    ``source="scan"``; it stamps ``assigned_at`` from the request's sent date and remembers the system, the requester
+    and the security user currently holding it (``assignee``). ``apply_sla_scan`` first drops the previous scan-sourced
+    records, so the scan-sourced set always mirrors exactly the requests open right now (feed-sourced CLOSED records are
+    left untouched). Returns ``records``."""
+    f = cfg.get("fields") or {}
+    now = _clean(now) or datetime.now().strftime(_FMT)
+    tmap = {str(k).strip().lower(): v for k, v in (system_team or {}).items()}
+    sys_name = f.get("system") or "النظام"
+    req_name = f.get("requester") or "اسم الموظف"
+    for r in requests or []:
+        rid = _clean(r.get("key"))
+        if not rid:
+            continue
+        flds = r.get("fields") or {}
+        system = _clean(flds.get(sys_name))
+        assignee = _clean(r.get("security_user"))
+        if assignee in ("(Unassigned)", "-"):
+            assignee = ""
+        rec = records.get(rid)
+        assigned_at = _clean(r.get("sent_at")) or now
+        if rec is None:
+            rec = records[rid] = {"id": rid, "system": system, "team": tmap.get(system.lower(), "Open System"),
+                                  "requester": _clean(flds.get(req_name)), "first_seen": now, "assigned_at": assigned_at,
+                                  "executor": "", "executed_at": "", "exec_outcome": "", "checker": "",
+                                  "confirmed_at": "", "final_outcome": "", "last_status": "", "last_seen": now}
+        rec["source"] = SCAN_SOURCE
+        rec["assignee"] = assignee
+        if system:
+            rec["system"] = system
+            rec["team"] = tmap.get(system.lower(), rec.get("team") or "Open System")
+        rec["last_status"] = assignee and "assigned" or "unassigned"
+        rec["last_seen"] = now
+    return records
+
+
 def _minutes(a, b):
     try:
         ta, tb = datetime.strptime(_clean(a)[:19], _FMT), datetime.strptime(_clean(b)[:19], _FMT)
@@ -184,12 +228,38 @@ class _Agg:
                     executed_pct=_pct(self.executed, self.n), sla_pct=_pct(self.sla_ok, self.sla_n), median_minutes=med)
 
 
-def analyze(records, cfg):
+def _live_groups(open_recs, group_by, out_key, sla, now):
+    """[{<out_key>, n, oldest_minutes, breached}] of the OPEN requests grouped by ``group_by`` (the holding security
+    user, or the team), worst (most breached, then longest waiting) first. ``breached`` counts open requests whose
+    running clock already passed the SLA target. ``oldest_minutes`` is None until a server ``now`` is given (the stored
+    records carry no running clock)."""
+    groups = {}
+    for r in open_recs:
+        name = _clean(r.get(group_by)) or "—"
+        age = _minutes(r.get("assigned_at"), now) if now else None
+        g = groups.setdefault(name, {"n": 0, "oldest": None, "breached": 0})
+        g["n"] += 1
+        if age is not None:
+            g["oldest"] = age if g["oldest"] is None else max(g["oldest"], age)
+            if age > sla:
+                g["breached"] += 1
+    out = [{out_key: name, "n": g["n"], "oldest_minutes": g["oldest"], "breached": g["breached"]}
+           for name, g in groups.items()]
+    out.sort(key=lambda r: (-r["breached"], -(r["oldest_minutes"] or 0), -r["n"]))
+    return out
+
+
+def analyze(records, cfg, now=None, live_records=None):
     """Build the live SLA metrics from the recorded lifecycles: live buckets (open / awaiting confirmation / closed),
     the EMPLOYEE clock (assignment->execution) by مستخدم السرية, the MANAGER clock (execution->confirmation) by
-    مراجع السرية, plus by team / system / day. ``records`` is the dict from record_scan."""
+    مراجع السرية, plus by team / system / day. ``records`` is the dict from record_scan / record_live_requests.
+    A ``now`` (ISO string) ages the still-open requests so the live section shows how long each has been waiting.
+    ``live_records`` overrides which records feed the "right now" open strip (the caller passes the date-unfiltered set,
+    since a still-open request assigned on an earlier day must still count as open today)."""
     sla = int((cfg or {}).get("sla_minutes") or DEFAULT_SLA_MINUTES)
+    now = _clean(now)
     recs = list((records or {}).values())
+    live_recs = list((live_records if live_records is not None else records or {}).values())
 
     buckets = {"open": 0, "awaiting": 0, "closed": 0}
     overall = _Agg()                          # full clock assignment -> confirmation (closed only)
@@ -231,9 +301,20 @@ def analyze(records, cfg):
         out.sort(key=lambda r: -r["n"])
         return out[:n] if n else out
 
+    open_recs = [r for r in live_recs if not r.get("executed_at") and not r.get("confirmed_at")]
+    awaiting_now = sum(1 for r in live_recs if r.get("executed_at") and not r.get("confirmed_at"))
+    open_ages = [_minutes(r.get("assigned_at"), now) for r in open_recs] if now else []
+    open_ages = [a for a in open_ages if a is not None]
+    live = {"open": len(open_recs), "awaiting": awaiting_now,
+            "oldest_minutes": round(max(open_ages), 1) if open_ages else None,
+            "breached": sum(1 for a in open_ages if a > sla),
+            "by_employee": _live_groups(open_recs, "assignee", "executor", sla, now),
+            "by_team": _live_groups(open_recs, "team", "team", sla, now)}
+
     return {
         "meta": {"requests": len(recs), "sla_minutes": sla, "date_from": first_day, "date_to": last_day},
         "buckets": buckets,
+        "live": live,
         "overall": overall.out(),
         "employee_clock": emp_clock.out(),      # assignment -> execution (by مستخدم السرية)
         "manager_clock": mgr_clock.out(),       # execution -> confirmation (by مراجع السرية)
@@ -261,7 +342,7 @@ def filter_records(records, filt):
             continue
         if dto and (not day or day > dto):
             continue
-        if execu and _clean(r.get("executor")).lower() != execu:
+        if execu and execu not in (_clean(r.get("executor")).lower(), _clean(r.get("assignee")).lower()):
             continue
         if check and _clean(r.get("checker")).lower() != check:
             continue
@@ -278,6 +359,8 @@ def filter_options(records):
     for r in (records or {}).values():
         if _clean(r.get("executor")):
             execs.add(_clean(r.get("executor")))
+        if _clean(r.get("assignee")):               # the security user holding a still-open request (live scan)
+            execs.add(_clean(r.get("assignee")))
         if _clean(r.get("checker")):
             checks.add(_clean(r.get("checker")))
         if _clean(r.get("team")):

@@ -98,6 +98,41 @@ def test_housekeep_cap_drops_oldest_closed():
     assert removed == 3 and set(rec) == {"c3", "c4", "open1"}        # the 3 oldest closed are dropped
 
 
+def _scan_req(key, system="Flexcube", owner="Alice", sent="2026-10-17T08:00:00"):
+    return {"key": key, "security_user": owner, "sent_at": sent,
+            "fields": {"النظام": system, "اسم الموظف": "Someone"}}
+
+
+def test_record_live_requests_opens_and_ages():
+    rec, tmap = {}, {"flexcube": "Flex Cube"}
+    sr.record_live_requests(rec, [_scan_req("k1"), _scan_req("k2", owner="(Unassigned)")], CFG,
+                            "2026-10-17T11:00:00", tmap)
+    assert rec["k1"]["source"] == sr.SCAN_SOURCE and rec["k1"]["assignee"] == "Alice" and rec["k1"]["team"] == "Flex Cube"
+    assert rec["k2"]["assignee"] == ""                                     # "(Unassigned)" normalised away
+    assert rec["k1"]["assigned_at"] == "2026-10-17T08:00:00" and not rec["k1"]["executed_at"]
+    m = sr.analyze(rec, CFG, now="2026-10-17T13:00:00")                    # 5h after assignment (> 180-min target)
+    assert m["buckets"] == {"open": 2, "awaiting": 0, "closed": 0}
+    assert m["live"]["open"] == 2 and m["live"]["oldest_minutes"] == 300.0
+    assert m["live"]["breached"] == 2                                      # both open past the 3h target
+    m2 = sr.analyze(rec, CFG, now="2026-10-17T10:00:00")                   # 2h after assignment (within target)
+    assert m2["live"]["breached"] == 0 and m2["live"]["oldest_minutes"] == 120.0
+    assert [g["executor"] for g in m2["live"]["by_employee"]] == ["Alice", "—"]
+    assert m2["live"]["by_employee"][0]["n"] == 1                          # one open request held by Alice
+
+
+def test_apply_sla_scan_replaces_scan_set_keeps_closed():
+    """A later scan replaces the previous OPEN scan rows; a CLOSED feed record is left alone."""
+    rec = {"closed1": {"id": "closed1", "assigned_at": "2026-10-16T08:00:00", "executed_at": "2026-10-16T08:30:00",
+                       "exec_outcome": "executed", "confirmed_at": "2026-10-16T09:00:00", "final_outcome": "executed"}}
+    sr.record_live_requests(rec, [_scan_req("k1"), _scan_req("k2")], CFG, "2026-10-17T10:00:00")
+    assert set(rec) == {"closed1", "k1", "k2"}
+    # emulate apply_sla_scan's "drop previous scan set, fold the new one"
+    for rid in [k for k, r in rec.items() if r.get("source") == sr.SCAN_SOURCE]:
+        del rec[rid]
+    sr.record_live_requests(rec, [_scan_req("k3")], CFG, "2026-10-17T10:15:00")
+    assert set(rec) == {"closed1", "k3"}                                   # old open rows gone, closed one kept
+
+
 def test_feed_with_explicit_time_columns():
     cfg = sr.default_config()
     cfg["fields"]["assigned_at"], cfg["fields"]["confirmed_at"] = "DateF", "DateT1"
