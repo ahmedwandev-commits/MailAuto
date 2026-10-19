@@ -1,0 +1,68 @@
+/* E-mail page (email.js) - only what the shared ops.css does not already give. Tokens come from app.css / ops.css.
+   No colour-only meaning: every state also carries an icon or a label. Works in light and dark (ops.css variables). */
+
+.em-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 12px 0 16px; border-bottom: 1px solid var(--line, #d9d9e3); }
+.em-tab {
+  appearance: none; background: none; border: 0; border-bottom: 2px solid transparent; cursor: pointer;
+  padding: 8px 14px; font: inherit; color: var(--muted, #5a5a6a); display: inline-flex; align-items: center; gap: 6px;
+  border-radius: 6px 6px 0 0;
+}
+.em-tab:hover { color: var(--text, #1d1d24); background: var(--surface-2, rgba(0,0,0,.04)); }
+.em-tab[aria-selected="true"] { color: var(--brand, #0b7d4f); border-bottom-color: var(--brand, #0b7d4f); font-weight: 600; }
+.em-tab:focus-visible { outline: 2px solid var(--focus, #0b7d4f); outline-offset: 2px; }
+.em-badge {
+  min-width: 18px; padding: 0 6px; border-radius: 999px; font-size: 12px; line-height: 18px; text-align: center;
+  background: var(--surface-2, rgba(0,0,0,.08)); color: var(--text, #1d1d24);
+}
+.em-badge.warn { background: var(--warn-bg, #fdecc8); color: var(--warn-fg, #7a4e00); }
+.em-badge.info { background: var(--info-bg, #d7e9fb); color: var(--info-fg, #0b4a7a); }
+
+.em-panel[hidden] { display: none; }
+.em-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.em-two { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+@media (min-width: 900px) { .em-two { grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); } }
+
+/* Quality appeals: a reply's author disagreed with the rating; a manager Accepts (withdraws it) or Rejects (keeps it). */
+.em-appeals { display: grid; gap: 10px; }
+.em-appeal { border: 1px solid var(--line, #d9d9e3); border-radius: 10px; padding: 10px 12px; background: var(--surface-2, rgba(0,0,0,.02)); }
+.em-appeal-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.em-appeal-subj { min-width: 0; }
+.em-appeal-reasons { margin: 6px 0 0; }
+.em-appeal-text { margin: 8px 0 10px; padding-inline-start: 10px; border-inline-start: 3px solid var(--line, #d9d9e3); color: var(--text, #1d1d24); white-space: pre-wrap; }
+.em-appeals-decided { margin-top: 12px; }
+.em-appeals-decided > summary { cursor: pointer; color: var(--muted, #5a5a6a); font-size: 13px; margin-bottom: 8px; }
+.em-appeals-decided .em-appeal { background: transparent; }
+
+.em-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.em-filters select, .em-filters input[type="search"] { max-width: 100%; }
+.em-check { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+
+.em-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
+.em-legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted, #5a5a6a); }
+.em-swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+.em-drawer-grid { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
+.em-drawer-grid dt { color: var(--muted, #5a5a6a); }
+.em-drawer-grid dd { margin: 0; }
+.em-drawer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.em-preview { white-space: pre-wrap; word-break: break-word; background: var(--surface-2, rgba(0,0,0,.04)); border-radius: 8px; padding: 10px; margin-top: 8px; max-height: 180px; overflow: auto; }
+
+.em-rules { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.em-rule { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid var(--line, #d9d9e3); border-radius: 8px; }
+.em-rule .grow { flex: 1; }
+
+/* Learned classifications waiting for approval (Unclassified tab). */
+.em-suggest-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.em-suggest-item { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; padding: 12px 14px;
+  border: 1px solid var(--line, #d9d9e3); border-radius: 10px; background: var(--wash); }
+.em-suggest-info { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.em-suggest-subj { text-align: start; background: none; border: 0; padding: 0; cursor: pointer; font-weight: 600; word-break: break-word; }
+.em-suggest-act { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.em-suggest-f { margin-bottom: 0; }
+.em-suggest-f .em-suggest-kw, .em-suggest-f select { min-width: 150px; }
+.em-suggest-btns { display: flex; gap: 8px; padding-bottom: 1px; }
+
+.em-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.em-field > span:first-child { font-weight: 600; }
+.em-reasons { display: flex; flex-direction: column; gap: 4px; }
+.em-trend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
