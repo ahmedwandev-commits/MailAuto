@@ -318,6 +318,7 @@ Rules every job follows:
 | `GET /jobs` | admin | heartbeats + pending requests + online flag + `collector_info` (written by the collector into `ops/state/collector_info.json`: host, config path, pinned keys, per-account `username` + `has_password`; never a password) |
 | `POST /jobs/<job>/run` | admin | writes a request file; returns `{queued: true}` (managers no longer run scans / "Run now") |
 | `GET /jobs/<job>/log?lines=200` | admin | tail |
+| `POST /auto-assign/run-ticketing` `{team, username, password, dry_run, repeat}`; `GET` status; `POST .../stop` | admin, manager of the team | runs the ticketing auto-assign with the manager's OWN portal login, in a background thread. `repeat`: again every `interval_minutes` until Stop, the end of the working hours, a refused login or 3 failed runs in a row - the password is kept in that loop's memory only (never in the status, a log, the audit or a file; a restart forgets it) |
 | `GET /settings`, `PUT /settings` | admin | full settings, validated (section 9) |
 | `GET /reports`, download via `/export/ops/report/<module>/<name>` | admin, manager | no path traversal |
 | `GET /export/ops/<module>.xlsx` | admin, manager | built from the snapshot |

@@ -271,7 +271,8 @@ def js_open_package(target, link_text):
             + "rows.sort((a,b) => textOf(a).length - textOf(b).length);"
             + "const row = rows[0];"
             + "const ctls = [...row.querySelectorAll(\"a, button, input[type=submit], input[type=button], input[type=image], [onclick]\")].filter(visible);"
-            + "const ctl = ctls.find(c => lt && textOf(c).includes(lt)) || ctls[ctls.length-1] || row;"
+            + "const enter = [...row.querySelectorAll(\"a[id*='btnSubmit'], input[id*='btnSubmit']\")].filter(visible)[0];"
+            + "const ctl = enter || ctls.find(c => lt && textOf(c).includes(lt)) || ctls[ctls.length-1] || row;"
             + "return R(ctl); })()")
 
 
@@ -283,12 +284,19 @@ def js_next_page():
             + "return n ? R(n) : null; })()")
 
 
+# the real portal's login and landing ids (the bank's proven bot uses exactly these); tried before any guess
+PROVEN_LOGIN = {"username": "#ContentPlaceHolder1_txtName", "password": "#ContentPlaceHolder1_txtPassword",
+                "login_button": "#ContentPlaceHolder1_btnAdd"}
+LANDING_GRID = "#ContentPlaceHolder1_GridView_Application"
+
+
 def js_fill_login(user_sel, pass_sel, username, password):
-    """Set the user and password inputs (by selector, or the first visible text / password input) and fire input/change."""
+    """Set the user and password inputs - the configured selector, else the real portal's id, else the first visible
+    text / password input - and fire input/change. Returns {user, pass}: whether each field was found."""
     return ("(() => {" + JS_NORM
-            + "const uSel=" + json.dumps(user_sel or "") + ", pSel=" + json.dumps(pass_sel or "") + ";"
-            + "const u = uSel ? document.querySelector(uSel) : [...document.querySelectorAll(\"input[type=text], input:not([type])\")].filter(visible)[0];"
-            + "const p = pSel ? document.querySelector(pSel) : [...document.querySelectorAll(\"input[type=password]\")].filter(visible)[0];"
+            + "const one = (sels, guess) => { for (const s of sels) { if (!s) continue; const e = document.querySelector(s); if (e) return e; } return guess(); };"
+            + "const u = one([" + json.dumps(user_sel or "") + ", " + json.dumps(PROVEN_LOGIN["username"]) + "], () => [...document.querySelectorAll(\"input[type=text], input:not([type])\")].filter(visible)[0]);"
+            + "const p = one([" + json.dumps(pass_sel or "") + ", " + json.dumps(PROVEN_LOGIN["password"]) + "], () => [...document.querySelectorAll(\"input[type=password]\")].filter(visible)[0]);"
             + "const set=(el,val)=>{if(!el)return false; try{el.focus();}catch(e){} el.value=val; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return true;};"
             + "return {user:set(u," + json.dumps(str(username)) + "), pass:set(p," + json.dumps(password) + ")}; })()")
 
@@ -374,17 +382,92 @@ def pick_table(tables, cfg):
     return best[1] if best else None
 
 
+def js_landing_packages():
+    """The package names on the after-login packages page (rows that carry an Enter link) - only to tell the user which
+    packages the account holds when the wanted one is missing."""
+    return ("(() => { const out = [];"
+            + "for (const tr of document.querySelectorAll('table tr')) {"
+            + "  if (!tr.querySelector(\"a[id*='btnSubmit'], a, input[type=submit], button\")) continue;"
+            + "  const t = (tr.innerText || tr.textContent || '').replace(/\\s+/g, ' ').trim();"
+            + "  if (t && t.length < 200 && !out.includes(t)) out.push(t); }"
+            + "return out.slice(0, 15); })()")
+
+
+def js_link_href(file_name):
+    """The absolute address of the page's link to ``file_name`` (e.g. request_reassign.aspx), or null."""
+    return ("(() => { const want = " + json.dumps(str(file_name or "").lower()) + ";"
+            + "const a = [...document.querySelectorAll('a[href]')].find(x => (x.getAttribute('href') || '')"
+            + ".toLowerCase().split(/[?#]/)[0].endsWith(want));"
+            + "return a ? a.href : null; })()")
+
+
+def login(browser, cfg, username, password, wrong_text):
+    """Log in on the portal's login page (already open): the configured ids, then the real portal's ids
+    (``PROVEN_LOGIN``), then a guess. Missing fields are a PortalError (the page changed), NOT a wrong password: only a
+    login page that stays after a filled-in submit is a LoginError (``wrong_text``). Done when the URL left the login
+    page or the real packages grid is shown."""
+    sel = cfg.get("selectors") or {}
+    timeout_s = int(cfg["timeout_seconds"])
+    login_marker = url_marker(cfg["login_path"], "login.aspx", keep_extension=True)
+    filled = browser.eval(js_fill_login(sel.get("username"), sel.get("password"), username, password))
+    if not (isinstance(filled, dict) and filled.get("user") and filled.get("pass")):
+        raise PortalError("The login page's user name / password fields were not found - the portal page may have "
+                          "changed or not loaded. Nothing was typed.")
+    buttons = [b for b in (sel.get("login_button"), PROVEN_LOGIN["login_button"]) if b]
+    if not any(_click(browser, js_click_selector(b)) for b in buttons):
+        if not _click(browser, js_click_text(cfg["login_button_text"])):
+            _press_enter(browser)
+    landing = "!!document.querySelector(" + json.dumps(LANDING_GRID) + ")"
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        with suppress(Exception):
+            if login_marker not in (browser.current_url() or "").lower() or browser.eval(landing):
+                browser.wait_ready(timeout_s)
+                return
+        _sleep_ms(300)
+    raise LoginError(wrong_text)
+
+
+JS_GRID_STATE = ("(() => { const i = document.querySelector('.dataTables_info, [id$=\"_info\"]');"
+                 " return {empty: !!document.querySelector('td.dataTables_empty'),"
+                 " info: i ? (i.textContent || '').trim() : ''}; })()")
+_INFO_TOTAL = re.compile(r"\bof\s+([\d,٠-٩]+)|من\s+(?:أصل\s+)?([\d,٠-٩]+)")
+
+
+def info_total(text):
+    """The total a DataTables info line states ('Showing 1 to 10 of 130 records' -> 130), or None."""
+    m = _INFO_TOTAL.search(str(text or ""))
+    if not m:
+        return None
+    digits = (m.group(1) or m.group(2) or "").replace(",", "").translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+    return int(digits) if digits.isdigit() else None
+
+
+def _wait_for_grid(browser, cfg):
+    """Read the requests table until it has rows or the portal's «no data» line (or the timeout). Returns the table."""
+    deadline = time.monotonic() + int(cfg["timeout_seconds"])
+    table = None
+    while True:
+        with suppress(Exception):
+            table = pick_table(browser.eval(READ_TABLES), cfg)
+            if table is not None and (table["rows"] or (browser.eval(JS_GRID_STATE) or {}).get("empty")):
+                return table
+        if time.monotonic() >= deadline:
+            return table
+        _sleep_ms(400)
+
+
 def read_requests(browser, cfg, debug):
     """(headers, rows) of the requests table on the Re-Assign page."""
     _sleep_ms(SETTLE_MS)
     table = pick_table(browser.eval(READ_TABLES), cfg)
-    if table is None or not table["rows"]:
-        # results not loaded yet -> press the search button
+    said_empty = (browser.eval(JS_GRID_STATE) or {}).get("empty")
+    if table is None or not (table["rows"] or said_empty):
+        # results not loaded yet -> press the search button, then wait for rows or the portal's «no data» line
         if _click(browser, js_click_text(cfg["search_button_text"])):
             _sleep_ms(SETTLE_MS)
             browser.wait_ready(int(cfg["timeout_seconds"]))
-            _sleep_ms(SETTLE_MS)
-            table = pick_table(browser.eval(READ_TABLES), cfg)
+        table = _wait_for_grid(browser, cfg)
     debug.snap(browser, "results")
     if table is None:
         seen = [t["headers"] for t in browser.eval(READ_TABLES) if t["headers"]]
@@ -403,6 +486,15 @@ def read_requests(browser, cfg, debug):
             if not new:
                 break
             rows.extend(new)
+    state = browser.eval(JS_GRID_STATE) or {}
+    # an empty or short read would be recorded as requests leaving the queue: refuse it rather than record it
+    if not rows and not state.get("empty"):
+        raise PortalError("The requests table did not finish loading (no rows and no «no data» line from the portal) - "
+                          "this scan was not used, nothing was recorded.")
+    total = info_total(state.get("info"))
+    if total is not None and len(rows) < total:
+        raise PortalError(f"Read {len(rows)} request(s) but the portal counts {total} (\"{state.get('info')}\") - this "
+                          f"scan was not used, nothing was recorded.")
     return table["headers"], rows
 
 
@@ -420,8 +512,6 @@ def scrape(ctx, username, password):
     cfg = _config(ctx)
     timeout_s = int(cfg["timeout_seconds"])
     base = cfg["base_url"].rstrip("/")
-    sel = cfg.get("selectors") or {}
-    login_marker = url_marker(cfg["login_path"], "login.aspx", keep_extension=True)
     reassign_marker = url_marker(cfg["reassign_path"], "request_reassign")
     debug = Debug(ctx.debug, debug_folder(ctx), [password])
 
@@ -430,27 +520,25 @@ def scrape(ctx, username, password):
         # 1) Login. The page is dumped BEFORE the password is typed.
         browser.navigate(base + cfg["login_path"], timeout=timeout_s)
         debug.snap(browser, "login")
-        browser.eval(js_fill_login(sel.get("username"), sel.get("password"), username, password))
-        if sel.get("login_button"):
-            _click(browser, js_click_selector(sel["login_button"]))
-        elif not _click(browser, js_click_text(cfg["login_button_text"])):
-            _press_enter(browser)
-        if browser.wait_url(lambda u: login_marker not in u.lower(), timeout=timeout_s) is None:
-            raise LoginError("Login failed - still on the login page. Check the SLA user and password "
-                             "in collector_config.json (sla.username / sla.password).")
-        browser.wait_ready(timeout_s)
+        login(browser, cfg, username, password, "Login failed - still on the login page. Check the SLA user and "
+                                                "password in collector_config.json (sla.username / sla.password).")
         debug.snap(browser, "groups")
 
         # 2) Open the package (may open in a new window, or load in the same tab)
         pkg = browser.eval(js_open_package(cfg["package_text"], cfg["package_link_text"]))
         if pkg == "notfound" or not isinstance(pkg, dict):
-            raise PortalError(f"Package not found on the groups page: {cfg['package_text']}")
+            held = browser.eval(js_landing_packages()) or []
+            raise PortalError(f"Package not found on the groups page: {cfg['package_text']}"
+                              + (f". The account holds: {' | '.join(held)}" if held else ""))
         browser.click_at(pkg["x"], pkg["y"])
         browser.attach(cfg["app_url_fragment"].lower(), timeout=timeout_s)
         debug.snap(browser, "app_home")
 
-        # 3) Re-Assign page
-        browser.navigate(base + cfg["reassign_path"], timeout=timeout_s)
+        # 3) Re-Assign page: through the portal's own menu link (relative to the package's folder), else the path
+        _sleep_ms(SETTLE_MS)
+        href = browser.eval(js_link_href(url_marker(cfg["reassign_path"], "request_reassign.aspx", keep_extension=True)))
+        browser.navigate(href if isinstance(href, str) and href.startswith("http") else base + cfg["reassign_path"],
+                         timeout=timeout_s)
         if reassign_marker not in (browser.current_url() or "").lower():
             raise PortalError(f"Could not open the Re-Assign page (ended on {scrub(browser.current_url(), [password])})")
         return read_requests(browser, cfg, debug)

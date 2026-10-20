@@ -2109,6 +2109,11 @@ def _ticketing_run_state():
     return current_app.extensions.setdefault("ops_ticketing_run", {"running": False})
 
 
+TICKETING_LOOP_UNIT_SECONDS = 60          # one "minute" of the keep-running interval (tests shorten it)
+TICKETING_LOOP_MAX_HOURS = 12             # a loop never outlives a working day
+TICKETING_LOOP_MAX_FAILURES = 3           # this many failed runs in a row end the loop
+
+
 @bp.get("/auto-assign/run-ticketing")
 @auth.ops_act_required
 def auto_assign_run_ticketing_status():
@@ -2121,14 +2126,35 @@ def auto_assign_run_ticketing_status():
     return jsonify(running=bool(st.get("running")), done=bool(st.get("done")), team=st.get("team", ""),
                    started_at=st.get("started_at", ""), log=list(st.get("log") or [])[-200:],
                    summary=st.get("summary", ""), assigned=int(st.get("assigned") or 0),
-                   by_employee=st.get("by_employee") or {}, error=st.get("error", ""), dry_run=bool(st.get("dry_run")))
+                   by_employee=st.get("by_employee") or {}, error=st.get("error", ""), dry_run=bool(st.get("dry_run")),
+                   repeat=bool(st.get("repeat")), runs=int(st.get("runs") or 0), next_run_at=st.get("next_run_at", ""),
+                   interval_minutes=int(st.get("interval_minutes") or 0), stopping=bool(st.get("stop")))
+
+
+@bp.post("/auto-assign/run-ticketing/stop")
+@auth.ops_act_required
+def auto_assign_run_ticketing_stop():
+    """Stop a "keep running" ticketing loop after its current run (the manager of its team, or an administrator)."""
+    st = current_app.extensions.get("ops_ticketing_run") or {}
+    if not st.get("running"):
+        raise ApiError("No ticketing auto-assign is running.")
+    if not auth.may_act_on_team(st.get("team")):
+        raise ApiError("You can only stop your own team's auto-assign.", 403)
+    st["stop"] = True
+    auth.audit("ops_auto_assign_stop", target=st.get("team"), details={"kind": "ticketing"})
+    return jsonify(ok=True)
 
 
 @bp.post("/auto-assign/run-ticketing")
 @auth.ops_act_required
 def auto_assign_run_ticketing():
     """Run the ticketing auto-assign now for one team, with the MANAGER's portal credentials typed for this run only
-    (never stored). The engine drives the portal in a background thread; the page polls the GET above for progress."""
+    (never stored). The engine drives the portal in a background thread; the page polls the GET above for progress.
+
+    ``repeat``: keep running, like the bank's stand-alone bot - a run every ``interval_minutes`` (the team's setting)
+    until the manager presses Stop, the working hours end, the password is refused, or 3 runs in a row fail. The
+    password then stays in this loop's memory only: never in the status, the log, the audit or a file, and a server
+    restart forgets it (the manager presses Run now again)."""
     body = json_body()
     team = _clean_team(body.get("team"))
     if not auth.may_act_on_team(team):
@@ -2138,6 +2164,7 @@ def auto_assign_run_ticketing():
     if not password:
         raise ApiError("Type your portal password for this run.")
     dry_run = bool(body.get("dry_run"))
+    repeat = bool(body.get("repeat")) and not dry_run           # a dry run shows one pass; it never loops
     block = auto_assign.team_block(_aa_config(), team, "ticketing")
     if not block.get("enabled") or not block.get("rules"):
         raise ApiError("Ticketing auto-assign is off for this team, or has no rules. Enable it and save rules first.")
@@ -2146,6 +2173,8 @@ def auto_assign_run_ticketing():
         raise ApiError("No employee of this team has a portal number yet. Set “Number in the security portal” in "
                        "Admin › Users for the people who should receive requests.")
     assign_settings = _assign_settings(hub_cfg())
+    hub = hub_cfg()
+    interval = max(1, int(block.get("interval_minutes") or auto_assign.DEFAULT_INTERVAL_MINUTES))
     store, data_dir, clock = ops(), str(ops().root.parent), current_app.config["CLOCK"]
     app = current_app._get_current_object()
     actor = g.user["user_id"]
@@ -2157,8 +2186,9 @@ def auto_assign_run_ticketing():
         st.clear()
         st.update({"running": True, "team": team, "actor": actor, "started_at": now_iso(clock()),
                    "log": [], "done": False, "summary": "", "assigned": 0, "by_employee": {}, "error": "",
-                   "dry_run": dry_run})
-    auth.audit("ops_auto_assign_run", target=team, details={"kind": "ticketing", "dry_run": dry_run})
+                   "dry_run": dry_run, "repeat": repeat, "runs": 0, "next_run_at": "", "interval_minutes": interval,
+                   "stop": False})
+    auth.audit("ops_auto_assign_run", target=team, details={"kind": "ticketing", "dry_run": dry_run, "repeat": repeat})
     teams_arg = {team: {"block": block, "members": members}}
 
     def worker():
@@ -2170,20 +2200,54 @@ def auto_assign_run_ticketing():
                 state.setdefault("log", []).append(f"{clock().strftime('%H:%M:%S')} {message}")
                 del state["log"][:-300]
 
-        ctx = common.JobContext(job="assign", settings=assign_settings, general={}, store=store, now=clock, log=log,
-                                debug=False, dry_run=dry_run, headed=False, data_dir=data_dir,
-                                options={"teams": teams_arg, "username": username, "password": password,
-                                         "email_settings": hub_cfg().get("email") or {}})
-        try:
-            result = assign_engine.run(ctx)
-        except Exception as exc:                                  # noqa: BLE001 - the thread must always settle the state
-            result = common.JobResult(ok=False, error=f"{type(exc).__name__}: {exc}")
-        state = app.extensions.get("ops_ticketing_run")
-        if state is not None:
+        def once():
+            ctx = common.JobContext(job="assign", settings=assign_settings, general={}, store=store, now=clock, log=log,
+                                    debug=False, dry_run=dry_run, headed=False, data_dir=data_dir,
+                                    options={"teams": teams_arg, "username": username, "password": password,
+                                             "email_settings": hub.get("email") or {}})
+            try:
+                return assign_engine.run(ctx)
+            except Exception as exc:                              # noqa: BLE001 - the thread must always settle the state
+                return common.JobResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+
+        state = app.extensions.get("ops_ticketing_run") or {}
+        started, failures, total, by_emp = time.monotonic(), 0, 0, {}
+        while True:
+            result = once()
             data = result.snapshot_data or {}
-            state.update({"running": False, "done": True, "summary": result.summary or "",
-                          "assigned": int(data.get("assigned") or 0), "by_employee": data.get("by_employee") or {},
-                          "error": result.error or ""})
+            total += int(data.get("assigned") or 0)
+            for name, n in (data.get("by_employee") or {}).items():
+                by_emp[name] = by_emp.get(name, 0) + int(n or 0)
+            failures = 0 if result.ok else failures + 1
+            state.update({"runs": int(state.get("runs") or 0) + 1, "assigned": total, "by_employee": by_emp,
+                          "summary": result.summary or "", "error": result.error or ""})
+            why = ""
+            if not repeat:
+                break
+            if state.get("stop"):
+                why = "stopped by the manager"
+            elif result.error_kind == "auth":
+                why = "the portal refused the login - press Run now and type the password again"
+            elif failures >= TICKETING_LOOP_MAX_FAILURES:
+                why = f"{failures} runs in a row failed"
+            elif not hub_settings.is_active(hub, "sla", clock()):
+                why = "the working hours are over"
+            elif time.monotonic() - started > TICKETING_LOOP_MAX_HOURS * 3600:
+                why = f"it ran {TICKETING_LOOP_MAX_HOURS} hours"
+            if why:
+                log(f"keep running ended: {why}")
+                state["summary"] = f"{state['runs']} run(s), assigned {total} in all - {why}"
+                break
+            state["next_run_at"] = now_iso(clock() + timedelta(minutes=interval))
+            log(f"next run in {interval} min (keep running until stopped)")
+            end = time.monotonic() + interval * TICKETING_LOOP_UNIT_SECONDS
+            while time.monotonic() < end and not state.get("stop"):
+                time.sleep(min(1.0, TICKETING_LOOP_UNIT_SECONDS / 4))
+            if state.get("stop"):
+                log("keep running ended: stopped by the manager")
+                state["summary"] = f"{state['runs']} run(s), assigned {total} in all - stopped by the manager"
+                break
+        state.update({"running": False, "done": True, "next_run_at": ""})
 
     threading.Thread(target=worker, name="ticketing-assign", daemon=True).start()
     return jsonify(ok=True, started=True)

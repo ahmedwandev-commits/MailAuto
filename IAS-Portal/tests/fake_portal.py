@@ -19,8 +19,15 @@
                  tables() and Api) hands out all of them, the hidden ones as markup (no external JS needed)
     search       the table is empty until the "بحث" button is pressed
     gridview     an ASP.NET GridView: no <thead>; the <th> header row and a <th> footer row are rows of the body
-    empty        the right headers and no rows (an empty queue)
+    empty        the right headers and no rows (an empty queue), with DataTables' «no data» row (td.dataTables_empty) as
+                 the real portal shows it
+    not_loaded   the right headers, no rows and NO «no data» row: the grid has not been filled yet
+    short_info   every row, but the DataTables info line says one more request exists than the grid holds
     no_table     a table whose headers lack the sent-date column
+
+``login_style``: "arabic" / "english" (the button text), "real" (the real portal's ids ContentPlaceHolder1_txtName /
+_txtPassword / _btnAdd, with a visible search box BEFORE the user field), "no_fields" (a page without the inputs).
+The application home has the real portal's menu (#Panel_Menu) with a relative «اعادة اسناد الطلبات» link.
 
 Everything is fake: names, numbers and the password are made up by the tests. The server never stores a password, it only
 records whether each login attempt was right (``logins``).
@@ -162,7 +169,9 @@ class FakePortal:
             opened = method == "POST" and form.get("__EVENTTARGET", "").endswith("btnSubmit")
             return self._send(h, 200, self._groups_page(open_app=opened))
         if path == HOME_PATH:
-            return self._send(h, 200, self._page("الصفحة الرئيسية للتطبيق", "<p>تطبيق طلبات السرية</p>"))
+            menu = ("<div id='Panel_Menu'><a href='Security_Assign_Maker/Request_ReAssign.aspx'>اعادة اسناد الطلبات</a>"
+                    "</div>")
+            return self._send(h, 200, self._page("الصفحة الرئيسية للتطبيق", f"<p>تطبيق طلبات السرية</p>{menu}"))
         if path == REASSIGN_PATH:
             if self.reassign_redirect:
                 return self._redirect(h, GROUPS_PATH)
@@ -196,14 +205,25 @@ class FakePortal:
 
     def _login(self, h, method, form):
         message = ""
+        if self.login_style == "no_fields":
+            return self._send(h, 200, self._page("تسجيل", "<h1>بوابة اختبار</h1><p>الخدمة غير متاحة حاليا</p>"))
         if method == "POST":
-            ok = (form.get("txtUserName") == self.username and form.get("txtPassword") == self.password)
+            ok = ((form.get("txtUserName") or form.get("ctl00$ContentPlaceHolder1$txtName")) == self.username
+                  and (form.get("txtPassword") or form.get("ctl00$ContentPlaceHolder1$txtPassword")) == self.password)
             self.logins.append(ok)
             if ok:
                 return self._redirect(h, GROUPS_PATH, [("Set-Cookie", "sid=ok; Path=/; HttpOnly")])
             message = "<div class='err'>بيانات الدخول غير صحيحة</div>"
             if self.echo_password:
                 message += f"<div class='err'>{html.escape(form.get('txtPassword', ''))}</div>"
+        if self.login_style == "real":                     # the real portal's ids, a search box first on the page
+            body = (f"<h1>بوابة اختبار</h1>{message}<form method='post' action='{LOGIN_PATH}'>"
+                    "<input type='text' id='txtSiteSearch' name='q' placeholder='بحث في الموقع'>"
+                    "<input type='text' id='ContentPlaceHolder1_txtName' name='ctl00$ContentPlaceHolder1$txtName'>"
+                    "<input type='password' id='ContentPlaceHolder1_txtPassword' name='ctl00$ContentPlaceHolder1$txtPassword'>"
+                    "<input type='submit' id='ContentPlaceHolder1_btnAdd' name='ctl00$ContentPlaceHolder1$btnAdd' value='دخـــول'>"
+                    "</form>")
+            return self._send(h, 200, self._page("تسجيل", body))
         button = ("<input type='submit' id='btnLogin' name='btnLogin' value='دخول'>" if self.login_style == "arabic"
                   else "<input type='submit' id='btnLogin' name='btnLogin' value='Sign in'>")
         body = (f"<h1>بوابة اختبار</h1>{message}<form method='post' action='{LOGIN_PATH}'>"
@@ -233,7 +253,7 @@ class FakePortal:
             enter = (f"<a id='ContentPlaceHolder1_GridView_Application_btnSubmit_{n}' "
                      f"href=\"javascript:__doPostBack('ctl00$ContentPlaceHolder1$GridView_Application$ctl0{n}$btnSubmit','')\">"
                      "دخــــــول</a>")
-            return f"<tr><td>{html.escape(text)}</td><td>{enter}</td></tr>"
+            return f"<tr><td>{html.escape(text)}</td><td>{enter} <a href='/help'>مساعدة</a></td></tr>"   # help comes LAST
         rows = row("User Provisioning Portal - موظف اسناد - مستخدم اخر", 1)
         if self.package:
             rows += row(PACKAGE_TEXT, 2)
@@ -253,7 +273,16 @@ class FakePortal:
                     "<tbody><tr><td>1</td><td>جديد</td></tr></tbody></table>")
             return self._page("Re-Assign", body)
         if v == "empty":
+            none = f"<tr class='odd'><td valign='top' colspan='{len(HEADERS)}' class='dataTables_empty'>لا توجد بيانات</td></tr>"
+            return self._page("Re-Assign", f"<table><thead><tr>{head_row}</tr></thead><tbody>{none}</tbody></table>"
+                                           "<div class='dataTables_info'>Showing 0 to 0 of 0 records</div>")
+        if v == "not_loaded":
             return self._page("Re-Assign", f"<table><thead><tr>{head_row}</tr></thead><tbody></tbody></table>")
+        if v == "short_info":
+            rows = "".join(_row_html(c) for c in cells)
+            return self._page("Re-Assign", f"<table><thead><tr>{head_row}</tr></thead><tbody>{rows}</tbody></table>"
+                                           f"<div class='dataTables_info'>Showing 1 to {len(cells) + 1} of "
+                                           f"{len(cells) + 1} records</div>")
         if v == "search":
             rows = "".join(_row_html(c) for c in cells) if searched else ""
             body = ("<form method='get'><input type='submit' name='btnSearch' value='بحث'></form>"

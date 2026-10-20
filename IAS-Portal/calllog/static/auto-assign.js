@@ -120,10 +120,10 @@
     }
     const applyBtn = kind === "email"
       ? h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: distributeNow }, I("refresh"), "Distribute now")
-      : h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: () => runTicketing(team) }, I("refresh"), "Run now");
+      : h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: () => runTicketing(team, block.interval_minutes || 10) }, I("refresh"), "Run now");
     const note = kind === "ticketing"
       ? h("p", { class: "op-note op-t-info op-block" }, I("info"),
-        h("span", {}, "These rules drive the portal. Press Run now and type your own portal login to assign new requests to your team — each employee needs a “Number in the security portal” set in Admin › Users."))
+        h("span", {}, "These rules drive the portal. Press Run now and type your own portal login to assign new requests to your team — once, or again every “Run every” minutes until you press Stop (your password is kept only in the server's memory, never saved). Each employee needs a “Number in the security portal” set in Admin › Users."))
       : null;
     return h("section", { class: "card op-fieldset aa-target" },
       h("div", { class: "card-head" }, h("h3", {}, kind === "email" ? "E-mail auto-assign" : "Ticketing auto-assign"),
@@ -146,37 +146,52 @@
   const runHost = h("div", {});                 // a persistent panel: survives render(), updated live while a run polls
   let polling = false;
 
-  async function runTicketing(team) {
+  async function runTicketing(team, every) {
     const user = h("input", { type: "text", autocomplete: "off", spellcheck: "false", dir: "ltr", maxlength: "60", "aria-label": "Portal username" });
     const pass = h("input", { type: "password", autocomplete: "off", dir: "ltr", maxlength: "200", "aria-label": "Portal password" });
     const dry = h("input", { type: "checkbox" });
+    const keep = h("input", { type: "checkbox", checked: true });
+    dry.addEventListener("change", () => { keep.disabled = dry.checked; if (dry.checked) keep.checked = false; });
     const body = h("div", { class: "dlg-body" },
-      h("p", { class: "muted", dir: "auto" }, `Assign new portal requests for “${team}” by your saved rules. Type your OWN portal login — it is used only for this run and never stored.`),
+      h("p", { class: "muted", dir: "auto" }, `Assign new portal requests for “${team}” by your saved rules. Type your OWN portal login — it is kept only in the server's memory while it runs, never stored.`),
       h("label", { class: "field" }, "Portal username", user),
       h("label", { class: "field" }, "Portal password", pass),
-      h("label", { class: "aa-switch" }, dry, h("span", {}, "Dry run (do everything except the final Execute)")));
+      h("label", { class: "aa-switch" }, keep, h("span", {}, `Keep running: again every ${every} min until I press Stop (or the working hours end)`)),
+      h("label", { class: "aa-switch" }, dry, h("span", {}, "Dry run (do everything except the final Execute; runs once)")));
     const ok = await CL.modal({
       title: "Run ticketing auto-assign", submitLabel: "Run", body,
       onSubmit: async () => {
         if (!user.value.trim() || !pass.value) throw new Error("Type your portal username and password.");
         await api("POST", "/api/ops/auto-assign/run-ticketing",
-          { team, username: user.value.trim(), password: pass.value, dry_run: dry.checked });
+          { team, username: user.value.trim(), password: pass.value, dry_run: dry.checked, repeat: keep.checked && !dry.checked });
         return true;
       },
     });
-    if (ok) { toast("Ticketing auto-assign started."); pollTicketing(); }
+    if (ok) { toast(keep.checked && !dry.checked ? "Ticketing auto-assign is running until you stop it." : "Ticketing auto-assign started."); pollTicketing(); }
   }
 
   function drawRun(d) {
     if (!d || (!d.running && !d.done)) { runHost.replaceChildren(); return; }
     const rows = (d.log || []).map((ln) => h("div", { class: "aa-logline", dir: "auto" }, ln));
-    const head = d.running ? `Running for “${d.team}”…` : (d.error ? `Failed for “${d.team}”` : `Finished for “${d.team}”`);
+    const loop = d.repeat && d.running
+      ? ` — run ${d.runs || 0}${d.runs ? " done" : ""}, ${d.assigned || 0} assigned so far${d.next_run_at ? `, next at ${d.next_run_at.slice(11, 16)}` : ""}${d.stopping ? " (stopping after this run)" : ""}`
+      : "";
+    const head = (d.running ? `Running for “${d.team}”…` : (d.error && !d.repeat ? `Failed for “${d.team}”` : `Finished for “${d.team}”`)) + loop;
     const tone = d.running ? "op-t-info" : (d.error ? "op-t-danger" : "op-t-ok");
     const summary = d.error ? d.error : (d.summary || (d.done ? "Done." : ""));
     runHost.replaceChildren(OPS.card("Ticketing auto-assign", { hint: d.started_at ? `started ${d.started_at.replace('T', ' ')}` : "" },
       h("p", { class: "op-note op-block " + tone }, I(d.running ? "refresh" : (d.error ? "alert" : "check")),
         h("span", { dir: "auto" }, head + (summary ? " — " + summary : ""))),
+      d.running && d.repeat && !d.stopping
+        ? h("div", { class: "op-toolbar" }, h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: stopTicketing }, I("x"), "Stop"))
+        : null,
       rows.length ? h("div", { class: "aa-log" }, ...rows) : null));
+  }
+
+  async function stopTicketing() {
+    try { await api("POST", "/api/ops/auto-assign/run-ticketing/stop", {}); toast("Stopping after the current run."); }
+    catch (e) { toast(e.message, "error"); }
+    pollTicketing();
   }
 
   async function pollTicketing() {

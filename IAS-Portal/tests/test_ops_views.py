@@ -1058,3 +1058,30 @@ def test_documentation_screenshots(demo_data, tab):
     page.wait_for_timeout(600)
     page.screenshot(path=str(folder / "ops-system.png"))
     assert t.later_problems() == [], t.problems
+
+
+def test_ticketing_run_now_offers_keep_running_and_a_stop_button(app, demo_data, tab):
+    """Run now keeps running by default (like the bank's bot); a dry run runs once. While it keeps running, the page
+    shows the runs so far and a Stop button that ends the loop after the current run."""
+    t = tab(demo.MANAGER_ID, demo_data["password"])
+    page = t.open("/auto-assign", ".aa-target")
+    page.locator(".aa-target", has_text="Ticketing auto-assign").get_by_role("button", name="Run now").click()
+    page.wait_for_selector("dialog.dlg")
+    keep = page.locator("dialog.dlg label", has_text="Keep running").locator("input")
+    dry = page.locator("dialog.dlg label", has_text="Dry run").locator("input")
+    assert keep.is_checked() and "every" in text_of(page, "dialog.dlg")
+    dry.check()
+    assert not keep.is_checked() and keep.is_disabled()
+    page.keyboard.press("Escape")
+    app.extensions["ops_ticketing_run"] = {"running": True, "done": False, "team": "Flex Cube", "actor": demo.MANAGER_ID,
+                                           "started_at": "2026-10-11T09:00:00", "log": ["09:00:01 run 1"], "repeat": True,
+                                           "runs": 2, "assigned": 5, "next_run_at": "2026-10-11T09:10:00", "summary": "",
+                                           "error": "", "by_employee": {}, "dry_run": False, "interval_minutes": 5}
+    page = t.open("/auto-assign", ".aa-target")
+    page.wait_for_selector("text=5 assigned so far")
+    assert "next at 09:10" in page.inner_text("body")
+    page.get_by_role("button", name="Stop").click()
+    page.wait_for_function("() => document.body.innerText.includes('stopping after this run')")
+    assert app.extensions["ops_ticketing_run"]["stop"] is True
+    app.extensions["ops_ticketing_run"]["running"] = False                  # let the page's poll settle
+    assert t.later_problems(*not_yet_written()) == [], t.problems

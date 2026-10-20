@@ -194,15 +194,7 @@ def js_exists(selector):
     return "!!document.querySelector(" + json.dumps(selector) + ")"
 
 
-def js_landing_packages():
-    """The package names on the after-login packages page (rows that carry an Enter link) - only to tell the manager
-    which packages their account holds when the supervisor one is missing."""
-    return ("(() => { const out = [];"
-            + "for (const tr of document.querySelectorAll('table tr')) {"
-            + "  if (!tr.querySelector(\"a[id*='btnSubmit'], a, input[type=submit], button\")) continue;"
-            + "  const t = (tr.innerText || tr.textContent || '').replace(/\\s+/g, ' ').trim();"
-            + "  if (t && t.length < 200 && !out.includes(t)) out.push(t); }"
-            + "return out.slice(0, 15); })()")
+js_landing_packages = S.js_landing_packages      # the packages the account holds (shared with the SLA scan)
 
 
 def js_show_all(length_selector, grid_selector):
@@ -305,19 +297,11 @@ def _login_and_open(ctx, browser, cfg, username, password):
     """Log in, enter the supervisor package by NAME, and open the assign-new-requests page."""
     timeout_s = int(cfg["timeout_seconds"])
     base = cfg["base_url"].rstrip("/")
-    sel = cfg.get("selectors") or {}
     sa = cfg["selectors_assign"]
-    login_marker = S.url_marker(cfg["login_path"], "login.aspx", keep_extension=True)
 
     browser.navigate(base + cfg["login_path"], timeout=timeout_s)
-    browser.eval(S.js_fill_login(sel.get("username"), sel.get("password"), username, password))
-    if sel.get("login_button"):
-        S._click(browser, S.js_click_selector(sel["login_button"]))
-    elif not S._click(browser, S.js_click_text(cfg["login_button_text"])):
-        S._press_enter(browser)
-    if browser.wait_url(lambda u: login_marker not in u.lower(), timeout=timeout_s) is None:
-        raise S.LoginError("Login failed - still on the login page. Check the portal user and password you typed.")
-    browser.wait_ready(timeout_s)
+    S.login(browser, cfg, username, password, "Login failed - still on the login page. Check the portal user and "
+                                              "password you typed.")            # the real ids first, as the SLA scan
     ctx.log("login OK")
 
     package = cfg.get("package_text") or ""

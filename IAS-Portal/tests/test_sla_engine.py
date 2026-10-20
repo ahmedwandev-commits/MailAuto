@@ -934,6 +934,53 @@ class TestEndToEnd:
             assert windows == [2]                                  # the application's own window
             assert_scanned_everything(result)
 
+    def test_the_real_portals_login_ids_are_used_even_with_a_search_box_first(self, store):
+        """The real login fields are #ContentPlaceHolder1_txtName / _txtPassword / _btnAdd; a guess ("the first text box")
+        would type the user name into the site's search box. They work even when the saved settings name no selector."""
+        with FakePortal(sample_requests(NOW), login_style="real") as portal:
+            result, _ = portal_run(store, portal, selectors={})
+            assert result.ok, result.error
+            assert portal.logins == [True]
+
+    def test_a_login_page_without_its_fields_is_not_reported_as_a_wrong_password(self, store):
+        """A changed or broken login page must not pause the SLA job as 'wrong password'."""
+        with FakePortal(sample_requests(NOW), login_style="no_fields") as portal:
+            result, _ = portal_run(store, portal)
+            assert not result.ok and "fields were not found" in result.error
+            assert result.error_kind != "auth" and portal.logins == []
+
+    def test_the_package_is_opened_by_its_btnsubmit_link_even_with_old_settings(self, store):
+        """The real row's Enter link is a[id*=btnSubmit] «دخــــــول»; saved settings may still say 'تحويل', and the row
+        has another link after it (the old 'last control' guess would click that one)."""
+        with FakePortal(sample_requests(NOW), open_mode="postback_script") as portal:
+            result, _ = portal_run(store, portal, package_link_text="تحويل")
+            assert result.ok, result.error
+            assert "/help" not in [p for _, p in portal.hits]
+
+    def test_the_re_assign_page_is_opened_from_the_portals_menu(self, store):
+        """The real menu link is relative to the package's folder; a guessed folder in the settings must not matter."""
+        with FakePortal(sample_requests(NOW)) as portal:
+            result, _ = portal_run(store, portal, reassign_path="/SecurityCodeRequest/Old_Folder/Request_ReAssign.aspx")
+            assert result.ok, result.error
+            assert_scanned_everything(result)
+
+    def test_an_empty_queue_is_accepted_only_when_the_portal_says_no_data(self, store):
+        with FakePortal(sample_requests(NOW), variant="empty") as portal:
+            result, _ = portal_run(store, portal)
+            assert result.ok, result.error
+            assert result.snapshot_data["totals"]["open"] == 0
+
+    def test_a_grid_that_has_not_loaded_is_not_taken_for_an_empty_queue(self, store):
+        """Recording an empty scan closes every open request - so a grid with no rows AND no «no data» line fails."""
+        with FakePortal(sample_requests(NOW), variant="not_loaded") as portal:
+            result, _ = portal_run(store, portal, timeout=3)
+            assert not result.ok and "not finish loading" in result.error and result.snapshot_data is None
+
+    def test_a_grid_holding_fewer_rows_than_the_portal_counts_is_refused(self, store):
+        with FakePortal(sample_requests(NOW), variant="short_info") as portal:
+            result, _ = portal_run(store, portal)
+            assert not result.ok and "of 13" in result.error and result.snapshot_data is None
+
     def test_same_tab_datatables_reads_every_page_through_the_api(self, store, monkeypatch):
         sources = []
         windows = window_log(monkeypatch)

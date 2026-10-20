@@ -79,7 +79,7 @@ DEFAULTS = {
         "reassign_path": "/SecurityCodeRequest/Security_Assign_Maker/Request_ReAssign.aspx",
         "app_url_fragment": "securitycoderequest",
         "package_text": "موظف اسناد - مستخدم السرية",
-        "package_link_text": "تحويل",
+        "package_link_text": "دخول",            # the real row's «دخــــــول» link (its a[id*=btnSubmit] is preferred)
         "login_button_text": "دخول",
         "search_button_text": "بحث",
         "sent_date_header": "تاريخ الارسال للسرية",

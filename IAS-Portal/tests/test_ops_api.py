@@ -1359,6 +1359,69 @@ def test_the_change_requests_tab_says_how_many_scoreboard_requests_it_could_not_
     assert body["scoreboard"] == {"counted": 3, "listed": 1}
 
 
+def _ticketing_ready(flex_mgr, make_account):
+    make_account("t1", "user", "Tarek Ticket", email="tarek@example.test", team="Flex Cube", portal_id="700201")
+    r = flex_mgr.put("/api/ops/auto-assign/team", {"team": "Flex Cube", "kind": "ticketing", "enabled": True,
+                                                   "interval_minutes": 1,
+                                                   "rules": [{"employees": ["tarek@example.test"], "applications": [],
+                                                              "from": "", "to": ""}]})
+    assert r.status_code == 200, r.get_json()
+
+
+def _wait_for(check, seconds=10):
+    import time
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        out = check()
+        if out:
+            return out
+        time.sleep(0.05)
+    raise AssertionError("timed out")
+
+
+def test_ticketing_auto_assign_keeps_running_until_stopped_and_never_keeps_the_password(app, flex_mgr, make_account,
+                                                                                       monkeypatch):
+    """Run now with "keep running": like the bank's bot, a run every N minutes until the manager stops it. The password
+    lives only in the running loop's memory: never in the status, the log or any file."""
+    from calllog.ops import api as ops_api
+    from calllog.ops.engines import assign_engine, common
+    _ticketing_ready(flex_mgr, make_account)
+    calls = []
+
+    def fake_run(ctx):
+        calls.append(ctx.options["password"] == "Portal-Secret-9")
+        ctx.log(f"run {len(calls)}")
+        return common.JobResult(ok=True, summary="assigned 1 of 1 new request(s)",
+                                snapshot_data={"assigned": 1, "found": 1, "by_employee": {"Tarek Ticket": 1}})
+    monkeypatch.setattr(assign_engine, "run", fake_run)
+    monkeypatch.setattr(ops_api, "TICKETING_LOOP_UNIT_SECONDS", 0.05)      # "1 minute" = 50 ms in the test
+    r = flex_mgr.post("/api/ops/auto-assign/run-ticketing", {"team": "Flex Cube", "username": "mgr1",
+                                                              "password": "Portal-Secret-9", "repeat": True})
+    assert r.status_code == 200, r.get_json()
+    st = _wait_for(lambda: (lambda d: d if d["runs"] >= 3 else None)(flex_mgr.get("/api/ops/auto-assign/run-ticketing").get_json()))
+    assert st["running"] and st["repeat"] and st["assigned"] >= 3
+    assert flex_mgr.post("/api/ops/auto-assign/run-ticketing/stop", {}).status_code == 200
+    done = _wait_for(lambda: (lambda d: d if not d["running"] else None)(flex_mgr.get("/api/ops/auto-assign/run-ticketing").get_json()))
+    assert done["done"] and "stopped" in done["summary"].lower() and all(calls)
+    everything = json.dumps(done) + json.dumps(app.extensions.get("ops_ticketing_run"), default=str)
+    assert "Portal-Secret-9" not in everything
+    assert not any("Portal-Secret-9" in p.read_text(errors="ignore") for p in app.extensions["ops"].root.rglob("*") if p.is_file())
+
+
+def test_a_wrong_password_stops_the_loop_at_once(app, flex_mgr, make_account, monkeypatch):
+    from calllog.ops import api as ops_api
+    from calllog.ops.engines import assign_engine, common
+    _ticketing_ready(flex_mgr, make_account)
+    calls = []
+    monkeypatch.setattr(assign_engine, "run", lambda ctx: calls.append(1) or common.JobResult(
+        ok=False, error="Login failed - still on the login page.", error_kind="auth"))
+    monkeypatch.setattr(ops_api, "TICKETING_LOOP_UNIT_SECONDS", 0.05)
+    flex_mgr.post("/api/ops/auto-assign/run-ticketing", {"team": "Flex Cube", "username": "mgr1", "password": "bad",
+                                                          "repeat": True})
+    done = _wait_for(lambda: (lambda d: d if not d["running"] else None)(flex_mgr.get("/api/ops/auto-assign/run-ticketing").get_json()))
+    assert calls == [1] and "Login failed" in done["error"]
+
+
 def test_shared_is_counts_only(make_account, hub):
     emp = make_account("1005", "user", "Eli Employee", email="eli@example.test", teams=["Flex Cube", "Card Management"])
     body = emp.get("/api/ops/shared").get_json()
