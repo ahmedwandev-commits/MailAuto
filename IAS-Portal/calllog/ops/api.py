@@ -15,6 +15,7 @@ Rules this file keeps:
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 from datetime import date, datetime, timedelta
@@ -284,9 +285,24 @@ def email_headline(stats):
     return {k: stats.get(k, 0) for k in EMAIL_HEADLINE}
 
 
+def sla_oldest_now(requests):
+    """Minutes the oldest open request has been waiting NOW (from its sent date), the way the Live tickets tab counts
+    it - not the age frozen at the last scan. None when no request has a sent date (pages show "—")."""
+    now, ages = auth.now(), []
+    for r in requests or []:
+        try:
+            sent = datetime.fromisoformat(str((r or {}).get("sent_at") or "")[:19])
+        except ValueError:
+            continue
+        ages.append(max(0, int((now - sent).total_seconds() // 60)))
+    return max(ages) if ages else None
+
+
 def sla_headline(data):
     totals = data.get("totals") or {}
-    return {k: totals.get(k, 0) for k in ("open", "within", "reminder", "breached", "no_date", "oldest_minutes")}
+    out = {k: totals.get(k, 0) for k in ("open", "within", "reminder", "breached", "no_date")}
+    out["oldest_minutes"] = sla_oldest_now(data["requests"]) if "requests" in data else totals.get("oldest_minutes")
+    return out
 
 
 # ----------------------------------------------------------------------------- one team rule for SLA and ITSM data
@@ -627,7 +643,7 @@ def my_sla(user):
         totals["open"] += 1
         if r.get("status") in schemas.SLA_STATUSES:
             totals[r["status"]] += 1
-        totals["oldest_minutes"] = max(totals["oldest_minutes"], r.get("age_minutes") or 0)
+    totals["oldest_minutes"] = sla_oldest_now(mine)                # by the clock, like the Live tab and Home
     return {**empty, "available": True, "updated_at": snap.get("generated_at"),
             "thresholds": (snap.get("data") or {}).get("thresholds") or {}, "totals": totals,
             "requests": [{"key": r.get("key", ""), "sent_at": r.get("sent_at"), "age_minutes": r.get("age_minutes"),
@@ -704,11 +720,15 @@ def build_attention(email_stats, email_rows, sla_data, itsm_data, metas):
         for category, n in (itsm_data.get("totals") or {}).items():
             if n and "rollback" in str(category).lower():
                 items.append(_attention("warn", "itsm", f"{_plural(n, 'rollback request')} waiting"))
-        if viewer_is_admin():                                   # a scan read-failure is a collector problem: admin only
-            for role in itsm_data.get("roles") or []:
-                if role.get("error"):
-                    items.append(_attention("danger", "itsm", f"ITSM role '{str(role.get('role'))[:60]}' could not be read: "
-                                                                f"{str(role['error'])[:120]}"))
+        failed = [r for r in itsm_data.get("roles") or [] if r.get("error")]
+        if viewer_is_admin():                                   # the collector's error text: administrators only
+            for role in failed:
+                items.append(_attention("danger", "itsm", f"ITSM role '{str(role.get('role'))[:60]}' could not be read: "
+                                                            f"{str(role['error'])[:120]}"))
+        elif failed:                                            # a manager's totals would look complete otherwise
+            names = ", ".join(str(r.get("role"))[:60] for r in failed[:3])
+            items.append(_attention("warn", "itsm", f"{_plural(len(failed), 'ITSM role')} of your team could not be read "
+                                                    f"in the last scan ({names}): its requests are missing from the totals"))
     for module, meta in metas.items():
         label = MODULE_LABELS[module]
         if not meta["enabled"]:
@@ -791,8 +811,8 @@ def overview():
         changes = itsm_data.get("changes") or {}
         itsm_block = {"available": True, "categories": itsm_data.get("categories") or [],
                       "totals": itsm_data.get("totals") or {},
-                      "role_errors": ([{"role": r.get("role"), "error": str(r.get("error"))[:160]}
-                                       for r in itsm_data.get("roles") or [] if r.get("error")] if viewer_is_admin() else []),
+                      "role_errors": [{"role": r.get("role"), "error": str(r.get("error"))[:160] if viewer_is_admin() else ""}
+                                      for r in itsm_data.get("roles") or [] if r.get("error")],   # the reason: admins only
                       "changes": {"new": len(changes.get("new") or []), "closed": len(changes.get("closed") or [])},
                       "updated_at": snaps["itsm"][0]["generated_at"]}
     yesterday_calls = calls_totals(yesterday, scope)
@@ -919,16 +939,21 @@ def sla_analysis_get():
     def named(r):
         who = people.get(str(r.get("executor") or "").strip())
         return {**r, "executor": who} if who else r
-    records = {}
-    for k, r in (doc.get("records") or {}).items():
-        r = named(r)
-        records[k] = {**r, "team": resolver.sla_team(r.get("system"), r.get("assignee") or r.get("executor")) or teams.NO_TEAM}
-    if not records:                                         # nothing recorded at all yet
-        return jsonify(available=False, server_time=now, scope=overlay.scope_label(auth.team_scope()))
-    unmapped = sum(1 for r in records.values() if r["team"] == teams.NO_TEAM)
     scope = auth.team_scope()                               # a manager sees only their team(s); admin / all-teams -> everything
+
+    def with_teams(r):
+        who = r.get("assignee") or r.get("executor")
+        found = [resolver.sla_team(sys_, who) for sys_ in (r.get("systems") or [r.get("system")])]
+        found = list(dict.fromkeys(t for t in found if t)) or [teams.NO_TEAM]
+        mine = [t for t in found if teams.in_scope(scope, t)]   # a manager's own team first, so their tables show it
+        return {**r, "team": (mine or found)[0], "teams": found}
+    records = {k: with_teams(named(r)) for k, r in (doc.get("records") or {}).items()}
+    if not records:                                         # nothing recorded at all yet
+        return jsonify(available=False, server_time=now, scope=overlay.scope_label(scope))
+    unmapped = sum(1 for r in records.values() if r["teams"] == [teams.NO_TEAM])
     if scope is not None:                                   # (an empty view says why, instead of "nothing recorded")
-        records = {k: r for k, r in records.items() if teams.in_scope(scope, r["team"])}
+        records = {k: {**r, "teams": [t for t in r["teams"] if teams.in_scope(scope, t)]}
+                   for k, r in records.items() if any(teams.in_scope(scope, t) for t in r["teams"])}
     cfg = {**sla_records.default_config(), **(doc.get("config") or {})}
     options = sla_records.filter_options(records)            # the executors/checkers/teams/date-range the viewer may pick
     filt = {"date_from": request.args.get("from", ""), "date_to": request.args.get("to", ""),
@@ -938,6 +963,7 @@ def sla_analysis_get():
     # the "right now" open strip must not be date-bounded (a request assigned earlier is still open today)
     live = sla_records.filter_records(records, {**filt, "date_from": "", "date_to": ""})
     return jsonify(available=True, server_time=now, scope=overlay.scope_label(scope), unmapped=unmapped,
+                   scan_interval=health.module_interval(hub_cfg(), "sla"),
                    options=options, filter={k: (v or "") for k, v in filt.items()},
                    **sla_records.analyze(filtered, cfg, now=now, live_records=live, **live_sla_view()))
 
@@ -962,9 +988,11 @@ def sla_config_get():
     if scope is not None:                                    # a manager's count is their own team's, like the analysis
         resolver = team_resolver()
         people = sla_people()
-        records = [r for r in records.values()
-                   if teams.in_scope(scope, resolver.sla_team(r.get("system"), r.get("assignee")
-                                                              or people.get(str(r.get("executor") or "").strip(), r.get("executor"))))]
+
+        def mine(r):                                         # the analysis's rule: any of the request's applications
+            who = r.get("assignee") or people.get(str(r.get("executor") or "").strip(), r.get("executor"))
+            return any(teams.in_scope(scope, resolver.sla_team(sys_, who)) for sys_ in (r.get("systems") or [r.get("system")]))
+        records = [r for r in records.values() if mine(r)]
     return jsonify(config=sla_records.clean_config(doc.get("config")), is_admin=viewer_is_admin(), recorded=len(records))
 
 
@@ -1110,7 +1138,23 @@ def itsm_analysis_get():
             "role": request.args.get("role", ""), "conclusion": request.args.get("conclusion", "")}
     filtered = itsm_records.filter_records(records, filt)
     return jsonify(available=True, server_time=now, options=options, filter={k: (v or "") for k, v in filt.items()},
-                   **itsm_records.analyze(filtered))
+                   scoreboard=itsm_listed_vs_counted(scope), **itsm_records.analyze(filtered))
+
+
+def itsm_listed_vs_counted(scope):
+    """{"counted", "listed"}: the waiting requests the latest scoreboard COUNTS (what the Scoreboard tab and Home show)
+    and the rows the portal LISTED (all the Change requests tab can record) - a paged or unreadable list makes them
+    differ, and the tab says so instead of showing a smaller number with no word."""
+    snap, _ = read_snapshot("itsm")
+    data = scoped_data("itsm", (snap or {}).get("data"), scope) or {}
+    counted = listed = 0
+    for role in data.get("roles") or []:
+        for category, cell in (role.get("categories") or {}).items():
+            if re.search(r"complet|closed|done", str(category), re.I) or not isinstance(cell, dict):
+                continue                                      # finished work is not waiting (OPS.isDoneCategory)
+            counted += int(cell.get("count") or 0)
+            listed += len(cell.get("rows") or [])
+    return {"counted": counted, "listed": min(listed, counted)}
 
 
 @bp.get("/events")

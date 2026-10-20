@@ -633,13 +633,21 @@
     }).el;
   }
 
+  function unlistedNote(d) {                       // the scoreboard COUNTS more than the portal LISTED: say so, once
+    const sb = d.scoreboard || {}, gap = (sb.counted || 0) - (sb.listed || 0);
+    if (gap <= 0) return null;
+    return h("div", { class: "sx-banner info", role: "note" }, glyph("clock"), h("span", { class: "sx-banner-text" },
+      `The scoreboard counts ${fmtNum(sb.counted)} waiting request${sb.counted === 1 ? "" : "s"} now, but the portal listed ${fmtNum(sb.listed)}: `
+      + `${fmtNum(gap)} ${gap === 1 ? "is" : "are"} not in this table (a paged or unreadable list). The Scoreboard tab counts ${gap === 1 ? "it" : "them"}.`));
+  }
+
   function renderAnalysis(d) {
     if (!d || !d.available) {
       el.analysisPanel.replaceChildren(OPS.emptyState({ title: "No change requests recorded yet", icon: "server",
         text: "This records every change order live: its scheduled execution time (what the business asks, read from the CR's own column — set that column in System › Settings › ITSM) and its conclusion (completed / rollback / pending). It fills in as the ITSM scan runs." }));
       return;
     }
-    const b = d.buckets || {}, stack = [crFilterBar(d)];
+    const b = d.buckets || {}, stack = [crFilterBar(d), unlistedNote(d)];
     if (!d.meta || !d.meta.records) {
       stack.push(OPS.emptyState({ title: "No change requests match this filter", icon: "server",
         text: "Change the date or pick a different role / conclusion — or press Clear to see every recorded change request." }));

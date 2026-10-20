@@ -137,6 +137,9 @@ def record_scan(records, rows, cfg, now, system_team=None):
                                   "checker": "", "confirmed_at": "", "final_outcome": "", "last_status": "", "last_seen": now}
         rec["last_status"] = col(row, "status")
         rec["last_seen"] = now
+        system = col(row, "system")                          # a request for several applications: one line each
+        if system and system != rec.get("system") and system not in (rec.get("systems") or []):
+            rec["systems"] = [s for s in [rec.get("system")] + list(rec.get("systems") or []) if s] + [system]
         exec_time = col(row, "executed_at")
         # the employee clock is stamped only when we actually SEE the executed stage (or a feed gives its time) -
         # a request first seen already confirmed skipped our view of the execution, so we leave it unknown.
@@ -413,8 +416,10 @@ def analyze(records, cfg, now=None, live_records=None, live_breach_minutes=None,
                 by_check.setdefault(r.get("checker") or "—", _Agg()).add(r.get("final_outcome"), mgr_min, sla)
             handler = _clean(r.get("executor")) or _clean(r.get("assignee")) or "—"
             by_handler.setdefault(handler, _Agg()).add(outcome, total_min, target)
-            by_team.setdefault(team, _Agg()).add(outcome, total_min, target)
-            by_system.setdefault(system, _Agg()).add(outcome, total_min, target)
+            for t in r.get("teams") or [team]:               # a request for several applications counts for each team
+                by_team.setdefault(t, _Agg()).add(outcome, total_min, target)
+            for sys_ in r.get("systems") or [system]:
+                by_system.setdefault(sys_, _Agg()).add(outcome, total_min, target)
             day = _closed_at(r)[:10]
             if day:
                 by_day.setdefault(day, _Agg()).add(outcome, total_min, target)
@@ -496,7 +501,7 @@ def filter_records(records, filt):
             continue
         if check and _clean(r.get("checker")).lower() != check:
             continue
-        if team and _clean(r.get("team")).lower() != team:
+        if team and team not in {_clean(t).lower() for t in (r.get("teams") or [r.get("team")])}:
             continue
         out[rid] = r
     return out
@@ -513,8 +518,9 @@ def filter_options(records):
             execs.add(_clean(r.get("assignee")))
         if _clean(r.get("checker")):
             checks.add(_clean(r.get("checker")))
-        if _clean(r.get("team")):
-            teams.add(_clean(r.get("team")))
+        for t in r.get("teams") or [r.get("team")]:
+            if _clean(t):
+                teams.add(_clean(t))
         day = _clean(r.get("assigned_at"))[:10]
         if day:
             days.append(day)

@@ -269,7 +269,10 @@
       if (!r.present) return h("span", { class: "hint" }, "The collector has not reported yet.");
       if (r.paused) return h("span", { class: "op-note op-t-danger" }, OPS.icon("alert"), bidi(r.paused_reason || "Login failed - fix the password in collector_config.json. Retries are paused until it changes or you press Run now."));
       if (r.last_status === "error" && r.last_error) return h("span", { class: "op-note op-t-danger" }, OPS.icon("alert"), bidi(r.last_error));
-      return h("span", {}, bidi(r.last_summary || "—"), r.last_duration_seconds != null ? h("span", { class: "hint" }, ` · took ${Math.round(r.last_duration_seconds)} s`) : null);
+      // what the collector saw at that scan (the pages count later changes - a "no action" mark, a reply - on top of it)
+      const at = r.last_ok_at || r.last_run_at;
+      return h("span", {}, at ? h("span", { class: "hint" }, `at the ${OPS.fmtClock(at)} scan: `) : null, bidi(r.last_summary || "—"),
+        r.last_duration_seconds != null ? h("span", { class: "hint" }, ` · took ${Math.round(r.last_duration_seconds)} s`) : null);
     }
 
     let serverNow = "";

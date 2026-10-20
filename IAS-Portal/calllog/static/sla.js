@@ -813,7 +813,8 @@
     }
     const kpis = h("div", { class: "sx-kpis" },
       OPS.kpi({ key: "an-open", label: "Open now", value: fmtNum(L.open || 0), sub: "with the employee (live)", icon: "clock", hero: true }),
-      OPS.kpi({ key: "an-closed-today", label: "Closed today", value: fmtNum(L.closed_today || 0), sub: "left the queue or confirmed", tone: L.closed_today ? "ok" : null, icon: "check" }),
+      OPS.kpi({ key: "an-closed-today", label: "Closed today", value: fmtNum(L.closed_today || 0),
+        sub: d.scan_interval ? `seen leaving the queue (a scan every ${fmtNum(d.scan_interval)} min) or confirmed` : "left the queue or confirmed", tone: L.closed_today ? "ok" : null, icon: "check" }),
       OPS.kpi({ key: "an-past", label: `Breached ≥ ${fmtMin(sla)}`, value: fmtNum(L.breached || 0), sub: "open - the same limit as Live tickets", tone: L.breached ? "danger" : null, icon: "shield" }),
       OPS.kpi({ key: "an-oldest", label: "Oldest open", value: fmtMin(L.oldest_minutes), sub: "waiting the longest", tone: (L.oldest_minutes != null && L.oldest_minutes >= sla) ? "danger" : null, icon: "clock" }));
     const parts = [kpis];

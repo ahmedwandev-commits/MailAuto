@@ -51,12 +51,14 @@ def email_data(rows, **stats_extra):
 
 
 def sla_request(key, user, status="within", age=10, **fields):
-    return {"key": key, "security_user": user, "sent_at": "2026-10-11T08:50:00", "age_minutes": age, "status": status,
+    """An open security request ``age`` minutes old at the test clock (09:00), as the scan writes it."""
+    sent = (dt.datetime(2026, 10, 11, 9, 0) - dt.timedelta(minutes=age)).isoformat(timespec="seconds") if age is not None else None
+    return {"key": key, "security_user": user, "sent_at": sent, "age_minutes": age, "status": status,
             "fields": {"النظام": "Flexcube", **fields}}
 
 
 def sla_data(requests):
-    totals = {"open": len(requests), "oldest_minutes": max((r["age_minutes"] for r in requests), default=0)}
+    totals = {"open": len(requests), "oldest_minutes": max((r["age_minutes"] or 0 for r in requests), default=0)}
     for s in schemas.SLA_STATUSES:
         totals[s] = sum(1 for r in requests if r["status"] == s)
     users = sorted({r["security_user"] for r in requests})
@@ -949,6 +951,24 @@ def test_a_managers_empty_analysis_says_why_and_export_lines_name_people_like_th
     assert flex_mgr.get("/api/ops/sla-config").get_json()["recorded"] == 1          # the same count everywhere
 
 
+def test_a_request_for_several_applications_counts_for_each_of_their_teams(admin, flex_mgr, make_account, ops):
+    """One export request (ReqID2) with a Flexcube line and a Prepaid line belongs to both teams: each manager sees it,
+    the by-team table lists it under both, and it is still one request."""
+    for name, team in (("Flexcube", "Flex Cube"), ("Prepaid", "Card Management")):
+        assert admin.post("/api/ops/auto-assign/apps", {"name": name, "team": team}).status_code == 200
+    card_mgr = make_account("cara", "manager", "Cara Card", email="cara@example.test", team="Card Management")
+    export = ("ReqID2,FStatusID1,DateF,SStatusID,DateT1,EmpNo,ApplicationName\n"
+              "77,اسناد لمستخدم السرية,10/11/2026 08:00:00 AM,تم التعزيز على التنفيذ,10/11/2026 09:00:00 AM,700101,Flexcube\n"
+              "77,اسناد لمستخدم السرية,10/11/2026 08:00:00 AM,تم التعزيز على التنفيذ,10/11/2026 09:00:00 AM,700101,Prepaid\n")
+    r = _upload(admin, export.encode("utf-8"))
+    assert r.status_code == 200, r.get_json()
+    whole = admin.get("/api/ops/sla-analysis").get_json()
+    assert whole["overall"]["n"] == 1 and {t["team"] for t in whole["by_team"]} == {"Flex Cube", "Card Management"}
+    assert {s["system"] for s in whole["by_system"]} == {"Flexcube", "Prepaid"}
+    for mgr in (flex_mgr, card_mgr):
+        assert mgr.get("/api/ops/sla-analysis").get_json()["overall"]["n"] == 1
+
+
 def test_import_feed_says_what_is_wrong_instead_of_up_to_date(admin, tmp_path):
     r = admin.post("/api/ops/sla-feed/import", {})
     assert r.status_code == 400 and "No export feed is set" in r.get_json()["error"]
@@ -1038,6 +1058,7 @@ def test_sla_analysis_records_a_request_that_left_the_queue_as_closed(admin, ops
     assert body["buckets"] == {"open": 1, "awaiting": 0, "closed": 1}
     assert body["by_handler"][0]["handler"] == "Alice" and body["overall"]["median_minutes"] == 45.0
     assert body["live"]["closed_today"] == 1 and body["live"]["open"] == 1
+    assert body["scan_interval"] == 15                                 # "Closed today" says how often the scans look
     again = admin.get("/api/ops/sla-analysis").get_json()                                 # the same scan: no change
     assert again["buckets"] == body["buckets"] and ops.read_sla_records()["last_scan"] == "2026-10-11T08:45:00"
 
@@ -1304,6 +1325,38 @@ def test_overview_is_team_scoped_for_managers(flex_mgr, hub):
     strip = body["shared"]["email"]
     assert strip["business_emails"] == 2 and strip["scope"] == "teams" and strip["teams"] == ["Flex Cube"]
     assert strip["sla_breached"] == 0
+
+
+def test_the_oldest_request_is_aged_by_the_clock_everywhere_like_the_live_tab(admin, emp, ops, clock):
+    """Home, the Team-status strip and My work give the oldest request's age NOW (from its sent date), as the Live
+    tickets tab does - not the age frozen at the last scan; with no dated request it is "—" (None), not 0."""
+    put_snapshot(ops, "sla", sla_data([sla_request("k1", "احمد سالم", "breached", 150), sla_request("k2", "Bob", "within", 20)]))
+    clock.advance(minutes=40)                                                    # 40 minutes after the scan
+    assert admin.get("/api/ops/overview").get_json()["sla"]["oldest_minutes"] == 190
+    assert admin.get("/api/ops/shared").get_json()["sla"]["oldest_minutes"] == 190
+    assert emp.get("/api/ops/my").get_json()["sla"]["totals"]["oldest_minutes"] == 190
+    put_snapshot(ops, "sla", sla_data([sla_request("k3", "Bob", "no_date", None)]))
+    assert admin.get("/api/ops/overview").get_json()["sla"]["oldest_minutes"] is None
+
+
+def test_a_manager_is_told_when_a_role_of_their_team_could_not_be_read(admin, flex_mgr, ops):
+    """Their totals would look complete otherwise. The manager gets the role's name, not the collector's error text."""
+    data = itsm_data(errors=["IMP UAT I-Flex SMS"])                        # a Flex Cube role whose read failed
+    put_snapshot(ops, "itsm", data)
+    body = flex_mgr.get("/api/ops/overview").get_json()
+    assert body["itsm"]["role_errors"] == [{"role": "IMP UAT I-Flex SMS", "error": ""}]
+    notes = [a for a in body["attention"] if a["module"] == "itsm" and "could not be read" in a["text"]]
+    assert len(notes) == 1 and "Set Role button" not in notes[0]["text"] and "missing from the totals" in notes[0]["text"]
+    whole = admin.get("/api/ops/overview").get_json()                       # the administrator still gets the reason
+    assert whole["itsm"]["role_errors"][0]["error"] == "Set Role button not found"
+
+
+def test_the_change_requests_tab_says_how_many_scoreboard_requests_it_could_not_list(admin, ops):
+    """The scoreboard counts 3 implementation requests but the portal listed one row: the tab says 2 are not in it
+    (the Scoreboard's 3 and the tab's 1 are both right - one is a count, the other the rows that could be read)."""
+    put_snapshot(ops, "itsm", itsm_data(imp=3, rollback=0))
+    body = admin.get("/api/ops/itsm-analysis").get_json()
+    assert body["scoreboard"] == {"counted": 3, "listed": 1}
 
 
 def test_shared_is_counts_only(make_account, hub):
