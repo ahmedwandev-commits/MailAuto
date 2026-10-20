@@ -120,7 +120,10 @@ def build_args(exe, port, profile, headless):
     args = [
         exe, f"--remote-debugging-port={port}", "--remote-allow-origins=*",
         f"--user-data-dir={profile}", "--ignore-certificate-errors",
-        "--no-first-run", "--no-default-browser-check", "--disable-default-apps", "--log-level=3", "about:blank",
+        "--no-first-run", "--no-default-browser-check", "--disable-default-apps", "--log-level=3",
+        # the portal's package «دخول» link posts back and the RESPONSE opens the application with window.open: a pop-up
+        # blocker stops that window (the bank's proven bot runs Chrome with the blocker off too - ChromeDriver's default)
+        "--disable-popup-blocking", "about:blank",
     ]
     if headless:
         args[1:1] = ["--headless=new", "--window-size=1600,1000", "--disable-gpu", "--mute-audio"]

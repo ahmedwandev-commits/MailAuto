@@ -86,12 +86,15 @@ def active_rules(block, now):
     return [r for r in (block or {}).get("rules") or [] if rule_active(r, now)]
 
 
-def _apps_match(rule_apps, detected_systems):
-    """Does an e-mail's detected systems overlap the rule's applications? ([] apps = matches every mail.)"""
-    wanted = {overlay._key(a) for a in rule_apps or []} - {""}
+def _apps_match(rule_apps, detected_systems, canon=None):
+    """Does an e-mail's detected systems overlap the rule's applications? ([] apps = matches every mail.) ``canon``
+    (an application name -> its canonical name, e.g. email_rules' canonical_application) is applied to BOTH sides, so
+    the portal's 'Flex Cube' / 'صناديق الإستثمار FCIS' match a rule that says 'Flexcube'."""
+    same = canon or (lambda name: name)
+    wanted = {overlay._key(same(a)) for a in rule_apps or [] if str(a or "").strip()} - {""}
     if not wanted:
         return True
-    have = {overlay._key(s) for s in str(detected_systems or "").split(";")} - {""}
+    have = {overlay._key(same(s)) for s in str(detected_systems or "").split(";") if s.strip()} - {""}
     return bool(wanted & have)
 
 
@@ -132,14 +135,14 @@ def plan_email(block, rows, now, members, load=None):
 
 
 # ---------------------------------------------------------------------- ticketing distribution (the portal RPA, pure)
-def plan_ticketing(block, requests, now, members, load=None):
+def plan_ticketing(block, requests, now, members, load=None, canon=None):
     """Which NEW portal requests to hand to which security employee, by the manager's ticketing rules.
 
     The native CDP assign engine reads the "assign new requests" page into ``requests`` - each a dict with a stable
     ``id`` (the grid row id the engine will tick) and a ``system`` (the request's application, matched against a rule's
     applications). ``members`` maps a team member's e-mail to ``{"name", "portal_id"}``; ``portal_id`` is that person's
     value in the portal's الموظفين drop-down (set per user in admin). ``load`` is an optional {portal_id: count} already
-    carried, for balance.
+    carried, for balance. ``canon`` names an application the way the rules do (see ``_apps_match``).
 
     Returns ``[{"id", "portal_id", "email", "name"}]`` - one per request an active rule covers, balanced across that
     rule's employees that have a portal id (fewest-loaded first, then portal id). A request matched by no rule, or whose
@@ -156,7 +159,7 @@ def plan_ticketing(block, requests, now, members, load=None):
         rid = req.get("id")
         if rid is None or rid in taken:
             continue
-        rule = next((r for r in rules if _apps_match(r.get("applications"), req.get("system"))), None)
+        rule = next((r for r in rules if _apps_match(r.get("applications"), req.get("system"), canon)), None)
         if rule is None:
             continue
         pool = []

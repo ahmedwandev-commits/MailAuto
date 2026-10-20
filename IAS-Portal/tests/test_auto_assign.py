@@ -144,3 +144,14 @@ def test_clean_block():
     b = aa.clean_block({"enabled": True, "rules": [{"employees": ["a@x"]}, {"employees": ["ghost@x"]}]},
                        [], {"a@x": "Alice"})
     assert b["enabled"] is True and len(b["rules"]) == 1 and b["rules"][0]["employees"] == ["a@x"]
+
+
+def test_ticketing_rule_applications_match_the_portals_spelling():
+    """The real grid's «النظام» says 'Flex Cube' and 'صناديق الإستثمار FCIS'; a rule names the application the way the
+    e-mail rules do ('Flexcube'). Both sides go through the same aliases, so the rule covers both rows."""
+    from calllog.ops.engines import email_rules
+    canon = email_rules.build_rules({}).canonical_application
+    block = {"enabled": True, "rules": [{"employees": ["a@x"], "applications": ["Flexcube"], "from": "", "to": ""}]}
+    reqs = [treq("1", "Flex Cube"), treq("2", "صناديق الإستثمار FCIS"), treq("3", "DWP")]
+    assert [o["id"] for o in aa.plan_ticketing(block, reqs, NOW, TMEMBERS, canon=canon)] == ["1", "2"]
+    assert aa.plan_ticketing(block, reqs, NOW, TMEMBERS) == []                 # letter-for-letter: nothing matched

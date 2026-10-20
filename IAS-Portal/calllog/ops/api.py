@@ -2172,7 +2172,8 @@ def auto_assign_run_ticketing():
 
         ctx = common.JobContext(job="assign", settings=assign_settings, general={}, store=store, now=clock, log=log,
                                 debug=False, dry_run=dry_run, headed=False, data_dir=data_dir,
-                                options={"teams": teams_arg, "username": username, "password": password})
+                                options={"teams": teams_arg, "username": username, "password": password,
+                                         "email_settings": hub_cfg().get("email") or {}})
         try:
             result = assign_engine.run(ctx)
         except Exception as exc:                                  # noqa: BLE001 - the thread must always settle the state

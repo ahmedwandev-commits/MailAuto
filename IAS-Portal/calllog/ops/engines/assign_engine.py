@@ -35,7 +35,7 @@ from collections import Counter
 from contextlib import suppress
 from datetime import date, datetime
 
-from . import cdp, sla_engine as S
+from . import cdp, email_rules, sla_engine as S
 from .. import auto_assign, overlay
 from ..settings import DEFAULTS, deep_merge
 from .common import JobResult
@@ -58,6 +58,28 @@ _JS_NORM = r"""
 
 class AssignError(RuntimeError):
     pass
+
+
+class SessionEnded(AssignError):
+    """The portal sent its login page in the middle of the run (it ends sessions mid-cycle)."""
+
+
+# the portal ended the session: its login page is back instead of the assign page
+JS_ON_LOGIN = ("(() => /login\\.aspx/i.test(location.href) || (!!document.querySelector(\"input[type=password]\") "
+               "&& !document.querySelector('#ContentPlaceHolder1_ddlFormType')))()")
+
+
+def _check_session(browser, what):
+    if browser.eval(JS_ON_LOGIN):
+        raise SessionEnded(f"The portal session ended {what} (the portal showed its login page).")
+
+
+def _success_text(browser, cfg):
+    """The portal's own result label after Execute («تم التنفيذ بنجاح»), or ''."""
+    sel = (cfg.get("selectors_assign") or {}).get("success_label") or "#ContentPlaceHolder1_lblStatusSuccess"
+    text = browser.eval(f"(() => {{ const e = document.querySelector({json.dumps(sel)}); "
+                        "return e ? (e.textContent || '').trim() : ''; })()")
+    return str(text or "")
 
 
 # --------------------------------------------------------------------------- config
@@ -381,6 +403,7 @@ def _search_form(ctx, browser, cfg, form_type, notes=None):
             notes.add(key)
             ctx.log(text)
     sa = cfg["selectors_assign"]
+    _check_session(browser, "before searching")
     if form_type and browser.eval(js_select_value(sa["form_type"], form_type)) is None:
         ctx.log(f"form type {form_type} is not offered on the assign page - skipped")
         return []
@@ -389,6 +412,7 @@ def _search_form(ctx, browser, cfg, form_type, notes=None):
     if not S._click(browser, S.js_click_selector(sa["search_button"])):
         S._click(browser, S.js_click_text(cfg["search_button_text"]))
     _settle(browser, cfg, SETTLE_MS)
+    _check_session(browser, "while searching")                 # a login page is not an empty grid
     rows, info, how = _show_all_and_read(browser, cfg)
     if rows and info.get("app_col", -1) < 0:
         note("app", f"warning: no «{cfg['app_header']}» column on the grid, so rules limited to applications cannot "
@@ -407,9 +431,11 @@ def _assign_group(ctx, browser, cfg, group, form_type, offered_logged, notes=Non
     verify by the grid shrinking. Returns the number committed."""
     sa = cfg["selectors_assign"]
     who = f"{group.get('name') or '?'} ({group['portal_id']})"
+    _check_session(browser, "before choosing the decision")
     if browser.eval(js_select_value(sa["decision"], cfg["decision_value"])) is None:
         raise AssignError(f"The decision value {cfg['decision_value']} («اسناد لمستخدم السرية») is not offered.")
     _settle(browser, cfg)
+    _check_session(browser, "after choosing the decision")
     wait_s = int(cfg.get("employee_wait_seconds") or 8)
     options = _wait_js(browser, "(" + js_select_options(sa["employee"]) + " || []).filter(o => o.value).length ? "
                        + js_select_options(sa["employee"]) + " : null", wait_s) or []
@@ -423,6 +449,7 @@ def _assign_group(ctx, browser, cfg, group, form_type, offered_logged, notes=Non
         return 0
     browser.eval(js_select_value(sa["employee"], group["portal_id"]))
     _settle(browser, cfg)
+    _check_session(browser, "after choosing the employee")
 
     rows, _info, _how = _show_all_and_read(browser, cfg)      # the post-backs re-rendered the grid: show all, re-read
     want, ids = set(group["ids"]), []
@@ -450,6 +477,13 @@ def _assign_group(ctx, browser, cfg, group, form_type, offered_logged, notes=Non
     ctx.log(f"Execute pressed: {len(ids)} request(s) -> {who}")
     _settle(browser, cfg, SETTLE_MS)
     committed = len(ids)
+    if browser.eval(JS_ON_LOGIN):                              # Execute was sent, its answer never seen
+        raise SessionEnded(f"The portal session ended right after Execute for {who} - check on the portal whether "
+                           f"those {len(ids)} request(s) were assigned.")
+    said = _success_text(browser, cfg)
+    if cfg.get("execute_success_text") and S.norm(cfg["execute_success_text"]) in S.norm(said):
+        ctx.log(f"confirmed by the portal: {said} - {len(ids)} request(s) -> {who}")
+        return committed                                       # the portal's word; the queue may already have grown
     with suppress(Exception):
         after = len(_search_form(ctx, browser, cfg, form_type, notes))   # a fresh search: assigned rows are gone
         dropped = before - after
@@ -471,16 +505,23 @@ def plan_run(ctx, requests):
     a per-team tally."""
     teams = (ctx.options or {}).get("teams") or {}
     now = ctx.now()
+    canon = application_names(ctx)
     load, plan, per_team = {}, [], {}
     for team, info in teams.items():
         taken = {p["id"] for p in plan}
         picks = auto_assign.plan_ticketing(info.get("block") or {}, [r for r in requests if r["id"] not in taken],
-                                           now, info.get("members") or {}, load)
+                                           now, info.get("members") or {}, load, canon=canon)
         for item in picks:
             load[item["portal_id"]] = load.get(item["portal_id"], 0) + 1
         plan.extend(picks)
         per_team[team] = len(picks)
     return plan, per_team
+
+
+def application_names(ctx):
+    """Application name -> the name the rules use: the e-mail classification's aliases (built-in + the administrator's),
+    so the portal's 'Flex Cube' / 'صناديق الإستثمار FCIS' and a rule's 'Flexcube' are the same application."""
+    return email_rules.build_rules((ctx.options or {}).get("email_settings") or {}).canonical_application
 
 
 def why_nothing_planned(ctx, requests):
@@ -567,12 +608,12 @@ def run(ctx, scraper=None, assigner=None):
                     label = group.get("name") or group["portal_id"]
                     per_employee[label] = per_employee.get(label, 0) + got
     except S.LoginError as exc:
-        return _fail(ctx, S.clean_error(exc, secrets), "auth")
+        return _fail(ctx, S.clean_error(exc, secrets), "auth", partial(assigned, found, per_employee, per_team_total))
     except Exception as exc:                                     # noqa: BLE001
         if ctx.debug:
             import traceback
             ctx.log(S.scrub(traceback.format_exc(), secrets))
-        return _fail(ctx, S.clean_error(exc, secrets))
+        return _fail(ctx, S.clean_error(exc, secrets), None, partial(assigned, found, per_employee, per_team_total))
     finally:
         if browser is not None:
             with suppress(Exception):
@@ -586,6 +627,15 @@ def run(ctx, scraper=None, assigner=None):
                                     "by_team": per_team_total, "dry_run": bool(ctx.dry_run)})
 
 
-def _fail(ctx, message, kind=None):
+def partial(assigned, found, per_employee, per_team):
+    """What a run that stopped half-way had already done (the requests an Execute committed stay assigned)."""
+    if not assigned:
+        return None
+    return {"assigned": assigned, "found": found, "by_employee": per_employee, "by_team": per_team, "partial": True}
+
+
+def _fail(ctx, message, kind=None, done=None):
+    if done:
+        message += f" Already assigned before it stopped: {done['assigned']}."
     ctx.log(f"Ticketing auto-assign failed: {message}")
-    return JobResult(ok=False, error=message, error_kind=kind)
+    return JobResult(ok=False, error=message, error_kind=kind, snapshot_data=done)

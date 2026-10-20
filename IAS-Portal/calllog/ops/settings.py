@@ -135,6 +135,7 @@ DEFAULTS = {
         "app_header": "النظام",                  # the grid column matched against a rule's applications
         "decision_value": "6",                   # القرار → اسناد لمستخدم السرية (the ddlExecuteStatus option value)
         "execute_button_text": "تنفيذ",
+        "execute_success_text": "تم التنفيذ بنجاح",   # the portal's own label after a successful Execute
         "employee_wait_seconds": 8,              # how long to wait for «الموظفين» to fill after the decision post-back
         "selectors_assign": {                    # the proven ids from the stand-alone NBE auto-authorizer bot
             "form_type": "#ContentPlaceHolder1_ddlFormType",
@@ -142,6 +143,7 @@ DEFAULTS = {
             "decision": "#ContentPlaceHolder1_ddlExecuteStatus",
             "employee": "#ContentPlaceHolder1_ddlEmployee",
             "execute_button": "#ContentPlaceHolder1_btnExecute",
+            "success_label": "#ContentPlaceHolder1_lblStatusSuccess",
             "grid": "#ContentPlaceHolder1_GridView_RequestDetails",
             "check_all": "#ContentPlaceHolder1_GridView_RequestDetails_CheckBox_All",
             "length": "select[name='ContentPlaceHolder1_GridView_RequestDetails_length']",
@@ -436,6 +438,7 @@ FIELDS = {
         "assign_path": _str(300), "assign_menu_text": _str(100), "app_header": _str(100),
         "period_header": _str(100), "assign_filter": _choice("date", "all"), "assign_cutoff": _str(20),
         "decision_value": _str(20), "execute_button_text": _str(100), "employee_wait_seconds": _int(1, 60),
+        "execute_success_text": _str(100),
         "form_types": _strs(20), "selectors_assign": _map(_str(300)),
         "browser_executable": _str(400), "cdp_port": _int(0, 65535), "timeout_seconds": _int(5, 600),
     },

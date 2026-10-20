@@ -924,6 +924,16 @@ class TestEndToEnd:
         users = {u["user"]: u for u in result.snapshot_data["by_user"]}
         assert users["(Unassigned)"]["no_date"] == 1 and users[OWNER_A]["total"] == 3
 
+    def test_the_package_opened_by_a_post_back_script_like_the_real_portal(self, store, monkeypatch):
+        """The real «دخــــــول» link posts back and the RESPONSE opens the application with window.open - a pop-up
+        blocker would stop it; the collector's browser must let it open (as the bank's proven bot's browser does)."""
+        windows = window_log(monkeypatch)
+        with FakePortal(sample_requests(NOW), open_mode="postback_script", variant="plain") as portal:
+            result, _ = portal_run(store, portal)
+            assert result.ok, result.error
+            assert windows == [2]                                  # the application's own window
+            assert_scanned_everything(result)
+
     def test_same_tab_datatables_reads_every_page_through_the_api(self, store, monkeypatch):
         sources = []
         windows = window_log(monkeypatch)

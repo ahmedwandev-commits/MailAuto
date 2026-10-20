@@ -188,7 +188,31 @@ def test_e2e_assigns_every_eligible_request_balanced_and_never_a_future_one(chro
     assert portal.assigned == {"R101": "111", "R102": "222", "R104": "111", "R105": "222", "R201": "111"}, text
     assert "R103" not in portal.assigned and res.snapshot_data["assigned"] == 5
     assert f"entered the «{SUPERVISOR_PACKAGE}» package" in text and "skipped 1 future-dated" in text
-    assert "verified: 2 assigned to Alice (111)" in text and portal.password not in text
+    assert "confirmed by the portal: تم التنفيذ بنجاح - 2 request(s) -> Alice (111)" in text and portal.password not in text
+
+
+@pytest.mark.usefixtures("fast")
+def test_e2e_execute_is_confirmed_by_the_portals_success_label_although_new_requests_arrive(chromium, tmp_path):
+    """The real portal says «تم التنفيذ بنجاح» after Execute; its queue keeps growing, so the grid alone cannot prove it."""
+    with FakeAssignPortal(arrivals=True) as portal:
+        res, logs = e2e_run(portal, chromium, tmp_path)
+    text = "\n".join(logs)
+    assert res.ok and len(portal.assigned) == 5, text
+    assert res.snapshot_data["assigned"] == 5, text                    # every Execute counted
+    assert "confirmed by the portal: تم التنفيذ بنجاح" in text and "may NOT have committed" not in text
+
+
+@pytest.mark.usefixtures("fast")
+def test_e2e_a_session_ended_mid_run_is_reported_with_what_was_already_assigned(chromium, tmp_path):
+    """The real portal bounces sessions to the login page mid-cycle: the run must say so (not 'verified' / 'not
+    offered') and still report the requests the first Execute already assigned."""
+    with FakeAssignPortal(expire_after_executes=1) as portal:
+        res, logs = e2e_run(portal, chromium, tmp_path)
+    text = "\n".join(logs)
+    first = len(portal.executes[0][2])
+    assert not res.ok and "session ended" in res.error, text
+    assert res.snapshot_data and res.snapshot_data["assigned"] == first, text
+    assert "verified" not in text.split("Execute pressed", 2)[-1], text      # nothing after the bounce claims success
 
 
 @pytest.mark.usefixtures("fast")
@@ -226,7 +250,7 @@ def test_e2e_application_rule_only_takes_its_applications(chromium, tmp_path):
         res, logs = e2e_run(portal, chromium, tmp_path, teams=flex)
     text = "\n".join(logs)
     assert res.ok and portal.assigned == {"R101": "111", "R102": "111", "R105": "111"}, text
-    assert "no active rule covers these applications: GL" in text
+    assert "no active rule covers these applications: T24" in text      # 'Flex Cube' and the FCIS line are Flexcube
 
 
 @pytest.mark.usefixtures("fast")

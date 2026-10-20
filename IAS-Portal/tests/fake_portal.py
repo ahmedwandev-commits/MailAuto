@@ -5,7 +5,9 @@
     /App_Security_Login/Login.aspx      Arabic login page (user + password inputs, a hidden decoy input, a login button);
                                         a wrong password shows the same page again
     /Portal/Groups.aspx                 table of packages; the right row has a "تحويل" link that opens the application
-                                        in a new window (``open_mode="blank"``) or in the same tab (``"same"``)
+                                        in a new window (``open_mode="blank"``) or in the same tab (``"same"``); with
+                                        ``"postback_script"`` it is the real portal's «دخــــــول» LinkButton: a post-back
+                                        whose RESPONSE opens the application with window.open (what a pop-up blocker stops)
     /SecurityCodeRequest/Home.aspx      the application home
     /SecurityCodeRequest/Security_Assign_Maker/Request_ReAssign.aspx
                                         the requests table, in one of the ``variant`` shapes below
@@ -157,7 +159,8 @@ class FakePortal:
         if not signed_in:
             return self._redirect(h, LOGIN_PATH)
         if path == GROUPS_PATH:
-            return self._send(h, 200, self._groups_page())
+            opened = method == "POST" and form.get("__EVENTTARGET", "").endswith("btnSubmit")
+            return self._send(h, 200, self._groups_page(open_app=opened))
         if path == HOME_PATH:
             return self._send(h, 200, self._page("الصفحة الرئيسية للتطبيق", "<p>تطبيق طلبات السرية</p>"))
         if path == REASSIGN_PATH:
@@ -211,7 +214,9 @@ class FakePortal:
                 f"{button}</form>")
         return self._send(h, 200, self._page("تسجيل", body))
 
-    def _groups_page(self):
+    def _groups_page(self, open_app=False):
+        if self.open_mode == "postback_script":
+            return self._postback_groups_page(open_app)
         target = "target='_blank'" if self.open_mode == "blank" else ""
         rows = ("<tr><td>User Provisioning Portal - موظف اسناد - مستخدم اخر</td>"
                 "<td><a href='/Other/Home.aspx'>تحويل</a></td></tr>")
@@ -220,6 +225,24 @@ class FakePortal:
                      f"<a href='{HOME_PATH}' {target}>تحويل</a></td></tr>")
         rows += "<tr><td>Another package</td><td><a href='/Other/Two.aspx'>تحويل</a></td></tr>"
         return self._page("المجموعات", f"<table id='groups'><tr><th>الحزمة</th><th>اجراء</th></tr>{rows}</table>")
+
+    def _postback_groups_page(self, open_app):
+        """The real landing grid: the Enter control is an ASP.NET LinkButton (a[id*='btnSubmit']) that posts the form
+        back; the response opens the package's application in a new window by script."""
+        def row(text, n):
+            enter = (f"<a id='ContentPlaceHolder1_GridView_Application_btnSubmit_{n}' "
+                     f"href=\"javascript:__doPostBack('ctl00$ContentPlaceHolder1$GridView_Application$ctl0{n}$btnSubmit','')\">"
+                     "دخــــــول</a>")
+            return f"<tr><td>{html.escape(text)}</td><td>{enter}</td></tr>"
+        rows = row("User Provisioning Portal - موظف اسناد - مستخدم اخر", 1)
+        if self.package:
+            rows += row(PACKAGE_TEXT, 2)
+        script = ("<script>function __doPostBack(t,a){var f=document.forms[0];f.__EVENTTARGET.value=t;f.submit();}</script>"
+                  + (f"<script>window.open('{HOME_PATH}','_blank');</script>" if open_app else ""))
+        body = (f"<form method='post' action='{GROUPS_PATH}'><input type='hidden' name='__EVENTTARGET' value=''>"
+                f"<table id='ContentPlaceHolder1_GridView_Application'><tr><th>الحزمة</th><th>اجراء</th></tr>{rows}</table>"
+                "</form>")
+        return self._page("المجموعات", body, head=script)
 
     def _reassign_page(self, searched):
         head_row = "".join(f"<th>{html.escape(h)}</th>" for h in HEADERS)

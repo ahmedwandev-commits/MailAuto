@@ -17,7 +17,12 @@ Chromium driven over CDP against a real HTTP server).
         * «القرار» (ddlExecuteStatus) posts back; value 6 makes «الموظفين» (ddlEmployee) appear, offering the employees
           ``offered[form_type]``; the employee select posts back too
         * ticked boxes are restored after a post-back (as ASP.NET does with posted check-boxes)
-        * «تنفيذ» (btnExecute) asks confirm() and assigns exactly the POSTED (ticked) rows to the chosen employee
+        * «تنفيذ» (btnExecute) asks confirm() and assigns exactly the POSTED (ticked) rows to the chosen employee; the
+          page then shows the real portal's success label «تم التنفيذ بنجاح» (#ContentPlaceHolder1_lblStatusSuccess)
+        * ``arrivals=True``: a new (future-dated) request arrives in the same form at every Execute, so the grid does not
+          shrink - as on the real portal, whose queue grows within seconds
+        * ``expire_after_executes=N``: the session ends after the N-th Execute - every later page is the login page,
+          as the real portal bounces sessions mid-cycle
 
 Everything is fake: names, numbers and the password are made up by the tests; the password is never stored.
 """
@@ -42,14 +47,14 @@ def sample_requests():
     """{form_type: [request]} - a past, an open-ended, a FUTURE-dated and an Arabic-digit request, over two forms."""
     return {
         "1": [
-            {"id": "R101", "employee": "موظف اختبار 1", "system": "Flexcube", "period": "-"},
-            {"id": "R102", "employee": "موظف اختبار 2", "system": "Flexcube", "period": "01/10/2026 - 31/12/2026"},
+            {"id": "R101", "employee": "موظف اختبار 1", "system": "Flex Cube", "period": "-"},        # as the real grid
+            {"id": "R102", "employee": "موظف اختبار 2", "system": "صناديق الإستثمار FCIS", "period": "01/10/2026 - 31/12/2026"},
             {"id": "R103", "employee": "موظف اختبار 3", "system": "DWP", "period": "01/01/2099 - 31/12/2099"},
             {"id": "R104", "employee": "موظف اختبار 4", "system": "DWP", "period": "-"},
-            {"id": "R105", "employee": "موظف اختبار 5", "system": "Flexcube", "period": "٠١/١٠/٢٠٢٦ - ٣١/١٢/٢٠٢٦"},
+            {"id": "R105", "employee": "موظف اختبار 5", "system": "Flex Cube", "period": "٠١/١٠/٢٠٢٦ - ٣١/١٢/٢٠٢٦"},
         ],
         "2": [
-            {"id": "R201", "employee": "موظف اختبار 6", "system": "GL", "period": "-"},
+            {"id": "R201", "employee": "موظف اختبار 6", "system": "T24", "period": "-"},
         ],
     }
 
@@ -58,7 +63,7 @@ class FakeAssignPortal:
     """``with FakeAssignPortal() as portal: portal.url``; afterwards ``portal.assigned`` = {request id: employee}."""
 
     def __init__(self, requests=None, username="2001", password="fake-pw-123", supervisor=True, open_mode="blank",
-                 page_size=3, offered=None):
+                 page_size=3, offered=None, arrivals=False, expire_after_executes=None):
         self.requests = requests if requests is not None else sample_requests()
         self.username = username
         self.password = password
@@ -67,6 +72,8 @@ class FakeAssignPortal:
         self.page_size = page_size
         self.offered = offered if offered is not None else {"1": {"111": "Alice Maker", "222": "Bob Maker"},
                                                             "2": {"111": "Alice Maker"}}
+        self.arrivals = arrivals
+        self.expire_after_executes = expire_after_executes
         self.assigned = {}                      # request id -> employee value it was assigned to
         self.executes = []                      # (form type, employee, [request ids]) per Execute
         self.logins = []                        # True / False per login attempt, never the password
@@ -120,6 +127,8 @@ class FakeAssignPortal:
             return self._login(h, method, one)
         if "sid=ok" not in h.headers.get("Cookie", ""):
             return self._redirect(h, LOGIN_PATH)
+        if self.expire_after_executes is not None and len(self.executes) >= self.expire_after_executes:
+            return self._redirect(h, LOGIN_PATH)                     # the portal ended the session mid-run
         if path == GROUPS_PATH:
             return self._send(h, self._groups_page())
         if path == HOME_PATH:
@@ -197,7 +206,15 @@ class FakeAssignPortal:
             for rid in done:
                 self.assigned[rid] = employee
             self.executes.append((form_type, employee, done))
+            if self.arrivals:                                       # a new request lands while we execute
+                n = len(self.executes)
+                self.requests[form_type].append({"id": f"N{form_type}{n}", "employee": f"موظف جديد {n}",
+                                                 "system": "Flex Cube", "period": "01/01/2099 - 31/12/2099"})
             decision, employee, posted = "", "", set()             # the page comes back clean after Execute
+            success = ("<div id='ContentPlaceHolder1_Panel_Success'><span id='ContentPlaceHolder1_lblStatusSuccess'>"
+                       "تم التنفيذ بنجاح</span></div>")
+            return self._page("اسناد الطلبات الجديدة",
+                              success + self._assign_body(form_type, searched, decision, employee, posted))
         return self._page("اسناد الطلبات الجديدة", self._assign_body(form_type, searched, decision, employee, posted))
 
     def _assign_body(self, form_type, searched, decision, employee, posted):
