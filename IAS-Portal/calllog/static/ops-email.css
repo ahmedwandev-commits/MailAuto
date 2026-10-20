@@ -18,9 +18,16 @@
 .em-badge.info { background: var(--info-bg, #d7e9fb); color: var(--info-fg, #0b4a7a); }
 
 .em-panel[hidden] { display: none; }
+/* Overview, top to bottom: the KPI tiles (five per row on a wide screen, so no tile is left alone on a row), three small
+   cards (status, arrivals, applications), the team table across the whole width, then the two lists side by side. */
 .em-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 16px; }
-.em-two { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
-@media (min-width: 900px) { .em-two { grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); } }
+@media (min-width: 1180px) { .em-kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.em-panel > * + * { margin-top: 16px; }
+.em-panel > .em-kpis + * { margin-top: 0; }
+.em-three, .em-pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (min-width: 900px) { .em-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1180px) { .em-three { grid-template-columns: minmax(280px, 1fr) minmax(0, 1fr) minmax(0, 1fr); } }
+@media (min-width: 900px) and (max-width: 1179px) { .em-three { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 /* Quality appeals: a reply's author disagreed with the rating; a manager Accepts (withdraws it) or Rejects (keeps it). */
 .em-appeals { display: grid; gap: 10px; }

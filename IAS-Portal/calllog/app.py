@@ -145,10 +145,11 @@ def create_app(overrides=None):
         uid = session.get("uid")
         if uid:
             user = store.get_user(uid)
-            if user and user.get("active", True):
+            if user and user.get("active", True) and session.get("pwv") == auth.password_mark(user):
                 g.user = user
-            else:
+            else:                       # disabled, deleted, or the password was reset / changed since this sign-in
                 session.pop("uid", None)
+                session.pop("pwv", None)
         if request.method in auth.UNSAFE_METHODS and not auth.csrf_ok():
             if auth.wants_json():
                 return jsonify(error="Your session expired. Reload the page and try again."), 400

@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 import pytest
 
+from calllog import auth
 from calllog.ops import notifications, schemas
 from calllog.ops.store import OpsStore
 from conftest import Browser
@@ -462,7 +463,7 @@ def make_sessions(app, count):
     for uid in users:
         c = app.test_client()
         with c.session_transaction() as s:
-            s["uid"], s["csrf"] = uid, "tok"
+            s["uid"], s["csrf"], s["pwv"] = uid, "tok", auth.password_mark(users[uid])
         clients[uid] = c
     return clients
 

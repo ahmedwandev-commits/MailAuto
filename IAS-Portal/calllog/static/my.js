@@ -48,20 +48,22 @@
   // ------------------------------------------------------------------ my calls
   function callsCard(c) {
     const today = c.today, yest = c.yesterday, week = c.last7;
-    const shareTotal = state.data.shared && state.data.shared.calls ? state.data.shared.calls.total : 0;
+    const shared = (state.data.shared && state.data.shared.calls) || {};
+    const shareTotal = shared.total || 0, where = shared.scope === "teams" ? "on the team" : "in all teams";
     const hours = c.per_hour_today || [];
     const active = hours.filter((b) => b.total > 0);
     const lo = active.length ? Math.max(0, active[0].key - 1) : 8, hi = active.length ? active[active.length - 1].key : 9;
     const series = hours.filter((b) => b.key >= lo && b.key <= hi).map((b) => b.total);
     const dot = (key, label) => h("div", { class: "op-fact" }, h("dt", {}, h("span", { class: "status-chip" }, h("i", { class: `dot s-${key}` }), label)), h("dd", {}, fmtNum(today[key] || 0)));
-    return OPS.card("My calls", { hint: shareTotal ? `${fmtNum(today.total)} of ${fmtNum(shareTotal)} on the team today` : "" },
+    return OPS.card("My calls", { hint: shareTotal ? `${fmtNum(today.total)} of ${fmtNum(shareTotal)} ${where} today` : "" },
       h("div", { class: "my-tiles" },
         OPS.kpi({ label: "Today", value: fmtNum(today.total), sub: "calls logged", icon: "phone", hero: true }),
         OPS.kpi({ label: "Yesterday", value: fmtNum(yest.total), sub: "whole day" }),
         OPS.kpi({ label: "Last 7 days", value: fmtNum(week.total), sub: "including today" })),
-      series.length > 1 ? h("div", { class: "op-viz" }, OPS.sparkline(series, { width: 260, height: 44, label: "My calls per hour today" }),
-        h("span", { class: "hint" }, `per hour, ${String(lo).padStart(2, "0")}:00 – now`)) : null,
-      h("dl", { class: "op-facts" }, CALL_STATUSES.map(([key, label]) => dot(key, label))));
+      h("div", { class: "op-viz-row" },                  // today's calls by result, next to the per-hour line
+        h("dl", { class: "op-facts op-facts-row" }, CALL_STATUSES.map(([key, label]) => dot(key, label))),
+        series.length > 1 ? h("div", { class: "op-viz" }, OPS.sparkline(series, { width: 260, height: 44, label: "My calls per hour today" }),
+          h("span", { class: "hint" }, `per hour, ${String(lo).padStart(2, "0")}:00 – now`)) : null));
   }
 
   // ------------------------------------------------------------------ e-mail tables

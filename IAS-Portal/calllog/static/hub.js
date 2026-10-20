@@ -96,7 +96,9 @@
       body,
       href ? h("a", { class: "op-module-link", href }, linkText, OPS.icon("arrow")) : null);
   }
-  const fact = (label, value, tone) => h("div", { class: "op-fact" + (tone ? ` op-t-${tone}` : "") }, h("dt", {}, label), h("dd", {}, value));
+  // a number with an href opens exactly the rows behind it (the module pages understand these links, see ops-common.js)
+  const fact = (label, value, tone, href) => h("div", { class: "op-fact" + (tone ? ` op-t-${tone}` : "") }, h("dt", {}, label),
+    h("dd", {}, href ? link(href, value) : value));
   const big = (value, label) => h("div", { class: "op-big-line" }, h("strong", { class: "op-big" }, value), h("span", { class: "muted" }, label));
 
   function callsCard(d) {
@@ -129,13 +131,15 @@
       key: "email", icon: "mail", title: "E-mail", href: "/email", linkText: "Open E-mail", chip,
       body: [big(fmtNum(e.business_emails), e.scope ? `e-mails for ${e.scope}` : "business e-mails today"),
         h("div", { class: "op-viz op-viz-donut" }, donut, h("div", { class: "op-legend op-legend-col" },
-          h("span", { class: "op-legend-item" }, h("i", { class: "op-swatch op-t-ok" }), fmtNum(e.replied), h("span", { class: "muted" }, " replied")),
-          h("span", { class: "op-legend-item" }, h("i", { class: "op-swatch op-t-warn" }), fmtNum(e.pending), h("span", { class: "muted" }, " pending")),
+          h("span", { class: "op-legend-item" }, h("i", { class: "op-swatch op-t-ok" }), link("/email#replied", fmtNum(e.replied)), h("span", { class: "muted" }, " replied")),
+          h("span", { class: "op-legend-item" }, h("i", { class: "op-swatch op-t-warn" }), link("/email#pending", fmtNum(e.pending)), h("span", { class: "muted" }, " pending")),
           h("span", { class: "op-legend-item" }, h("i", { class: "op-swatch op-t-na" }), fmtNum(e.no_action_needed), h("span", { class: "muted" }, " no action")))),
         e.carryover_count ? h("p", { class: "hint" }, `The split above also counts ${fmtNum(e.carryover_count)} still-open e-mail${e.carryover_count === 1 ? "" : "s"} from earlier days.`) : null,
         h("dl", { class: "op-facts" },
-          fact("Past the SLA", fmtNum(e.sla_breached), e.sla_breached ? "danger" : null), fact("Escalated (no reply)", fmtNum(e.escalated_count), e.escalated_count ? "danger" : null),
-          fact("Carried over", e.carryover_count ? `${fmtNum(e.carryover_count)} (oldest ${e.carryover_oldest_days} d)` : "0", e.carryover_count ? "warn" : null),
+          fact("Past the SLA", fmtNum(e.sla_breached), e.sla_breached ? "danger" : null),
+          fact("Escalated (no reply)", fmtNum(e.escalated_count), e.escalated_count ? "danger" : null, e.escalated_count ? "/email?escalated=1" : null),
+          fact("Carried over", e.carryover_count ? `${fmtNum(e.carryover_count)} (oldest ${e.carryover_oldest_days} d)` : "0", e.carryover_count ? "warn" : null,
+            e.carryover_count ? "/email?carryover=1" : null),
           fact("Average first reply", OPS.fmtDuration(e.average_response)))],
     });
   }
@@ -154,10 +158,13 @@
       body: [big(fmtNum(s.open), "open requests"),
         OPS.stackbar([{ label: "within", value: s.within, cls: "op-t-ok" }, { label: "reminder", value: s.reminder, cls: "op-t-warn" },
           { label: "breached", value: s.breached, cls: "op-t-danger" }, { label: "no date", value: s.no_date, cls: "op-t-na" }]),
-        h("dl", { class: "op-facts" }, fact("Oldest request", OPS.fmtDuration(s.oldest_minutes), s.breached ? "danger" : null),
+        h("dl", { class: "op-facts" },
+          fact("Breached", fmtNum(s.breached || 0), s.breached ? "danger" : null, s.breached ? "/sla?status=breached" : null),
+          fact("At reminder", fmtNum(s.reminder || 0), s.reminder ? "warn" : null, s.reminder ? "/sla?status=reminder" : null),
+          fact("Oldest request", OPS.fmtDuration(s.oldest_minutes), s.breached ? "danger" : null),
           fact("Reminder / breach after", `${OPS.fmtDuration(limits.warning_minutes)} / ${OPS.fmtDuration(limits.breach_minutes)}`)),
         top.length ? h("div", { class: "op-mini" }, h("span", { class: "hint" }, "Most overdue"), h("ul", {}, top.map((u) =>
-          h("li", {}, link(`/sla?q=${encodeURIComponent(u.user)}`, bidi(u.user)), h("span", { class: "hint" }, ` ${u.breached} breached, ${u.reminder} reminder`))))) : null],
+          h("li", {}, link(`/sla?user=${encodeURIComponent(u.user)}`, bidi(u.user)), h("span", { class: "hint" }, ` ${u.breached} breached, ${u.reminder} reminder`))))) : null],
     });
   }
 
@@ -169,7 +176,7 @@
         body: OPS.emptyState({ title: "No ITSM data yet", text: "The collector has not read the scoreboard yet.", icon: "server" }) });
     }
     const cats = t.categories.length ? t.categories : Object.keys(t.totals);
-    const total = cats.reduce((a, c) => a + (t.totals[c] || 0), 0);
+    const total = cats.filter((c) => !OPS.isDoneCategory(c)).reduce((a, c) => a + (t.totals[c] || 0), 0);   // open = not completed
     const errors = t.role_errors || [];
     return moduleCard({
       key: "itsm", icon: "server", title: "ITSM", href: "/itsm", linkText: "Open ITSM", chip,
@@ -226,7 +233,9 @@
       search: false, copy: false, pageSize: 10, pageSizes: [10], caption: "E-mail by team", sort: { key: "pending", desc: true },
       columns: [
         { key: "team", label: "Team", sort: true, render: (r) => h("a", { class: "link", href: `/email?team=${encodeURIComponent(r.team)}`, dir: "auto" }, r.team) },
-        { key: "business_emails", label: "E-mails", num: true, sort: true },
+        { key: "business_emails", label: "E-mails today", num: true,       // like the headline: carry-over has its own column
+          sort: (r) => (r.business_emails || 0) - (r.carryover_count || 0), render: (r) => fmtNum((r.business_emails || 0) - (r.carryover_count || 0)),
+          text: (r) => String((r.business_emails || 0) - (r.carryover_count || 0)) },
         { key: "replied", label: "Replied", num: true, sort: true },
         { key: "pending", label: "Pending", num: true, sort: true, render: (r) => h("strong", {}, fmtNum(r.pending)) },
         { key: "assigned_today", label: "Assigned today", num: true, sort: true,
@@ -238,10 +247,10 @@
       ],
       rows: e.teams,
     });
-    body.replaceChildren(teamTable.el, e.unclassified
+    body.replaceChildren(...[teamTable.el, e.unclassified           // (a null child would be drawn as the text "null")
       ? h("p", { class: "op-note op-t-info op-block" }, OPS.icon("info"), `${plural(e.unclassified, "e-mail")} not classified to a team. `,
         h("a", { class: "link", href: "/email#unclassified" }, "Assign a team or add a rule"))
-      : null);
+      : null].filter(Boolean));
   }
 
   // ------------------------------------------------------------------------------------------------ loading

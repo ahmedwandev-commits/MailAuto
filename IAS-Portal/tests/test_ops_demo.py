@@ -103,7 +103,7 @@ def test_email_rows_cover_every_situation_the_pages_show(ops):
     assert {"Excellent", "Good", "Needs Improvement"} <= {r["quality_rating"] for r in rows}
     assert {"Flex Cube", "Card Management", "MFA Team", "Third Party", "Open System"} <= {r["team"] for r in rows}
     assert stats["pending"] == sum(1 for r in rows if r["status"] == schemas.EMAIL_PENDING)
-    assert stats["quality"]["reviewed"] == sum(1 for r in rows if r["quality_rating"])
+    assert stats["quality"]["reviewed"] == sum(1 for r in rows if r["quality_rating"] and not r["rating_withdrawn"])
     assert data["quality"]["scorecard"] and data["quality"]["leaderboard_top"]
 
 

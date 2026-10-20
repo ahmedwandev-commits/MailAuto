@@ -57,7 +57,9 @@
          `text` is what search and copy see (default: row[key]); copy puts the filtered rows on the clipboard as tab-separated text.
 
    Dialogs: OPS.modal / OPS.confirm are CL.modal / CL.confirmDialog.
-   Deep links produced by Home and understood by the module pages when they care:  /email?q=<text>&team=<team>   /sla?q=<text>
+   Deep links produced by Home and understood by the module pages:  /email?q=<text>&team=<team>  /email?team=<team>  /email#<tab>
+     /email?escalated=1  /email?carryover=1
+     /sla?q=<text>  /sla?user=<security user>  /sla?status=<status>  /sla?tab=analysis  /itsm?q=<number>  /itsm?tab=requests
    ---------------------------------------------------------------------------------------------------------- */
 (function () {
   const { h, svgEl, api, toast, normAr, fmtNum } = CL;
@@ -417,8 +419,14 @@
   }
 
   // -------------------------------------------------------------------------------- freshness of a module
+  /** An ITSM category of finished work ("Implementation Completed"): never part of an "open requests" number. */
+  function isDoneCategory(name) {
+    return /complet|closed|done/i.test(String(name || ""));
+  }
+
   function freshnessInfo(meta) {
     if (!meta) return { tone: "info", icon: "info", text: "Waiting for data…" };
+    if (meta.network) return { tone: "warn", icon: "alert", text: "Cannot reach the server - trying again…" };
     const label = { email: "E-mail", sla: "Ticketing", itsm: "ITSM" }[meta.module] || "This module";
     if (meta.problem) return { tone: "danger", icon: "alert", text: `The ${label} data file cannot be read: ${meta.problem}` };
     if (!meta.enabled) return { tone: "info", icon: "pause", text: `${label} is switched off in the settings.` };
@@ -436,6 +444,10 @@
     }
     if (meta.stale) return { tone: "warn", icon: "clock", text: `Data is ${fmtDuration(meta.age_minutes)} old · last updated ${when}${host}` };
     if (meta.running) return { tone: "ok", icon: "refresh", text: `Last updated ${when}${host} · scanning now…` };
+    // a manager gets no collector alarms (the server hides them), but old data is never called "OK"
+    if (meta.active_now !== false && meta.age_minutes > 3 * Math.max(1, meta.interval_minutes || 15)) {
+      return { tone: "info", icon: "clock", text: `Last updated ${when}${host}` };
+    }
     return { tone: "ok", icon: "check", text: `Last updated ${when}${host} · OK` };
   }
   function freshnessBanner() {
@@ -468,6 +480,7 @@
   }
   const note = (tone, text) => h("span", { class: `op-note op-t-${tone}` }, icon(LEVEL_ICON[tone]), text);
   const short = (category) => String(category).replace(/ requests?$/i, "");
+  const MODULE_LABELS = { email: "E-mail", sla: "Ticketing", itsm: "ITSM" };
 
   /** Five groups from GET /api/ops/shared. Counts only. The e-mail numbers are the VIEWER's: an administrator sees every team,
       everybody else the e-mails of their own teams (e.scope === "teams", e.teams = their names; never the Unclassified bucket). */
@@ -493,14 +506,16 @@
       : stripGroup({ icon: "shield", label: "Tickets open", value: "—", sub: ["No ticketing data yet"] }, link("sla", "/sla")));
     const totals = (i.totals && Object.entries(i.totals)) || [];
     groups.push(i.available
-      ? stripGroup({ icon: "server", label: "ITSM requests", value: fmtNum(totals.reduce((a, [, n]) => a + (n || 0), 0)),
+      ? stripGroup({ icon: "server", label: "ITSM requests", value: fmtNum(totals.filter(([k]) => !isDoneCategory(k)).reduce((a, [, n]) => a + (n || 0), 0)),
         sub: [totals.map(([k, n]) => `${short(k)} ${n}`).join(" · ") || "No categories"] }, link("itsm", "/itsm"))
       : stripGroup({ icon: "server", label: "ITSM requests", value: "—", sub: ["No ITSM data yet"] }, link("itsm", "/itsm")));
     const mods = Object.values(col.modules || {}), up = mods.filter((m) => m.online).length;
     const tone = col.online ? "ok" : up ? "warn" : "danger";
+    const down = Object.entries(col.modules || {}).filter(([, m]) => !m.online).map(([k]) => MODULE_LABELS[k] || k);
+    const from = col.last_update ? `data from ${fmtWhen(col.last_update, d.generated_at)}` : "no data yet";
     groups.push(stripGroup({ icon: "activity", label: "Collectors",
       value: col.online ? "Online" : up ? `${up} of ${mods.length} online` : "Offline",
-      sub: [note(tone, col.last_update ? `data from ${fmtWhen(col.last_update, d.generated_at)}` : "no data yet")] }, link("system", "/system")));
+      sub: [note(tone, up && down.length ? `${down.join(", ")} offline · ${from}` : from)] }, link("system", "/system")));
     return groups;
   }
 
@@ -641,7 +656,7 @@
       }
       count.textContent = rows.length === st.rows.length ? `${fmtNum(rows.length)} row${rows.length === 1 ? "" : "s"}`
         : `${fmtNum(rows.length)} of ${fmtNum(st.rows.length)}`;
-      foot.hidden = rows.length <= Math.min(...sizes);
+      foot.hidden = rows.length <= Math.min(st.size, ...sizes);      // a page size below every option still pages
       const sizeSel = h("select", { "aria-label": "Rows per page", onchange: (ev) => { st.size = +ev.target.value; st.page = 1; render(); } },
         sizes.map((n) => h("option", { value: n, selected: n === st.size }, `${n} per page`)));
       foot.replaceChildren(`${from + 1}–${Math.min(from + st.size, rows.length)} of ${fmtNum(rows.length)}`,
@@ -769,7 +784,7 @@
     return { close: () => dlg.close() };
   }
 
-  window.OPS = { parseNaive, fmtClock, fmtDate, fmtWhen, fmtDuration, fmtAgo, fmtPct, fmtBytes, fmtUptime, debounce, localNowIso,
+  window.OPS = { isDoneCategory, parseNaive, fmtClock, fmtDate, fmtWhen, fmtDuration, fmtAgo, fmtPct, fmtBytes, fmtUptime, debounce, localNowIso,
     icon, chip, statusChip, jobChip, JOB_LABELS, kpi, setKpi, emptyState, card, tip, copyText, LEVEL_ICON, LEVEL_RANK,
     donut, hbars, stackbar, sparkline, loader, freshnessInfo, freshnessBanner, live, sharedStrip, table, mailViewer,
     modal: CL.modal, confirm: CL.confirmDialog, text: CL.bidi };

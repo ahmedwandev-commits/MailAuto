@@ -52,6 +52,7 @@ def login():
     session.clear()  # new session id on every login
     session.permanent = True
     session["uid"] = uid
+    session["pwv"] = auth.password_mark(user)
     auth.csrf_token()
     auth.store().update_user(uid, {"last_login": iso_now(auth.now())})
     auth.audit("login", actor=user)
@@ -87,9 +88,11 @@ def password():
     if error:
         return render_template("password.html", error=error, forced=forced), 400
 
+    new_hash = hash_password(new)
     auth.store().update_user(g.user["user_id"], {
-        "password_hash": hash_password(new), "must_change_password": False,
+        "password_hash": new_hash, "must_change_password": False,
         "password_changed_at": iso_now(auth.now())})
+    session["pwv"] = auth.password_mark({"password_hash": new_hash})      # this session stays, every other one ends
     auth.audit("password_changed")
     return redirect(url_for("pages.index"))
 

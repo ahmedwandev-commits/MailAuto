@@ -41,7 +41,7 @@ REQUIREMENTS = HERE / "requirements-collector.txt"
 OPTIONAL_PACKAGES = (("matplotlib", "matplotlib>=3.7"),)      # charts in the e-mail report; the report works without them
 JOB_NAMES = ("email", "email_report", "sla", "itsm")             # same as calllog.ops.schemas.JOBS (a test keeps them equal)
 ACCOUNTS = {"sla": "SLA portal", "itsm": "ITSM"}
-PACKAGES = [("flask", "Flask"), ("openpyxl", "openpyxl"), ("playwright", "playwright"), ("keyring", "keyring")] + (
+PACKAGES = [("flask", "Flask"), ("openpyxl", "openpyxl"), ("keyring", "keyring")] + (
     [("win32com", "pywin32")] if os.name == "nt" else [])
 
 RESTART_FLAG = "NBE_COLLECTOR_RESTARTED"       # set after the one-time install, so a failed install cannot loop
@@ -272,7 +272,9 @@ def cmd_check(args):
     archive = str(settings["email"].get("target_archive_name") or "")
     line("Outlook archive", archive if archive else "not set - the default mailbox is scanned (set email.target_archive_name)")
     browser = find_browser(settings)
-    line("Chrome / Edge", browser if browser else "not found - Playwright's own Chromium is downloaded the first time (internet needed)")
+    portal_jobs = any((settings.get(k) or {}).get("enabled", True) for k in ("sla", "itsm"))
+    line("Chrome / Edge", browser if browser else "not found - install Microsoft Edge or Google Chrome, or set sla.browser_executable",
+         not browser and portal_jobs)
 
     for kind, label in ACCOUNTS.items():
         username = str(settings[kind].get("username") or "")
@@ -527,7 +529,7 @@ def cmd_stop(args):
     if not name or not name.startswith("python"):
         say("The collector is running but its process id is unknown. End the python / pythonw process in Task Manager.")
         return 1
-    if os.name == "nt":                                   # /T also ends the job processes (Chrome, Playwright ...)
+    if os.name == "nt":                                   # /T also ends the job processes (Outlook helpers, Chrome / Edge ...)
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
     else:
         os.kill(pid, signal.SIGTERM)
@@ -653,13 +655,38 @@ def stop_child(child):
     child.wait()
 
 
+def init_when_reachable(store, stopping, sleep=time.sleep):
+    """``store.init()``, waiting for the data folder with a back-off (10 s, 20 s ... 2 min) instead of giving up: at
+    Windows log-in the autostart may run before the network share is mounted. False when a stop was requested."""
+    from calllog.storage import StorageError
+    wait = 10
+    while not stopping:
+        try:
+            store.init()
+            return True
+        except StorageError as exc:
+            say(f"The data folder is not reachable yet - trying again in {wait} s. ({exc})")
+            for _ in range(wait):
+                if stopping:
+                    break
+                sleep(1)
+            wait = min(wait * 2, 120)
+    return False
+
+
 def cmd_service(args):
     """Keep the collector running for months: restart it when it stops or when the program files are updated."""
     from calllog.ops import runner
     cc, data_dir, store = load_context(args)
-    store.init()
     if not claim_instance():
         say("A collector is already running on this PC.")
+        return 0
+    stopping = []
+    on_stop_signal(lambda *_: stopping.append(1))
+    try:
+        if not init_when_reachable(store, stopping):
+            return 0
+    except KeyboardInterrupt:
         return 0
     write_pid(store)
     console = store.logs_dir / "collector-console.log"
@@ -678,8 +705,6 @@ def cmd_service(args):
 
     cmd = [sys.executable, "-u", str(SCRIPT)] + passthrough(args)
     env = dict(os.environ, **{SUPERVISED_FLAG: "1"})
-    stopping = []
-    on_stop_signal(lambda *_: stopping.append(1))
     delay = 10
     note("Supervisor started: keeps the collector running and restarts it when the program files change.")
     while not stopping:

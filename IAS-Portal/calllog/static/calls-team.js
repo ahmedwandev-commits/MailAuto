@@ -7,11 +7,12 @@
   const { h, $, api, toast, bidi, fmtNum } = CL;
   const page = $("#calls-page");
   const STATUS = [["resolved", "Resolved", "resolved"], ["transferred", "Transferred", "transferred"], ["ticket_inquiry", "Ticket inquiry", "ticket_inquiry"]];
-  const state = { date: "", data: null, serverTime: "" };
+  const state = { date: "", today: "", data: null, serverTime: "" };
   const el = {};
   const tables = {};
 
-  const todayIso = () => OPS.localNowIso().slice(0, 10);
+  // "today" is the SERVER's day (the PC clock may be ahead: asking the server for a future day fails); the first answer sets it
+  const todayIso = () => state.today || OPS.localNowIso().slice(0, 10);
   function shiftDate(iso, days) {
     const [y, m, d] = iso.split("-").map(Number);
     const dt = new Date(y, m - 1, d + days, 12);
@@ -77,6 +78,11 @@
   function render(d) {
     state.data = d;
     state.serverTime = d.server_time || "";
+    if (state.serverTime) state.today = state.serverTime.slice(0, 10);
+    if (!state.date) state.date = d.date;                  // the first answer: the server's today
+    el.dateInput.max = todayIso();
+    el.dateInput.value = state.date;
+    el.next.disabled = state.date >= todayIso();
     const teams = d.scope === "all" ? "all teams" : (d.scope_teams || []).join(", ");
     el.sub.textContent = `${prettyDate(state.date)} · ${teams}`;
     kpis(d.totals);
@@ -101,7 +107,7 @@
     if (!state.data) toast(e.network ? "Cannot reach the server - retrying." : e.message, "error");
   }
 
-  const loader = OPS.loader({ url: () => `/api/ops/team-calls?date=${encodeURIComponent(state.date)}`,
+  const loader = OPS.loader({ url: () => `/api/ops/team-calls${state.date ? `?date=${encodeURIComponent(state.date)}` : ""}`,
     interval: 30000, since: false, onData: render, onError: showError });
 
   function setDate(iso) {
@@ -132,8 +138,7 @@
   }
 
   async function start() {
-    state.date = todayIso();
-    build();
+    build();                                               // state.date stays empty: the server answers for its own today
     loader.start();
   }
   start();

@@ -8,7 +8,15 @@ _ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 # Slow on purpose, but not so slow that ~60 people signing in at 08:00 queue up (about 0.1 s per sign-in on a
 # modern PC). Existing hashes keep working: the count is stored inside each hash. Tests lower it.
 PBKDF2_ITERATIONS = 260_000
-_DUMMY_HASH = generate_password_hash("not-a-real-password", method="pbkdf2:sha256")
+_DUMMY_HASHES = {}          # iteration count -> a hash nobody's password matches
+
+
+def _dummy_hash():
+    """A hash as costly as a real one, so a wrong user id takes as long as a wrong password (timing must not tell
+    which ids exist)."""
+    if PBKDF2_ITERATIONS not in _DUMMY_HASHES:
+        _DUMMY_HASHES[PBKDF2_ITERATIONS] = hash_password(secrets.token_urlsafe(16))
+    return _DUMMY_HASHES[PBKDF2_ITERATIONS]
 
 
 def hash_password(password):
@@ -17,7 +25,7 @@ def hash_password(password):
 
 def verify_password(password_hash, password):
     """Constant-ish time even when the user does not exist (password_hash=None)."""
-    return check_password_hash(password_hash or _DUMMY_HASH, password) and bool(password_hash)
+    return check_password_hash(password_hash or _dummy_hash(), password) and bool(password_hash)
 
 
 def generate_password(length=10):

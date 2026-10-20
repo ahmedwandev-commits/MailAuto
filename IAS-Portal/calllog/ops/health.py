@@ -39,8 +39,9 @@ def _minutes_since(stamp, now):
 
 
 def collector_online(heartbeat, interval_minutes, now):
-    """A collector is online when its heartbeat is younger than 3 x interval + 2 minutes (HUB-DESIGN section 6)."""
-    if not isinstance(heartbeat, dict):
+    """A collector is online when its heartbeat is younger than 3 x interval + 2 minutes (HUB-DESIGN section 6) and it
+    was not stopped on purpose."""
+    if not isinstance(heartbeat, dict) or heartbeat.get("state") == "stopped":     # stopped on purpose: not online
         return False
     age = _minutes_since(heartbeat.get("updated_at"), now)
     return age is not None and age < 3 * int(interval_minutes or 0) + 2
@@ -180,8 +181,9 @@ def _problems(report, settings, now):
     if not folder["writable"]:
         add("danger", f"The data folder is not writable: {folder['error'] or 'unknown error'}")
     disk = folder["disk"]
+    percent = disk.get("free_percent")                  # 0.0 on a nearly full big share is real, not "unknown"
     if disk.get("free_bytes") is not None and (
-            disk["free_bytes"] < LOW_DISK_BYTES or (disk["free_percent"] or 100) < LOW_DISK_PERCENT):
+            disk["free_bytes"] < LOW_DISK_BYTES or (percent is not None and percent < LOW_DISK_PERCENT)):
         add("warn", f"Low disk space on the data folder: {disk['free_bytes'] // 1_000_000} MB free ({disk['free_percent']}%)")
     if folder.get("write_ms") and folder["write_ms"] > 2000:
         add("warn", f"The data folder is slow ({folder['write_ms']:.0f} ms to write a small file)")

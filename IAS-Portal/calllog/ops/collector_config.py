@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 
 from ..config import APP_DIR, load_config
-from .settings import deep_merge
+from .settings import _FREE_DICTS, deep_merge
 
 FILE_NAME = "collector_config.json"
 SECTIONS = ("general", "email", "sla", "itsm")
@@ -49,6 +49,8 @@ def _flatten(prefix, value, out):
     if isinstance(value, dict) and value:
         for k, v in value.items():
             _flatten(f"{prefix}.{k}" if prefix else k, v, out)
+    elif isinstance(value, dict) and prefix.rsplit(".", 1)[-1] not in _FREE_DICTS:
+        return          # an empty {} merges nothing (e.g. a section holding only the password): it pins nothing
     else:
         out.append(prefix)
 

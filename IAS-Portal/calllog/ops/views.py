@@ -121,7 +121,7 @@ def my():
     if not wanted:
         return redirect("/hub")
     target = auth.store().get_user(wanted)
-    if not target:
+    if not target or not overlay.may_view_person(g.user, target):         # outside the manager's teams = not found
         return render_template("message.html", title="Person not found",
                                message="There is no account with that user ID. Go back to the Home page and choose from the list."), 404
     return render_template("my.html", view_as={"user_id": target["user_id"], "name": target.get("name") or target["user_id"]})

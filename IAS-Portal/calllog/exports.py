@@ -6,6 +6,7 @@ import json
 from flask import Blueprint, g, request, send_file
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from . import auth, overview as overview_data, stats
@@ -52,6 +53,12 @@ def _audit_rows(d_from, d_to):
 
 
 # ------------------------------------------------------------------ writers
+def xl_text(value):
+    """``value`` with the control characters Excel cannot hold removed (a note pasted from Word has \\x0b, a failed
+    login can carry anything), so one cell never turns a whole download into an error."""
+    return ILLEGAL_CHARACTERS_RE.sub("", value) if isinstance(value, str) else value
+
+
 def _xlsx(sheets):
     """sheets: [(title, header, rows, widths)] -> BytesIO. Streams rows (write-only mode)."""
     wb = Workbook(write_only=True)
@@ -64,14 +71,14 @@ def _xlsx(sheets):
         ws.freeze_panes = "A2"
         cells = []
         for h in header:
-            c = WriteOnlyCell(ws, value=h)
+            c = WriteOnlyCell(ws, value=xl_text(h))
             c.font, c.fill = head_font, head_fill
             c.alignment = Alignment(vertical="center")
             cells.append(c)
         ws.append(cells)
         for row in rows:
             out = []
-            for v in row:
+            for v in map(xl_text, row):
                 if isinstance(v, str) and v.startswith("="):
                     c = WriteOnlyCell(ws, value=v)
                     c.data_type = "s"  # keep text that starts with '=' from becoming a formula

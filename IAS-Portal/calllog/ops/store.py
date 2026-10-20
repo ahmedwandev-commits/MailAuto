@@ -219,14 +219,15 @@ class OpsStore:
             self._last_round = time.monotonic()
             self._refresher_stop.wait(max(0.05, interval - (time.monotonic() - started)))
 
-    def write_json(self, path, data):
+    def write_json(self, path, data, compact=False):
         path = Path(path)
-        _atomic_write_json(path, data)
+        _atomic_write_json(path, data, compact)
         with self._cache_lock:
             self._cache.pop(str(path), None)
 
-    def _update_json(self, path, lock_name, default, change):
-        """Read-modify-write under a lock. ``change(data)`` mutates and/or returns the new value."""
+    def _update_json(self, path, lock_name, default, change, compact=False):
+        """Read-modify-write under a lock. ``change(data)`` mutates and/or returns the new value. ``compact``: written
+        without indentation (the big machine-made recordings - a whole-year export is tens of thousands of requests)."""
         path = Path(path)
         with self._lock(lock_name)():
             self._cache.pop(str(path), None)
@@ -239,7 +240,7 @@ class OpsStore:
                 data = default() if callable(default) else default
             result = change(data)
             data = data if result is None else result
-            self.write_json(path, data)
+            self.write_json(path, data, compact)
             return data
 
     # --------------------------------------------------------------- settings
@@ -276,7 +277,8 @@ class OpsStore:
 
     def update_sla_records(self, change):
         """Read-modify-write the live SLA recording under a lock (``change(doc)`` edits records and/or config)."""
-        return self._update_json(self.sla_records_path, "sla_records", lambda: {"config": {}, "records": {}}, change)
+        return self._update_json(self.sla_records_path, "sla_records", lambda: {"config": {}, "records": {}}, change,
+                                 compact=True)
 
     def read_itsm_records(self):
         """The LIVE ITSM change-request recording: ``{"last_generated": iso, "records": {co_number: lifecycle}}``."""
@@ -284,7 +286,8 @@ class OpsStore:
 
     def update_itsm_records(self, change):
         """Read-modify-write the ITSM CR recording under a lock (``change(doc)`` edits records and/or last_generated)."""
-        return self._update_json(self.itsm_records_path, "itsm_records", lambda: {"last_generated": "", "records": {}}, change)
+        return self._update_json(self.itsm_records_path, "itsm_records", lambda: {"last_generated": "", "records": {}}, change,
+                                 compact=True)
 
     def read_classify_suggestions(self):
         """Admin decisions on the learned classifications ('this Unclassified mail was answered by team X'):

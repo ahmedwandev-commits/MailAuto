@@ -7,6 +7,7 @@ to prove the timeout / kill / crash handling of isolated runs; none of them touc
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -328,6 +329,40 @@ def test_timeline_events_come_from_the_snapshot_difference(store, clock, monkeyp
     assert [e["kind"] for e in events] == ["sla_breached"] and events[0]["count"] == 2
 
 
+def test_the_collector_records_every_scan_for_the_sla_analysis_with_no_web_page_open(store, clock, monkeypatch):
+    """The SLA and ITSM recordings are folded by the collector as it writes each scan: requests that come and go
+    between two visits to the web pages are not lost, and each closes at the scan where it left the queue."""
+    scans = iter([["k0", "k1", "k2"], ["k1", "k2"], ["k2"]])
+    def sla(ctx):
+        keys = next(scans)
+        data = sla_data()
+        data["requests"] = [r for r in data["requests"] if r["key"] in keys]
+        return JobResult(ok=True, snapshot_data=data, summary=f"{len(keys)} open")
+    monkeypatch.setitem(runner.JOBS, "sla", sla)
+    r = make_runner(store, clock)
+    stamps = []
+    for _ in range(3):
+        r.step("sla")
+        stamps.append(fresh(store).read_snapshot("sla")["generated_at"])
+        clock.advance(minutes=15)
+    doc = fresh(store).read_sla_records()
+    recs = doc["records"]
+    assert doc["last_scan"] == stamps[2] and set(recs) == {"k0", "k1", "k2"}
+    assert recs["k0"]["executed_at"] == stamps[1] and recs["k1"]["executed_at"] == stamps[2]   # closed where they left
+    assert recs["k2"]["executed_at"] == "" and recs["k0"]["executor"] == "user a"
+
+
+def test_the_collector_records_each_itsm_scan_too(store, clock, monkeypatch):
+    data = {"categories": ["Implementation Requests"], "totals": {"Implementation Requests": 1}, "changes": {"new": [], "closed": []},
+            "roles": [{"role": "IMP Card Management", "error": None, "categories": {"Implementation Requests": {
+                "count": 1, "rows": [{"number": "512400", "summary": "Add user"}], "warning": None, "note": None}}}]}
+    monkeypatch.setitem(runner.JOBS, "itsm", lambda ctx: JobResult(ok=True, snapshot_data=data, summary="1 request"))
+    r = make_runner(store, clock, jobs=("itsm",))
+    r.step("itsm")
+    doc = fresh(store).read_itsm_records()
+    assert "512400" in doc["records"] and doc["last_generated"] == fresh(store).read_snapshot("itsm")["generated_at"]
+
+
 def test_report_job_writes_history_extra_but_no_snapshot(store, clock, monkeypatch):
     monkeypatch.setitem(runner.JOBS, "email_report", good_report)
     clock.value = datetime(2026, 10, 12, 16, 31)
@@ -424,6 +459,25 @@ def test_dry_run_writes_and_sends_nothing(store, clock, monkeypatch):
     assert store.read_history("sla", "2026-10-12") is None and all_text(store.root) == before
 
 
+def test_dry_run_sends_each_report_slot_once_and_deletes_nothing(store, clock, monkeypatch):
+    calls = []
+    monkeypatch.setitem(runner.JOBS, "email_report", lambda ctx: calls.append(ctx.now()) or JobResult(ok=True, summary="sent"))
+    hub_settings.patch(store, {"email": {"report": {"send_times": ["16:30"]}}})
+    old_report = store.report_dir("sla") / "SLA_Report_20260101_1000.xlsx"
+    old_report.write_bytes(b"x")
+    os.utime(old_report, (time.time() - 400 * 86400, time.time() - 400 * 86400))
+    files = lambda: {p: p.read_bytes() for p in store.root.rglob("*") if p.is_file() and "locks" not in p.parts}  # noqa: E731
+    before = files()
+    r = make_runner(store, clock, jobs=("email_report",), dry_run=True, mailer_factory=None)
+    clock.value = datetime(2026, 10, 12, 16, 30, 1)
+    for _ in range(60):                                       # five minutes of 5-second polls
+        r.step("email_report")
+        clock.advance(seconds=5)
+    assert len(calls) == 1                                    # the slot is remembered in memory, not re-run every poll
+    assert r.housekeeping_if_due(datetime(2026, 10, 12, 22, 0)) is None and old_report.exists()
+    assert files() == before                                  # "write and send nothing" includes deleting nothing
+
+
 def test_missing_engine_fails_cleanly(store, clock, monkeypatch):
     monkeypatch.setitem(runner.JOBS, "email_report", ("calllog.ops.engines.not_written_yet", "run_report"))
     clock.value = datetime(2026, 10, 12, 16, 40)
@@ -516,8 +570,10 @@ def test_failed_report_is_retried_inside_the_window(store, clock, monkeypatch):
     r = make_runner(store, clock, jobs=("email_report",))
     clock.value = datetime(2026, 10, 12, 16, 30)
     assert r.step("email_report") == "ran" and hb(store, "email_report")["last_status"] == "error"
+    assert hb(store, "email_report")["next_run_at"] == "2026-10-12T16:40:00"   # the retry, not tomorrow's slot
     clock.advance(minutes=5)
     assert r.step("email_report") == "idle"                                  # backing off
+    assert hb(store, "email_report")["next_run_at"] == "2026-10-12T16:40:00"
     clock.advance(minutes=6)
     assert r.step("email_report") == "ran" and hb(store, "email_report")["last_status"] == "ok"
     clock.advance(minutes=30)
@@ -541,6 +597,24 @@ def test_a_skipped_run_is_reported_but_changes_nothing_else(store, clock, monkey
     assert fresh(store).read_state("runner-email_report")["done"] == ["16:30", "16:40", "16:50"]   # one run covers every due slot
 
 
+def test_a_late_report_that_ends_after_midnight_keeps_the_next_days_slot(store, monkeypatch):
+    """The 23:50 report of Monday may finish after 00:00 (it waits on the Outlook lock): it is Monday's slot, so
+    Tuesday's 23:50 report is still sent."""
+    clock = Clock(datetime(2026, 10, 12, 23, 50, 5))
+
+    def slow_report(ctx):
+        clock.advance(minutes=15)
+        return JobResult(ok=True, summary="sent")
+    monkeypatch.setitem(runner.JOBS, "email_report", slow_report)
+    hub_settings.patch(store, {"general": {"work_days": []}, "email": {"report": {"send_times": ["23:50"]}}})
+    r = make_runner(store, clock, jobs=("email_report",))
+    assert r.step("email_report") == "ran"
+    assert fresh(store).read_state("runner-email_report") == {"day": "2026-10-12", "done": ["23:50"]}
+    assert hb(store, "email_report")["next_run_at"] == "2026-10-13T23:50:00"
+    clock.value = datetime(2026, 10, 13, 23, 50, 5)
+    assert r.step("email_report") == "ran"
+
+
 def test_next_active_start():
     s, _ = hub_settings.validate({"general": {"holidays": ["2026-10-13"]}})
     assert runner.next_active_start(s, "sla", datetime(2026, 10, 12, 10, 0)) == datetime(2026, 10, 12, 10, 0)
@@ -548,6 +622,24 @@ def test_next_active_start():
     assert runner.next_active_start(s, "sla", datetime(2026, 10, 12, 6, 0)) == datetime(2026, 10, 12, 8, 0)
     all_day, _ = hub_settings.validate({"general": {"active_hours": "", "work_days": []}})
     assert runner.next_active_start(all_day, "sla", datetime(2026, 10, 16, 3, 0)) == datetime(2026, 10, 16, 3, 0)
+    night, _ = hub_settings.validate({"general": {"active_hours": "22:00-06:00", "work_days": []}})
+    assert runner.next_active_start(night, "sla", datetime(2026, 10, 12, 12, 0)) == datetime(2026, 10, 12, 22, 0)
+    assert runner.next_active_start(night, "sla", datetime(2026, 10, 12, 23, 0)) == datetime(2026, 10, 12, 23, 0)
+    assert runner.next_active_start(night, "sla", datetime(2026, 10, 13, 3, 0)) == datetime(2026, 10, 13, 3, 0)
+
+
+def test_a_night_shift_collector_runs_through_the_night(store, monkeypatch):
+    monkeypatch.setitem(runner.JOBS, "sla", good_sla)
+    hub_settings.patch(store, {"general": {"active_hours": "22:00-06:00", "work_days": []}, "sla": {"interval_minutes": 60}})
+    clock = Clock(datetime(2026, 10, 12, 12, 0))
+    r = make_runner(store, clock)
+    ran = []
+    for _ in range(24 * 12):                                     # one day, a step every 5 minutes
+        if r.step("sla") == "ran":
+            ran.append(clock().strftime("%H:%M"))
+        clock.advance(minutes=5)
+    assert ran == ["22:00", "23:00", "00:00", "01:00", "02:00", "03:00", "04:00", "05:00", "06:00"]
+    assert hb(store)["state"] == "outside_hours" and hb(store)["next_run_at"] == "2026-10-13T22:00:00"
 
 
 # --------------------------------------------------------------------- 24/7 rules: pause, back-off
@@ -601,6 +693,46 @@ def test_pause_survives_a_restart_of_the_collector(store, clock, monkeypatch, tm
     write_config(tmp_path, {"sla": {"username": "1001", "password": "fixed-pw"}})
     os.utime(cc.path, (time.time() + 60, time.time() + 60))
     assert restarted.step("sla") == "ran" and hb(store)["paused"] is None
+
+
+def fake_credential_manager(monkeypatch):
+    """Windows Credential Manager in memory (a stand-in ``keyring`` module): ``vault[kind] = password`` is what
+    ``collector.py --set-password <kind>`` does."""
+    vault = {}
+    services = {svc: kind for kind, svc in common.KEYRING_SERVICES.items()}
+    fake = type(sys)("keyring")
+    fake.get_password = lambda service, username: vault.get(services.get(service))
+    monkeypatch.setitem(sys.modules, "keyring", fake)
+    return vault
+
+
+def test_a_password_saved_in_the_credential_manager_lifts_the_pause(store, clock, monkeypatch, tmp_path):
+    """The engine tells the user to run `collector.py --set-password sla`; doing so must resume the scans."""
+    vault = fake_credential_manager(monkeypatch)
+    cc = write_config(tmp_path, {"sla": {"username": "1001"}})                 # no password anywhere yet
+    monkeypatch.setitem(runner.JOBS, "sla", auth_failing_sla)
+    r = make_runner(store, clock, cc)
+    assert r.step("sla") == "ran" and hb(store)["paused"] == "auth"
+    monkeypatch.setitem(runner.JOBS, "sla", good_sla)
+    clock.advance(hours=1)
+    assert r.step("sla") == "idle"
+    vault["sla"] = "the-right-pw"
+    assert r.step("sla") == "ran" and hb(store)["paused"] is None
+    assert "the-right-pw" not in all_text(store.root.parent)
+
+
+def test_after_a_restart_a_new_password_source_lifts_the_pause(store, clock, monkeypatch, tmp_path):
+    vault = fake_credential_manager(monkeypatch)
+    cc = write_config(tmp_path, {"sla": {"username": "1001"}})
+    monkeypatch.setitem(runner.JOBS, "sla", auth_failing_sla)
+    make_runner(store, clock, cc).step("sla")
+    monkeypatch.setitem(runner.JOBS, "sla", good_sla)
+    restarted = make_runner(fresh(store), clock, collector_config.load(cc.path))
+    clock.advance(hours=1)
+    assert restarted.step("sla") == "idle"                                     # nothing changed: still paused
+    vault["sla"] = "the-right-pw"
+    again = make_runner(fresh(store), clock, collector_config.load(cc.path))   # set the password, then restart
+    assert again.step("sla") == "ran" and hb(store)["paused"] is None
 
 
 # ----------------------------------------------------------------------------------- housekeeping
@@ -700,6 +832,21 @@ def test_stopping_kills_the_job_process_tree(store, clock, monkeypatch, tmp_path
     time.sleep(0.5)
     assert_gone(child)
     assert_gone(grandchild)
+
+
+def test_stop_kills_the_job_and_records_a_stop_not_a_failure(store, clock, monkeypatch, tmp_path):
+    """cmd_run's own sequence (Ctrl+C / SIGTERM / --stop): stop() kills the child at once, before the worker's next look
+    at the stop flag; the run must still be recorded as stopped, never as 'ended unexpectedly'."""
+    r, _ = isolated_runner(store, clock, tmp_path, monkeypatch, "isolated_sleep")
+    worker, child, grandchild = start_sleeping_job(r, store, "sla")
+    r.request_stop()
+    r.stop()
+    worker.join(30)
+    beat = hb(store)
+    assert beat["state"] == "stopped" and beat.get("last_status") is None and not beat.get("runs_failed")
+    assert not beat.get("consecutive_failures")
+    assert [e["kind"] for e in fresh(store).read_events("2026-10-12")] == []
+    assert "ended unexpectedly" not in "\n".join(store.tail_log("sla", 50))
 
 
 def test_a_stopped_report_keeps_its_slot(store, clock, monkeypatch, tmp_path):
@@ -841,6 +988,27 @@ def test_command_line_parsing():
     assert "--service" in arguments and "collector.py" in arguments and "--jobs sla" in arguments
 
 
+def test_the_supervisor_waits_for_a_share_that_is_not_mounted_yet(tmp_path, monkeypatch):
+    """At Windows log-in the network share may come up after the autostart: the supervisor must wait, not exit."""
+    from calllog.storage import StorageError
+    store, attempts, naps = OpsStore(tmp_path / "data"), [], []
+    real_init = store.init
+
+    def flaky_init():
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise StorageError("Cannot use the data folder: the network path was not found")
+        return real_init()
+    monkeypatch.setattr(store, "init", flaky_init)
+    assert collector.init_when_reachable(store, [], sleep=naps.append) is True
+    assert len(attempts) == 3 and (store.root / "state").is_dir()
+    assert len(naps) == 10 + 20                                          # it waited (10 s, then 20 s), one-second naps
+
+    stop = []
+    monkeypatch.setattr(store, "init", lambda: (_ for _ in ()).throw(StorageError("still not there")))
+    assert collector.init_when_reachable(store, stop, sleep=lambda s: stop.append(1)) is False     # a stop ends the wait
+
+
 def test_a_second_collector_on_the_same_pc_is_refused(tmp_path, monkeypatch, capsys):
     cfg = write_config(tmp_path)
     monkeypatch.setattr(collector, "missing_packages", lambda: [])
@@ -866,6 +1034,18 @@ def test_missing_packages_are_listed_not_crashed_on(monkeypatch, capsys):
 
 def test_requirements_file_lists_what_the_collector_needs():
     text = (REPO / "requirements-collector.txt").read_text(encoding="utf-8")
-    for name in ("pywin32", "playwright", "keyring", "openpyxl", "Flask"):
+    for name in ("pywin32", "keyring", "openpyxl", "Flask"):
         assert name in text
     assert "matplotlib" in text and "pandas" not in text.lower().replace("no pandas", "")
+
+
+def test_the_collector_needs_no_playwright_or_selenium():
+    """The portal jobs drive the PC's own Edge / Chrome over the DevTools protocol: nothing to install for a browser."""
+    packages = [line.split("#")[0].strip().lower() for line in
+                (REPO / "requirements-collector.txt").read_text(encoding="utf-8").splitlines()]
+    assert not [p for p in packages if p.startswith(("playwright", "selenium"))]
+    assert not [name for _, name in collector.PACKAGES if name.lower() in ("playwright", "selenium")]
+    engines = REPO / "calllog" / "ops" / "engines"
+    imports = re.compile(r"^\s*(?:import|from)\s+(?:playwright|selenium)\b", re.M)
+    for path in [*engines.glob("*.py"), REPO / "collector.py", REPO / "calllog" / "ops" / "runner.py"]:
+        assert not imports.search(path.read_text(encoding="utf-8")), path

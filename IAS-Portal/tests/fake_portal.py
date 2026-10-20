@@ -16,6 +16,7 @@
     datatables   only ``page_size`` rows are in the DOM; a small DataTables-like API (window.jQuery.fn.dataTable with
                  tables() and Api) hands out all of them, the hidden ones as markup (no external JS needed)
     search       the table is empty until the "بحث" button is pressed
+    gridview     an ASP.NET GridView: no <thead>; the <th> header row and a <th> footer row are rows of the body
     empty        the right headers and no rows (an empty queue)
     no_table     a table whose headers lack the sent-date column
 
@@ -238,6 +239,10 @@ class FakePortal:
         if v == "plain":
             rows = "".join(_row_html(c) for c in cells)
             return self._page("Re-Assign", f"<table><thead><tr>{head_row}</tr></thead><tbody>{rows}</tbody></table>")
+        if v == "gridview":
+            rows = "".join(_row_html(c) for c in cells)
+            foot = "".join(f"<th>{html.escape(c)}</th>" for c in ["", f"الاجمالي: {len(cells)}"] + [""] * (len(HEADERS) - 2))
+            return self._page("Re-Assign", f"<table id='GridView1'><tr>{head_row}</tr>{rows}<tr>{foot}</tr></table>")
         if v == "paged":
             return self._page("Re-Assign", self._paged_body(head_row, cells))
         if v == "datatables":

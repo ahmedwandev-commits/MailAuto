@@ -119,6 +119,11 @@ body:has(> .topbar) { padding-inline-start: var(--sidebar-w); }
 .op-head-title { min-width: 0; }
 .op-head-title h1 { margin-bottom: 2px; }
 .op-head-tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+/* the title bar of E-mail, Ticketing, ITSM, Team calls and My work: the title and scan time on the left, the actions
+   (Run scan now, Export, Log a call) on the right - the same place on every page */
+.op-titlebar, .sx-titlebar { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; margin-bottom: 4px; }
+.op-titlebar h1, .sx-titlebar h1 { font-size: 1.4rem; margin-bottom: 2px; }
+.op-titlebar .hint, .sx-titlebar .hint { display: block; }
 .op-viewas { display: flex; align-items: center; gap: 8px; margin: 0; }
 .op-viewas select, .op-viewas input { max-width: 270px; }
 .op-viewas-input { min-width: 210px; }
@@ -253,6 +258,8 @@ a.op-strip-group:hover { background: var(--wash); }
 .op-big-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .op-big { font-size: 2.5rem; line-height: 1; font-weight: 650; font-variant-numeric: tabular-nums; }
 .op-viz { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.op-viz-row { display: flex; align-items: center; justify-content: space-between; gap: 12px 28px; flex-wrap: wrap; }
+.op-facts.op-facts-row { display: flex; flex-wrap: wrap; gap: 10px 28px; }
 .op-viz-donut { gap: 16px; flex-wrap: nowrap; }
 .op-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; margin: 0; }
 .op-fact { display: grid; gap: 1px; min-width: 0; }

@@ -28,6 +28,19 @@ def test_accounts_and_overlay_without_secrets(tmp_path):
     assert cc.pinned_keys() == ["email.target_archive_name", "itsm.username", "sla.username", "sla.warning_minutes"]
 
 
+def test_a_section_holding_only_the_password_pins_nothing(tmp_path):
+    """User name set on the System page, password in the file: no setting of that section is pinned (the page would
+    otherwise lock every SLA / ITSM field)."""
+    cc = collector_config.load(write(tmp_path, {"sla": {"password": "pw"}, "itsm": {"_note": "x", "password": "pw"},
+                                                "email": {"classification": {}}}))
+    assert cc.pinned_keys() == []
+    base, _ = settings.validate({})
+    assert cc.apply(base) == base
+    # an empty map that REPLACES the saved one (not merged into it) is a real pin
+    cc = collector_config.load(write(tmp_path, {"sla": {"password": "pw", "owner_emails": {}}}))
+    assert cc.pinned_keys() == ["sla.owner_emails"]
+
+
 def test_file_wins_over_saved_settings_and_stays_valid(tmp_path):
     cc = collector_config.load(write(tmp_path, {"email": {"target_archive_name": "2026_Part3"}, "sla": {"username": "1"}}))
     base, _ = settings.validate({"email": {"target_archive_name": "old"}, "sla": {"username": "2"}})

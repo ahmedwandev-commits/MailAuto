@@ -7,7 +7,7 @@ from collections import Counter
 import hashlib
 import json
 
-from flask import Blueprint, current_app, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request, session
 
 from . import auth, branches as branch_list, ip_phones, overview as overview_data, stats
 from .ops import settings as hub_settings
@@ -292,7 +292,7 @@ def overview():
         return dict(
             range={"from": d_from, "to": d_to},
             totals={k: totals[k] for k in ("total", *STATUSES)} | {
-                "active_employees": sum(1 for r in rows if r["total"] > 0), "employees": len(employees)},
+                "active_employees": sum(1 for r in rows if r["total"] > 0), "employees": len(rows)},   # same people
             chart={"kind": kind, "buckets": stats.chart_buckets(data["rollups"], kind, d_from, d_to)},
             by_reason=data["by_reason"], employees=rows,
             recent=[decorate(r, users, reasons) for r in overview_data.recent_calls(d_from, d_to)],
@@ -485,10 +485,12 @@ def reset_password(uid):
             raise ApiError(problem)
     else:
         password = generate_password()
-    result = auth.store().update_user(uid, {
-        "password_hash": hash_password(password), "must_change_password": True})
+    new_hash = hash_password(password)
+    result = auth.store().update_user(uid, {"password_hash": new_hash, "must_change_password": True})
     if not result:
         raise ApiError("User not found.", 404)
+    if uid == g.user["user_id"]:            # an admin resetting their own password keeps this session (the others end)
+        session["pwv"] = auth.password_mark({"password_hash": new_hash})
     auth.audit("password_reset", target=uid)
     return jsonify(temp_password=password)
 
@@ -518,7 +520,10 @@ def _read_rows(upload, prefer_sheets=()):
         sheet = next((ws for ws in wb.worksheets if ws.title.strip().lower() in prefer_sheets), wb.worksheets[0])
         return [["" if c is None else str(c).strip() for c in row] for row in sheet.iter_rows(values_only=True)]
     if filename.endswith(".csv"):
-        text = raw.decode("utf-8-sig", errors="replace")
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw.decode("cp1256", errors="replace")       # "CSV" saved by Excel on an Arabic Windows
         try:
             dialect = csv.Sniffer().sniff(text[:2048], delimiters=",;\t")
         except csv.Error:

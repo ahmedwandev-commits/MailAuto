@@ -264,6 +264,8 @@
     if (!m.online) return { level: "danger", icon: "alert", text: `The collector is offline. Showing the scan from ${when} (${agoText}).` };
     if (m.stale) return { level: "warn", icon: "clock", text: `The data is ${fmtAge(ago)} old although scans run every ${m.interval_minutes} min. Showing the scan from ${when}.` };
     if (!m.active_now) return { level: "info", icon: "clock", text: `Outside working hours - showing the last scan from ${when}.` };
+    // a manager gets no collector alarms (the server hides them), but old data is never called "Live"
+    if (ago != null && ago > 3 * Math.max(1, m.interval_minutes || 15)) return { level: "info", icon: "clock", text: `Last scan ${when} (${agoText}).` };
     const next = m.next_run_at ? ` · next about ${hhmm(m.next_run_at)}` : "";
     return { level: "ok", icon: "check", text: `Live · last scan ${when} (${agoText})${next}${m.host ? ` · ${m.host}` : ""}` };
   }
@@ -731,13 +733,23 @@
     const admin = (root.dataset || {}).role === "admin";       // only admins run scans / see collector errors
     root.replaceChildren(h("div", { class: "sx-page" },
       h("div", { class: "sx-titlebar" }, h("div", {}, h("h1", {}, "ITSM requests"), el.scanInfo), h("span", { class: "grow" }), admin && el.runBtn, el.exportLink),
-      el.banner, el.runLine, tabbar, el.boardPanel, el.analysisPanel));
+      tabbar, el.banner, el.runLine, el.boardPanel, el.analysisPanel));     // title, tabs, freshness, data - like Ticketing
     setTab(state.tab);
+  }
+
+  function applyLink() {
+    // deep links win over the view remembered for this browser tab (Home makes them): /itsm?q=<request number or text>
+    //   /itsm?tab=requests|scoreboard (or #requests)
+    const p = new URLSearchParams(location.search);
+    if (p.has("q")) { state.q = (p.get("q") || "").slice(0, 100); state.tab = "scoreboard"; }
+    const tab = p.get("tab") || location.hash.slice(1);
+    if (tab === "requests" || tab === "scoreboard") state.tab = tab;
   }
 
   async function start() {
     await ensureStyles();
     loadView();
+    applyLink();
     build();
     refresh(true).catch((e) => { state.failure = { network: !!e.network, message: e.message }; renderBanner(); if (!e.network) toast(e.message, "error"); }).finally(() => schedule());
     setInterval(() => { if (!document.hidden && state.snap) renderBanner(); }, TICK_MS);

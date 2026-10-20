@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from calllog.ops import schemas, settings
+from calllog.ops import overlay, schemas, settings
 from calllog.ops.engines import email_engine as eng
 from calllog.ops.engines import email_rules as rules
 from calllog.ops.engines.common import JobContext
@@ -426,6 +426,26 @@ def test_short_acronyms_match_whole_words_only():
     assert r.detect("I-Flex SMS Team mailbox", "nothing")[0] == []           # a mailbox display name is noise
 
 
+def test_short_built_in_keywords_do_not_fire_inside_ordinary_words():
+    r = rules.build_rules({})
+    for body in ("Please send the December statement", "How do we interpret this circular?",
+                 "the processor and the associate", "the new BAWDY form", "a CXMAS card"):
+        assert r.detect("x", body)[0] == [], body
+    assert r.detect("x", "CEM account locked")[1] == "Open System"
+    assert r.detect("x", "the ERP screen")[1] == "Open System"
+    assert r.detect("x", "SSO login fails")[1] == "Open System"
+    # a Flex Cube mail that says "December" stays one Flex Cube row (no extra Open System team)
+    assert r.detect("x", "Please reset my FCUBS password before the December closing.")[2] == ["Flex Cube"]
+
+
+def test_one_fcubs_mention_counts_as_one_application():
+    r = rules.build_rules({})
+    assert r.canonical_application("FCUB") == "Flexcube"
+    systems, team, all_teams = r.detect("Card issue", "The Prepaid card on DWP fails for this FCUBS customer.")
+    assert systems.count("Flexcube") == 1 and "FCUB" not in systems
+    assert team == "Card Management"                    # two card applications beat one Flex Cube application
+
+
 def test_ties_between_teams_go_by_priority_and_the_priority_is_tunable():
     r = rules.build_rules({})
     assert r.detect("x", "Windows and DWP")[1] == "Card Management"            # specific team before the generic one
@@ -704,7 +724,12 @@ def test_quality_scorecard_index_leaderboard_and_matrix(store):
     quadrants = {e["name"]: e["quadrant"] for e in s["speed_quality_matrix"]}
     assert quadrants == {"Alice": "Fast & High Quality", "Bob": "Slow & Low Quality", "Carol": "Fast & High Quality"}
     assert (s["manager_reply_count"], s["repliable_count"]) == (1, 7)
-    assert s["quality_coverage_rate"] == 100.0
+    assert s["quality_coverage_rate"] == pytest.approx(85.7, abs=0.05)   # 6 of 7: the withdrawn rating is not "reviewed"
+    # the headline counts leave out the withdrawn rating too (the web recount agrees with the collector)
+    assert (s["quality_reviewed"], s["quality_excellent"], s["quality_good"], s["quality_needs_improvement"]) == (7, 2, 3, 2)
+    recounted = overlay.recount(eng.to_snapshot_data(out, make_ctx(store))["rows"], {})["quality"]
+    assert (recounted["reviewed"], recounted["excellent"], recounted["good"], recounted["needs_improvement"]) == (7, 2, 3, 2)
+    assert recounted["coverage_rate"] == pytest.approx(85.7, abs=0.05)
 
 
 # -------------------------------------------------------------------------------------------- statistics
@@ -814,9 +839,15 @@ def test_run_scan_returns_snapshot_summary_and_history_point(ctx):
     assert result.snapshot_date == "2026-10-11"
     assert schemas.validate_snapshot(schemas.make_envelope("email", result.snapshot_data, "2026-10-11T12:00:00")) == []
     assert result.summary.startswith("5 business e-mails, 2 replied") or "business e-mails" in result.summary
-    assert result.history_point == {
+    point = dict(result.history_point)
+    groups = point.pop("groups")
+    assert point == {
         "ts": "2026-10-11T12:00:00", "business_emails": 4, "replied": 2, "pending": 2, "no_action_needed": 1,
         "sla_breached": 1, "escalated": 1}      # the FCUBS+DWP mail is one Replied row now (one reply clears all)
+    # per set of teams, adding up to the totals: what a manager's own history is rebuilt from
+    keys = ("business_emails", "replied", "pending", "no_action_needed", "sla_breached", "escalated")
+    assert {k: sum(g[k] for g in groups) for k in keys} == {k: point[k] for k in keys}
+    assert ["Flex Cube", "Card Management"] in [g["teams"] for g in groups]
 
 
 def test_run_scan_never_raises(store):
@@ -1008,7 +1039,6 @@ def test_snapshot_uses_the_web_wording_for_durations_and_carries_override_detail
 
 
 def test_the_web_overlay_agrees_with_the_collector_on_its_own_rows(store):
-    from calllog.ops import overlay
     split = mail(subject="Two systems", conv="CONV-M", minutes_ago=90, body="FCUBS login fails and DWP is down")
     thanks = mail(subject="Thanks", body="Thank you")
     marked = mail(subject="Marked", minutes_ago=40)

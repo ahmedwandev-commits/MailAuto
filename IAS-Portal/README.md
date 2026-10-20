@@ -61,7 +61,8 @@ Precedence: a manual team change > mailbox rule > system words (your keyword rul
 * The collector runs every job as a separate process with a time limit, so a stuck Outlook call or browser can never freeze it; a wrong password pauses that job's scheduled runs
   instead of hammering the login (protects the account from a lock-out) until the password changes or an administrator presses *Run now*.
 * Scheduled scans follow `general.work_days` / `active_hours` / `holidays` (default Sun-Thu 08:00-17:00 as in the old scripts); outside them the pages say "outside working hours - showing the last scan".
-  Set `active_hours` to empty and all days for round-the-clock scanning.
+  Set `active_hours` to empty and all days for round-the-clock scanning; a night shift such as `22:00-06:00` runs across
+  midnight.
 * A daily housekeeping step prunes old history, events, reports and debug files. Calls and the audit log are never touched.
 
 ---

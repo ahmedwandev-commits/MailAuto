@@ -170,6 +170,14 @@ def test_schedule_rules():
     assert settings.is_active(s, "sla", sunday) and not settings.is_active(s, "sla", dt.datetime(2026, 10, 11, 12, 0))
 
 
+def test_night_shift_hours_cross_midnight():
+    s, errors = settings.validate({"general": {"active_hours": "22:00-06:00", "work_days": []}})
+    assert errors == [] and s["general"]["active_hours"] == "22:00-06:00"
+    at = lambda h, m=0: settings.is_active(s, "sla", dt.datetime(2026, 10, 12, h, m))      # noqa: E731
+    assert [at(21, 59), at(22, 0), at(23, 30), at(2, 0), at(6, 0), at(6, 1), at(12, 0)] == [
+        False, True, True, True, True, False, False]
+
+
 def test_classification_settings():
     clean, errors = settings.validate({"email": {"classification": {
         "system_team_map": {"Swift Alliance": "Third Party", "فليكس": "Flex Cube"},
@@ -230,3 +238,27 @@ def test_event_store_roundtrip(ops):
     assert [e["text"] for e in ops.read_events("2026-10-11")] == ["b", "a"]
     assert [e["text"] for e in ops.read_events("2026-10-12")] == ["c"]
     assert ops.read_events("2026-10-13") == []
+
+
+# ------------------------------------------------------------------------------------------------ health
+def test_a_stopped_collector_is_offline_at_once():
+    from calllog.ops import health
+    now = dt.datetime(2026, 10, 12, 10, 0)
+    beat = {"state": "idle", "updated_at": "2026-10-12T09:59:00"}
+    assert health.collector_online(beat, 15, now) is True
+    assert health.collector_online({**beat, "state": "stopped"}, 15, now) is False      # Ctrl+C / --stop wrote a last beat
+
+
+def _disk_problems(monkeypatch, total, free):
+    from calllog.ops import health
+    monkeypatch.setattr(health.shutil, "disk_usage", lambda folder: (total, total - free, free))
+    report = {"data_folder": {"writable": True, "error": None, "write_ms": 1, "disk": health.disk_usage(".")},
+              "snapshots": {}, "heartbeats": {}, "pending_requests": {"count": 0}, "audit_today": {"failed_sign_ins": 0}}
+    return [p["text"] for p in health._problems(report, {}, dt.datetime(2026, 10, 12, 10, 0))]
+
+
+def test_low_disk_warning_also_fires_when_the_free_share_rounds_to_zero(monkeypatch):
+    tb = 1_000_000_000_000
+    assert any("Low disk space" in t for t in _disk_problems(monkeypatch, 4 * tb, 1_500_000_000))   # 0.0375% -> 0.0%
+    assert any("Low disk space" in t for t in _disk_problems(monkeypatch, 4 * tb, 3_000_000_000))
+    assert _disk_problems(monkeypatch, 4 * tb, 2 * tb) == []

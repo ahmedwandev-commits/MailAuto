@@ -31,7 +31,7 @@
     tab: "overview",
     filters: { team: "", system: "", assigned: "", carryover: false, escalated: false, q: "" },
     history: null, historyLoaded: false,
-    waiting: null, sugSig: null,
+    waiting: null, sugSig: null, linkQuery: "",
   };
   const el = {};
   const tables = {};
@@ -272,9 +272,9 @@
       tile("Replied", n(s.replied), OPS.fmtPct(s.reply_rate) + " reply rate", s.replied ? "ok" : null, "check"),
       tile("Pending", n(s.pending), "need a reply", s.pending ? "warn" : null, "clock"),
       tile("No action", n(s.no_action_needed), "marked no reply", null, "dash"),
+      tile("Carry-over", n(s.carryover_count), s.carryover_count ? `oldest ${s.carryover_oldest_days} d` : "none", s.carryover_count ? "warn" : null, "clock"),
       tile("Past SLA", n(s.sla_breached), OPS.fmtPct(s.sla_compliance_rate) + " on time", s.sla_breached ? "danger" : "ok", "alert"),
       tile("Escalated", n(s.escalated_count), "still no reply", s.escalated_count ? "danger" : null, "alert"),
-      tile("Carry-over", n(s.carryover_count), s.carryover_count ? `oldest ${s.carryover_oldest_days} d` : "none", s.carryover_count ? "warn" : null, "clock"),
       tile("Assigned", n(s.assigned_count), "to a person", null, "user"),
       tile("Avg first reply", OPS.fmtDuration(s.average_response), s.fastest_response ? `fastest ${OPS.fmtDuration(s.fastest_response)}` : "", null, "activity"));
   }
@@ -301,7 +301,9 @@
       sort: { key: "pending", desc: true },
       columns: [
         { key: "team", label: "Team", sort: true, render: (r) => bidi(r.team) },
-        { key: "business_emails", label: "E-mails", num: true, sort: true },
+        { key: "business_emails", label: "E-mails today", num: true,       // like the headline: carry-over has its own column
+          sort: (r) => r.business_emails - r.carryover, render: (r) => fmtNum(r.business_emails - r.carryover),
+          text: (r) => String(r.business_emails - r.carryover) },
         { key: "replied", label: "Replied", num: true, sort: true },
         { key: "pending", label: "Pending", num: true, sort: true },
         { key: "no_action", label: "No action", num: true, sort: true },
@@ -317,16 +319,20 @@
   }
 
   function arrivalsSparkline() {
-    const buckets = new Array(24).fill(0);
+    // today's arrivals only: a carry-over row is a mail of an earlier day that is still waiting (it is not in the
+    // Business e-mails tile either, so the chart and the tile add up to the same number)
+    const buckets = new Array(24).fill(0), day = String((state.data && state.data.date) || "");
     for (const r of rows()) {
-      const m = /T(\d\d):/.exec(String(r.received_time || ""));
-      if (m) buckets[+m[1]] += 1;
+      const when = String(r.received_time || "");
+      const m = /T(\d\d):/.exec(when);
+      if (m && !r.is_carryover && (!day || when.startsWith(day))) buckets[+m[1]] += 1;
     }
     const first = buckets.findIndex((n) => n > 0), last = 23 - [...buckets].reverse().findIndex((n) => n > 0);
     if (first < 0) return h("p", { class: "hint" }, "No arrival times in this scan.");
     const series = buckets.slice(first, last + 1);
     return h("div", {}, OPS.sparkline(series, { width: 260, height: 44, label: "E-mails per hour today" }),
-      h("span", { class: "hint" }, `per hour, ${String(first).padStart(2, "0")}:00–${String(last).padStart(2, "0")}:00`));
+      h("span", { class: "hint em-arrivals" }, `per hour, ${String(first).padStart(2, "0")}:00–${String(last).padStart(2, "0")}:00`
+        + ` · ${fmtNum(buckets.reduce((a, b) => a + b, 0))} e-mails`));
   }
 
   function topApps() {
@@ -347,9 +353,11 @@
   function escalatedList() {
     const items = (stats().escalated_items || []).slice(0, 8);
     if (!items.length) return OPS.emptyState({ title: "Nothing escalated", icon: "check", text: "No e-mail is waiting past escalation." });
-    return h("ul", { class: "op-list" }, items.map((i) => h("li", {},
+    const more = (stats().escalated_count || items.length) - items.length;     // the tile counts them all: say what is not listed
+    return h("div", {}, h("ul", { class: "op-list" }, items.map((i) => h("li", {},
       OPS.icon("alert"), h("span", { dir: "auto" }, bidi(i.subject || "(no subject)")),
-      h("span", { class: "hint" }, ` ${i.team || ""} · waiting ${i.current_waiting_time || ""}`))));
+      h("span", { class: "hint" }, ` ${i.team || ""} · waiting ${i.current_waiting_time || ""}`)))),
+      more > 0 ? h("a", { class: "link", href: "/email?escalated=1" }, `and ${fmtNum(more)} more - show all ${fmtNum(more + items.length)}`) : null);
   }
 
   function renderOverview() {
@@ -357,17 +365,16 @@
     const matched = stats();
     el.panels.overview.replaceChildren(
       el.kpis,
-      h("div", { class: "em-two" },
+      h("div", { class: "em-three" },
         OPS.card("Status", {}, h("div", { class: "op-viz op-viz-donut" }, statusDonut(),
           h("div", { class: "op-legend op-legend-col" },
             h("span", { class: "op-legend-item" }, h("i", { class: "op-swatch op-t-ok" }), `${fmtNum(matched.replied || 0)} replied`),
             h("span", { class: "op-legend-item" }, h("i", { class: "op-swatch op-t-warn" }), `${fmtNum(matched.pending || 0)} pending`),
             h("span", { class: "op-legend-item" }, h("i", { class: "op-swatch op-t-na" }), `${fmtNum(matched.no_action_needed || 0)} no action`)))),
-        OPS.card("E-mails by team", {}, teamTable().el)),
-      h("div", { class: "em-two" },
         OPS.card("Arrivals", { hint: "when e-mails came in today" }, arrivalsSparkline()),
-        OPS.card("Top applications", {}, topApps())),
-      h("div", { class: "em-two" },
+        OPS.card("Top applications", { hint: "carry-over included" }, topApps())),
+      OPS.card("E-mails by team", {}, teamTable().el),
+      h("div", { class: "em-pair" },
         OPS.card("Slowest first replies", {}, slowestList()),
         OPS.card("Escalated (no reply)", {}, escalatedList())),
       matchDiagnostic());
@@ -444,6 +451,7 @@
     if (!tables.pending) {
       tables.pending = pendingTable();
       el.panels.pending.replaceChildren(OPS.card("Pending e-mails", { hint: "click a row for details and actions" }, tables.pending.el));
+      if (state.linkQuery) { tables.pending.setQuery(state.linkQuery); state.linkQuery = ""; }
     } else {
       tables.pending.setRows(rows().filter((r) => r.status === "Pending Reply"));
     }
@@ -543,7 +551,8 @@
       OPS.kpi({ label: "Excellent", value: fmtNum(sq.excellent || 0), tone: "ok", icon: "check" }),
       OPS.kpi({ label: "Good", value: fmtNum(sq.good || 0), icon: "check" }),
       OPS.kpi({ label: "Needs improvement", value: fmtNum(sq.needs_improvement || 0), tone: sq.needs_improvement ? "warn" : null, icon: "alert" }),
-      OPS.kpi({ label: "Appeals", value: fmtNum(sq.appeals || 0), icon: "info" }));
+      OPS.kpi({ label: "Appeals waiting", value: fmtNum(rows().filter((r) => r.quality_appeal && !r.appeal_decision).length),
+        sub: `${fmtNum(sq.appeals || 0)} in all`, icon: "info" }));        // the same "waiting" number as Home's attention list
     const scorecard = Array.isArray(q.scorecard) ? q.scorecard : [];
     let board;
     if (!scorecard.length) {
@@ -559,7 +568,7 @@
           { key: "reviewed", label: "Reviewed", num: true, sort: true },
           { key: "excellent", label: "Excellent", num: true, sort: true },
           { key: "good", label: "Good", num: true, sort: true },
-          { key: "needs_improvement", label: "Needs improvement", num: true, sort: true },
+          { key: "needs", label: "Needs improvement", num: true, sort: true },     // the scorecard's own field name
         ],
         rows: scorecard,
       }).el;
@@ -579,7 +588,9 @@
   }
   function trendChart(label, key, tone) {
     const days = state.history || [];
-    const series = days.map((d) => (d.final ? d.final[key] : (d[key] || 0)) || 0);
+    // a day's number: the report's final count, else (today, before the report ran) the day's latest scan
+    const last = (d) => ((d.points || [])[(d.points || []).length - 1] || {});
+    const series = days.map((d) => (d.final && d.final[key] != null ? d.final[key] : last(d)[key]) || 0);
     return OPS.card(label, {}, series.length
       ? h("div", {}, OPS.sparkline(series, { width: 260, height: 50, label, tone }),
         h("p", { class: "hint" }, `${days.length} day${days.length === 1 ? "" : "s"}, latest ${fmtNum(series[series.length - 1] || 0)}`))
@@ -754,13 +765,18 @@
     }
     state.waiting.timer = setInterval(tickRun, 2000);
   }
-  function tickRun() {
+  function checkRun() {
+    // every answer only checks whether the wait is over; asking again is the 2 s timer's job (tickRun). Asking from
+    // inside an answer would chain one request onto the next, back to back, until the scan arrives
     const w = state.waiting;
-    if (!w) return;
-    if (state.generatedAt && state.generatedAt !== w.generated) { endRun(`New scan at ${OPS.fmtClock(state.generatedAt)}.`); return; }
-    if (Date.now() - w.since > WAIT_LIMIT_MS) { endRun("The collector has not delivered a scan yet - it stays queued.", "error"); return; }
-    loader.refresh().catch(() => {});
+    if (!w) return false;
+    if (state.generatedAt && state.generatedAt !== w.generated) { endRun(`New scan at ${OPS.fmtClock(state.generatedAt)}.`); return false; }
+    if (Date.now() - w.since > WAIT_LIMIT_MS) { endRun("The collector has not delivered a scan yet - it stays queued.", "error"); return false; }
     updateRunUI();
+    return true;
+  }
+  function tickRun() {
+    if (checkRun()) loader.refresh().catch(() => {});
   }
   function endRun(msg, kind) {
     if (state.waiting) clearInterval(state.waiting.timer);
@@ -782,13 +798,13 @@
     el.scanInfo.textContent = answer.generated_at
       ? `Scan of ${String(answer.generated_at).replace("T", " ").slice(0, 16)}${answer.duration_seconds ? ` · ${Math.round(answer.duration_seconds)} s` : ""}` : "";
     el.empty.hidden = !!state.data;
-    el.content.hidden = !state.data;
+    el.content.hidden = el.tabbar.hidden = !state.data;
     el.exportLink.hidden = !state.data;
     if (!state.data) return;
     badges();
     renderTab(state.tab);
     if (state.openOnce) { const id = state.openOnce; state.openOnce = ""; OPS.mailViewer(id, { onChange: () => loader.refresh() }); }
-    if (state.waiting) tickRun();
+    if (state.waiting) checkRun();
   }
   function onMeta(meta) {
     if (!meta) return;
@@ -796,7 +812,7 @@
     el.banner.update(meta);
   }
   function onError(e) {
-    if (!state.data) el.banner.update({ problem: e.network ? null : e.message, module: "email" });
+    if (!state.data) el.banner.update(e.network ? { network: true, module: "email" } : { problem: e.message, module: "email", enabled: true });
     if (!e.network && !state.data) toast(e.message, "error");
   }
 
@@ -811,7 +827,7 @@
 
     el.tabEls = {};
     el.panels = {};
-    const tabbar = h("div", { class: "em-tabs", role: "tablist", "aria-label": "E-mail views" });
+    const tabbar = el.tabbar = h("div", { class: "em-tabs", role: "tablist", "aria-label": "E-mail views", hidden: true });
     for (const t of TABS) {
       const btn = h("button", { type: "button", class: "em-tab", role: "tab", id: `em-tab-${t.key}`,
         "aria-selected": String(t.key === state.tab), "aria-controls": `em-panel-${t.key}`, onclick: () => showTab(t.key) }, t.label);
@@ -819,7 +835,7 @@
       tabbar.append(btn);
       el.panels[t.key] = h("div", { class: "em-panel", role: "tabpanel", id: `em-panel-${t.key}`, "aria-labelledby": `em-tab-${t.key}`, hidden: t.key !== state.tab });
     }
-    el.content = h("div", { hidden: true }, tabbar, ...TABS.map((t) => el.panels[t.key]));
+    el.content = h("div", { hidden: true }, ...TABS.map((t) => el.panels[t.key]));
     el.empty = OPS.emptyState({ title: "No scan yet", icon: "mail",
       text: "The collector writes the first e-mail scan here as soon as it has run. You can ask for one with the button above." });
 
@@ -827,17 +843,32 @@
       h("div", { class: "op-titlebar" },
         h("div", {}, h("h1", {}, "E-mail"), el.scanInfo),
         h("span", { class: "grow" }), ROLE === "admin" && el.runBtn, el.exportLink),
-      fb.el, el.content, el.empty);
+      tabbar, fb.el, el.content, el.empty);          // the same order on every dashboard: title, tabs, freshness, data
   }
 
-  const loader = OPS.loader({ url: "/api/ops/email", interval: 15000, onData, onUnchanged: () => { if (state.waiting) tickRun(); }, onMeta, onError });
+  const loader = OPS.loader({ url: "/api/ops/email", interval: 15000, onData, onUnchanged: () => { if (state.waiting) checkRun(); }, onMeta, onError });
+
+  function applyLink() {
+    // deep links win over the view remembered for this browser tab (Home, System and the notifications make them):
+    //   /email#unclassified   /email?tab=pending&open=<id>   /email?team=<team>   /email?q=<subject>&team=<team>
+    //   /email?escalated=1   /email?carryover=1
+    const params = new URLSearchParams(location.search);
+    const team = params.get("team") || "", q = params.get("q") || "";
+    const escalated = params.get("escalated") === "1", carryover = params.get("carryover") === "1";
+    if (team || q || escalated || carryover) {                    // exactly the linked rows: the pending mails behind a number
+      Object.assign(state.filters, { team, system: "", assigned: "", carryover, escalated });
+      state.tab = "pending";
+    }
+    const wanted = params.get("tab") || decodeURIComponent(location.hash.slice(1));
+    if (TABS.some((t) => t.key === wanted)) state.tab = wanted;
+    state.linkQuery = q;
+    state.openOnce = params.get("open") || "";
+  }
 
   async function start() {
     await ensureStyles();
     loadView();
-    const params = new URLSearchParams(location.search);          // notification deep links: /email?tab=pending&open=<id>
-    if (TABS.some((t) => t.key === params.get("tab"))) state.tab = params.get("tab");
-    state.openOnce = params.get("open") || "";
+    applyLink();
     build();
     loader.start();
     document.addEventListener("visibilitychange", () => { /* OPS.loader handles pause/resume */ });

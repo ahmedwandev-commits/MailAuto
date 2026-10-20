@@ -376,7 +376,9 @@ for (const w of ALL()) { try {
   const label = re => { for (const el of d.querySelectorAll('th,td,div,span,a,b,label')) { if (re.test(clean(el.textContent))) { const r = el.getBoundingClientRect(); if (r.width && r.height) return r; } } return null; };
   const hCO = label(/^Change Order\s*#$/i), hSum = label(/^Summary$/i);
   // the CR's scheduled execution-time column, if the admin set its header (itsm.execution_time_header)
-  const hExec = (typeof EXEC_HEADER !== 'undefined' && EXEC_HEADER) ? label(new RegExp(EXEC_HEADER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')) : null;
+  // the header cell itself, not a wrapper <div> / layout <td> whose text also holds it: the smallest visible match
+  const smallest = re => { let best = null, size = Infinity; for (const el of d.querySelectorAll('th,td,div,span,a,b,label')) { const t = clean(el.textContent); if (t.length < size && re.test(t)) { const r = el.getBoundingClientRect(); if (r.width && r.height) { best = r; size = t.length; } } } return best; };
+  const hExec = (typeof EXEC_HEADER !== 'undefined' && EXEC_HEADER) ? smallest(new RegExp(EXEC_HEADER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')) : null;
   const cellUnder = (hdr, el) => { if (!hdr) return ''; try { el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); for (const dx of [6, 20, 40, 60]) { const q = d.elementFromPoint(hdr.left + dx, r.top + r.height / 2); if (q && !/^(TR|TABLE|TBODY|BODY|HTML)$/.test(q.tagName)) { const t = clean(q.innerText); if (t && t !== clean(el.textContent)) return t; } } } catch (e) {} return ''; };
   for (const el of d.querySelectorAll('a,span,td,div,font,b,u,i')) {
     if (el.children.length || !NUM.test(clean(el.textContent))) continue;

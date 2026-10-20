@@ -9,7 +9,9 @@ It imitates what the engine depends on, not the real product:
 * the category lines react only to a TRUSTED click (``event.isTrusted``), like the real scoreboard, so a plain ``el.click()``
   does nothing and only the engine's real mouse click opens the list,
 * the list frame has a "Change Order #" column and a "Summary" column (plus a far-away "Ticket" column holding a number the
-  engine must ignore); a summary can be cut short in the cell with the full text in its ``title``.
+  engine must ignore); a summary can be cut short in the cell with the full text in its ``title``. Like CA SDM, the list
+  table sits inside a wrapper ``<div>`` whose text holds every header. With ``exec_header`` set, the list also has that
+  execution-time column, showing ``exec_times[number]``.
 
 ``FakeITSM.roles`` can be changed between scans: ``{role: {category: {"count": n, "rows": [row, ...]}}}`` where a row is
 ``(number, summary)`` or ``(number, summary, full_title)``. A category missing from a role is not on its scoreboard; a count larger
@@ -83,9 +85,11 @@ LIST_PAGE = """<html><head><style>td.s {{ width: 560px; }} td, th {{ padding: 6p
 
 
 class FakeITSM:
-    def __init__(self, users=None, roles=None):
+    def __init__(self, users=None, roles=None, exec_header="", exec_times=None):
         self.users = dict(users or {"1001": "secret-pw"})
         self.roles = copy.deepcopy(roles if roles is not None else DEFAULT_ROLES)
+        self.exec_header = exec_header                  # header of the execution-time column ("" = no such column)
+        self.exec_times = dict(exec_times or {})        # request number -> text of its execution-time cell
         self.sessions = {}
         self.login_attempts = []        # (user name, accepted)
         self.requests = []              # (method, path) of everything the browser asked for
@@ -134,11 +138,13 @@ class FakeITSM:
         for row in d["rows"]:
             number, summary = row[0], row[1]
             title = f' title="{html.escape(row[2])}"' if len(row) > 2 else ""
+            exec_cell = f"<td>{html.escape(self.exec_times.get(number, ''))}</td>" if self.exec_header else ""
             rows.append(f'<tr><td><a href="#">{html.escape(number)}</a></td>'
-                        f'<td class="s"{title}>{html.escape(summary)}</td><td>77777</td></tr>')
-        table = ('<table border="1" cellspacing="0"><tr><th>Change Order #</th><th>Summary</th><th>Ticket</th></tr>'
-                 + "".join(rows) + "</table>")
-        return LIST_PAGE.format(body=f"<div>{html.escape(cat)}</div>{table}")
+                        f'<td class="s"{title}>{html.escape(summary)}</td><td>77777</td>{exec_cell}</tr>')
+        exec_head = f"<th>{html.escape(self.exec_header)}</th>" if self.exec_header else ""
+        table = ('<table border="1" cellspacing="0"><tr><th>Change Order #</th><th>Summary</th><th>Ticket</th>'
+                 + exec_head + "</tr>" + "".join(rows) + "</table>")
+        return LIST_PAGE.format(body=f"<div>{html.escape(cat)}</div><div class='list'>{table}</div>")
 
 
 def _handler(site):

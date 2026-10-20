@@ -114,6 +114,74 @@ def test_email_is_scoped_for_a_manager(app, demo_data, tab):
     assert t.later_problems(*not_yet_written()) == [], t.problems
 
 
+def test_run_scan_now_asks_every_few_seconds_not_back_to_back(demo_data, tab):
+    t = tab()
+    page = t.open("/email", "#email-page .em-kpis .op-kpi")
+    asked = []
+    page.on("request", lambda r: asked.append(r.url) if "/api/ops/email" in r.url and r.method == "GET" else None)
+    page.click('#email-page button:has-text("Run scan now")')
+    page.wait_for_timeout(4500)                       # no collector here, so the wait never ends early
+    assert 1 <= len(asked) <= 4, len(asked)           # one ask per 2 s tick, never a request storm
+    assert t.later_problems(*not_yet_written()) == [], t.problems
+
+
+def test_links_from_home_open_the_linked_rows(admin, demo_data, tab):
+    data = admin.get("/api/ops/email").get_json()["data"]
+    pending = [r for r in data["rows"] if r["status"] == "Pending Reply"]
+    team = next(r["team"] for r in pending if r["team"] != "Flex Cube")
+    t = tab()
+    page = t.open("/email#unclassified", "#email-page .em-tab")
+    page.wait_for_selector('.em-tab[aria-selected="true"]:has-text("Unclassified")')
+
+    page = t.open(f"/email?team={team}", f"{panel(None)} .op-table tbody tr")
+    assert page.inner_text('.em-tab[aria-selected="true"]').startswith("Pending")
+    assert page.input_value(f'{panel(page)} select[aria-label="Team"]') == team
+    shown = set(page.locator(f"{panel(page)} .op-table tbody tr td:nth-child(4)").all_inner_texts())
+    assert shown == {team}
+
+    target = next(r for r in pending if r["team"] == team)
+    page = t.open(f"/email?q={target['subject']}&team={team}", f"{panel(None)} .op-table tbody tr")
+    assert page.input_value(f"{panel(page)} .op-table-search") == target["subject"]
+    subjects = page.locator(f"{panel(page)} .op-table tbody tr td:nth-child(2)").all_inner_texts()
+    assert subjects and all(target["subject"] in s for s in subjects)
+    assert t.later_problems(*not_yet_written()) == [], t.problems
+
+
+def test_a_lost_connection_is_not_reported_as_switched_off(demo_data, tab):
+    t = tab()
+    t.page.route("**/api/ops/email*", lambda route: route.abort("internetdisconnected"))
+    page = t.open("/email", "#email-page .op-banner")
+    page.wait_for_timeout(800)
+    banner = text_of(page, "#email-page .op-banner")
+    assert "switched off" not in banner and "Cannot reach the server" in banner
+
+
+def test_the_arrivals_chart_counts_todays_mails_like_the_tile(admin, demo_data, tab):
+    stats = admin.get("/api/ops/email").get_json()["data"]["stats"]
+    assert stats["carryover_count"] > 0                # the demo has mails left over from earlier days
+    t = tab()
+    page = t.open("/email", "#email-page .em-arrivals")
+    assert text_of(page, "#email-page .em-arrivals").endswith(f"· {stats['business_emails']} e-mails")
+    assert t.later_problems(*not_yet_written()) == [], t.problems
+
+
 @pytest.fixture
 def ops_store(app):
     return app.extensions["ops"]
+
+
+def test_the_team_table_counts_todays_mails_like_the_tile(admin, demo_data, tab):
+    stats = admin.get("/api/ops/email").get_json()["data"]["stats"]
+    want = {team: t["business_emails"] - t["carryover_count"] for team, t in stats["team_stats"].items()}
+    assert any(t["carryover_count"] for t in stats["team_stats"].values())     # the demo has carry-over to leave out
+    t = tab()
+    page = t.open("/email", "#email-page .em-panel:not([hidden]) .op-table tbody tr")
+    table = page.locator("#email-page .em-panel:not([hidden]) .op-table").first
+    heads = table.locator("thead th").all_inner_texts()
+    col = next(i for i, x in enumerate(heads) if x.startswith("E-mails today")) + 1
+    shown = {}
+    for row in table.locator("tbody tr").all():
+        shown[row.locator("td:nth-child(1)").inner_text().strip()] = int(row.locator(f"td:nth-child({col})").inner_text())
+    assert shown == {team: n for team, n in want.items() if team in shown} and len(shown) == min(len(want), 10)
+    assert sum(want.values()) == stats["business_emails"]                       # the column adds up to the tile
+    assert t.later_problems(*not_yet_written()) == [], t.problems

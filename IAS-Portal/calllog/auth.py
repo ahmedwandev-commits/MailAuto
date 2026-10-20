@@ -1,4 +1,5 @@
 """Request helpers: current user, CSRF, login throttling, audit entries, access decorators."""
+import hashlib
 import hmac
 import secrets
 import threading
@@ -42,6 +43,13 @@ def audit(action, target=None, details=None, actor=None):
         "ip": request.remote_addr,
         "details": details or {},
     })
+
+
+# ------------------------------------------------------------------ sessions
+def password_mark(user):
+    """A short fingerprint of the account's current password hash, kept in the session: resetting or changing the
+    password signs out every other session of that account. Never the hash itself - the session cookie is readable."""
+    return hashlib.sha256(str((user or {}).get("password_hash") or "").encode("utf-8")).hexdigest()[:16]
 
 
 # --------------------------------------------------------------------- CSRF

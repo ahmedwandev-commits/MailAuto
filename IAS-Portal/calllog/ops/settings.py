@@ -106,6 +106,7 @@ DEFAULTS = {
         },
         "execution_time_header": "",            # the scoreboard column holding the CR's scheduled execution time ("" = not captured)
         "complete_when_missing": False,         # a pending CR that leaves a fully-read board counts as completed (finished)
+        "role_teams": {},                       # role -> team, for the roles whose name does not say it (calllog/ops/teams.py)
         "headless": True,
         "cdp_port": 9222,
         "browser_executable": "",
@@ -181,7 +182,7 @@ def _merge_into(out, over):
 
 # dict-valued settings whose KEYS are data (teams, names), so a saved dict must replace the default, not merge into it
 _FREE_DICTS = {"team_members_by_team", "team_link_groups", "team_recipients", "owner_emails", "categories",
-               "selectors", "advanced", "system_team_map", "address_team_map"}
+               "selectors", "advanced", "system_team_map", "address_team_map", "role_teams"}
 
 
 # --------------------------------------------------------------- field checkers
@@ -424,7 +425,7 @@ FIELDS = {
     "itsm": {
         "enabled": _bool, "interval_minutes": _int(1, 1440), "schedule": _schedule, "url": _str(300, False),
         "username": _str(60), "roles": _strs(120), "categories": _map(_regex), "execution_time_header": _str(100),
-        "complete_when_missing": _bool,
+        "complete_when_missing": _bool, "role_teams": _map(_str(80, allow_empty=False)),
         "headless": _bool, "cdp_port": _int(1024, 65535), "browser_executable": _str(400),
         "mail": {**_MAIL_BASE, "send_times": _times, "display_only": _bool},
     },
@@ -526,5 +527,6 @@ def is_active(settings, module, now):
         return False
     if hours:
         start, end = hours.split("-")
-        return start <= f"{now:%H:%M}" <= end
+        t = f"{now:%H:%M}"
+        return start <= t <= end if start <= end else (t >= start or t <= end)     # "22:00-06:00" crosses midnight
     return True

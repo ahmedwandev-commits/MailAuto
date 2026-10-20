@@ -40,7 +40,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-from .. import mailbox
+from .. import mailbox, teams
 from ..settings import DEFAULT_TEAMS
 from .common import OUTLOOK_LOCK, JobResult, fmt_minutes
 from .email_rules import (
@@ -1108,7 +1108,8 @@ def calculate_statistics(cfg, rows, team_replies, included_emails):
     scorecard = build_quality_scorecard(rows, cfg.directory)
     top, bottom = build_quality_leaderboard(scorecard)
     repliable = sum(1 for r in rows if r["status"] == "Replied" and not r.get("reply_by_manager"))
-    reviewed_repliable = sum(1 for r in rows if r.get("quality_rating") and not r.get("reply_by_manager"))
+    counted = [r for r in rows if not r.get("rating_withdrawn")]          # an accepted appeal withdraws the rating
+    reviewed_repliable = sum(1 for r in counted if r.get("quality_rating") and not r.get("reply_by_manager"))
 
     return {
         "business_emails": business,
@@ -1135,10 +1136,10 @@ def calculate_statistics(cfg, rows, team_replies, included_emails):
                  (r["first_reply_by"], r.get("first_reply_email", "")) for r in rows
                  if r["status"] == "Replied" and r.get("first_reply_by")).items()),
             key=lambda d: (-d["count"], d["name"])),
-        "quality_reviewed": sum(1 for r in rows if r.get("quality_rating")),
-        "quality_excellent": sum(1 for r in rows if r.get("quality_rating") == "Excellent"),
-        "quality_good": sum(1 for r in rows if r.get("quality_rating") == "Good"),
-        "quality_needs_improvement": sum(1 for r in rows if r.get("quality_rating") == "Needs Improvement"),
+        "quality_reviewed": sum(1 for r in counted if r.get("quality_rating")),
+        "quality_excellent": sum(1 for r in counted if r.get("quality_rating") == "Excellent"),
+        "quality_good": sum(1 for r in counted if r.get("quality_rating") == "Good"),
+        "quality_needs_improvement": sum(1 for r in counted if r.get("quality_rating") == "Needs Improvement"),
         "quality_appeals": sum(1 for r in rows if r.get("quality_appeal")),
         "quality_scorecard": scorecard,
         "team_quality_index": build_team_quality_index(scorecard),
@@ -1520,7 +1521,8 @@ def history_point(outcome, ctx):
     s = outcome.stats
     return {"ts": ctx.now().isoformat(timespec="seconds"), "business_emails": s["business_emails"],
             "replied": s["replied"], "pending": s["pending"], "no_action_needed": s["no_action_needed"],
-            "sla_breached": s["sla_breached"], "escalated": s["escalated_count"]}
+            "sla_breached": s["sla_breached"], "escalated": s["escalated_count"],
+            "groups": teams.email_groups(outcome.rows)}           # per set of teams: a manager's own history
 
 
 def run_scan(ctx, namespace=None):

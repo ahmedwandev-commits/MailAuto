@@ -166,6 +166,28 @@ def row_in_scope(row, scope):
     return scope is None or any(row_in_team(row, t) for t in scope)
 
 
+def may_view_person(viewer, person):
+    """May ``viewer`` open ``person``'s My-work page (read only)? An administrator: anybody. A manager: only an
+    employee of their own team(s) - the same people the Home picker offers (every employee for a manager of all teams).
+    Nobody else."""
+    role = (viewer or {}).get("role")
+    if role == "admin":
+        return True
+    if role != "manager" or (person or {}).get("role") != "user":
+        return False
+    scope = scope_for_user(viewer)
+    return scope is None or any(team_in(scope, t) for t in user_teams(person))
+
+
+def team_in_scope(row, scope):
+    """The row's team as someone with ``scope`` handles it: its own ``team`` when that is in scope (or scope is None),
+    else the first of ``all_teams`` that is; "" when none is."""
+    for team in [row.get("team")] + list(row.get("all_teams") or ()):
+        if team and team_in(scope, team):
+            return str(team)
+    return ""
+
+
 def rows_in_scope(rows, scope):
     """The rows whose ``team`` or one of ``all_teams`` is in ``scope`` (None = all rows, kept as they are)."""
     if scope is None:
@@ -440,12 +462,13 @@ def _quality_block(rows, old):
     rated = [r for r in rows if r.get("quality_rating")]
     manager_replies = sum(1 for r in rows if r.get("reply_by_manager"))
     repliable = sum(1 for r in rows if r.get("status") == schemas.EMAIL_REPLIED and not r.get("reply_by_manager"))
-    reviewed_nm = sum(1 for r in rated if not r.get("reply_by_manager"))
+    counted = [r for r in rated if not r.get("rating_withdrawn")]          # an accepted appeal withdraws the rating
+    reviewed_nm = sum(1 for r in counted if not r.get("reply_by_manager"))   # coverage counts what "Reviewed" counts
     return {**(old or {}),
-            "reviewed": len(rated),
-            "excellent": sum(1 for r in rated if r["quality_rating"] == "Excellent"),
-            "good": sum(1 for r in rated if r["quality_rating"] == "Good"),
-            "needs_improvement": sum(1 for r in rated if r["quality_rating"] == "Needs Improvement"),
+            "reviewed": len(counted),
+            "excellent": sum(1 for r in counted if r["quality_rating"] == "Excellent"),
+            "good": sum(1 for r in counted if r["quality_rating"] == "Good"),
+            "needs_improvement": sum(1 for r in counted if r["quality_rating"] == "Needs Improvement"),
             "appeals": sum(1 for r in rows if r.get("quality_appeal")),
             "coverage_rate": _percent(reviewed_nm, repliable or 1),
             "repliable_count": repliable, "manager_reply_count": manager_replies}
@@ -574,6 +597,7 @@ def view_email_data(data, overrides, scope_team=None, now=None, rows=None, hide_
             s for r in rows for s in str(r.get("detected_systems") or "").split("; ") if s))
         new_stats["business_address_volume"] = {}
         new_stats["reply_breakdown"] = _keep_teams(stats.get("reply_breakdown"), scope, hide_unclassified)
+        new_stats["team_replies"] = sum(int(e.get("count") or 0) for e in new_stats["reply_breakdown"] or [])
         new_stats["total_team_replies"] = sum(r.get("reply_count") or 0 for r in unique)
         for name, method in (("conversation_matches", "ConversationID"), ("conversation_index_matches", "ConversationIndex"),
                              ("subject_matches", "Subject"), ("no_matches", "No Match")):
@@ -581,6 +605,10 @@ def view_email_data(data, overrides, scope_team=None, now=None, rows=None, hide_
         new_stats["trend"] = {}
         out["quality"] = _scope_quality(data.get("quality"), scope, hide_unclassified)
         out["teams"] = [t for t in data.get("teams") or [] if keep(t)]
+        by = Counter(r.get("classified_by") for r in rows)          # how THESE rows were classified, not every team's
+        out["classification"] = {**(data.get("classification") or {}),
+                                  "counts": {k: by.get(k, 0) for k in ("system", "address", "default_team", "override", "none")},
+                                  "unclassified": sum(1 for r in rows if is_unclassified(r))}
     return out
 
 

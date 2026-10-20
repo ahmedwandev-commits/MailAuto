@@ -16,7 +16,7 @@ from openpyxl.cell import WriteOnlyCell
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from .. import auth
-from ..exports import XLSX_MIME, _col
+from ..exports import XLSX_MIME, _col, xl_text
 from . import api as ops_api, overlay, schemas
 
 bp = Blueprint("ops_exports", __name__)
@@ -50,7 +50,7 @@ def _xlsx(sheets):
             ws.column_dimensions[_col(i + 1)].width = _width(name, rows, i)
         ws.freeze_panes = "A2"
         cells = []
-        for name in header:
+        for name in map(xl_text, header):
             cell = WriteOnlyCell(ws, value=name)
             cell.font, cell.fill = head_font, head_fill
             cell.alignment = Alignment(vertical="center")
@@ -58,7 +58,7 @@ def _xlsx(sheets):
         ws.append(cells)
         for row in rows:
             out = []
-            for value in row:
+            for value in map(xl_text, row):
                 if isinstance(value, str) and value.startswith("="):
                     cell = WriteOnlyCell(ws, value=value)
                     cell.data_type = "s"           # text that starts with '=' must not become a formula
@@ -172,6 +172,8 @@ def snapshot_export(module, fmt):
     snap, _ = ops_api.read_snapshot(module)
     if not snap:
         return jsonify(error="There is no data yet - the collector has not written a scan."), 404
+    if module != "email":                       # a manager's download holds only their own team(s), like the page
+        snap = {**snap, "data": ops_api.scoped_data(module, snap.get("data"), auth.team_scope())}
     title, head, rows, extra = _TABLES[module](snap)
     auth.audit("ops_export", target=f"{module}.{fmt}", details={"rows": len(rows)})
     name = f"nbe-{module}-{snap.get('date') or auth.today()}"
@@ -184,7 +186,7 @@ def snapshot_export(module, fmt):
 @bp.get("/report/<module>/<name>")
 @auth.ops_view_required
 def report_file(module, name):
-    path = ops_api.ops().report_path(module, name)
+    path = ops_api.ops().report_path(module, name) if auth.team_scope() is None else None    # files cover every team
     if path is None:
         return jsonify(error="That report does not exist."), 404
     auth.audit("ops_report_download", target=f"{module}/{path.name}")

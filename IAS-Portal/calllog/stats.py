@@ -137,7 +137,8 @@ def chart_buckets(rollups, kind, d_from, d_to):
 
 
 def employee_rows(users, merged_users):
-    """One row per active employee account (idle people show zeros), busiest first."""
+    """One row per active employee account (idle people show zeros), plus anybody else who took calls in the range (a
+    disabled employee, one promoted to manager, a deleted account), busiest first."""
     def row(uid, name, department, active, m):
         m = m or {"first_call": None, "last_call": None, **_counts()}
         return {"user_id": uid, "name": name, "department": department, "active": active,
@@ -145,11 +146,9 @@ def employee_rows(users, merged_users):
 
     rows, listed = [], set()
     for uid, user in users.items():
-        if user.get("role") != "user":
-            continue
         listed.add(uid)
         m = merged_users.get(uid)
-        if not user.get("active", True) and not m:
+        if (user.get("role") != "user" or not user.get("active", True)) and not m:
             continue
         rows.append(row(uid, user["name"], user.get("department", ""), user.get("active", True), m))
     for uid, m in merged_users.items():   # calls whose account no longer exists

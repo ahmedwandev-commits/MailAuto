@@ -1100,6 +1100,26 @@ def test_end_to_end_real_chromium_against_the_fake_site(tmp_path, e2e):
     assert len(browsers.created) == 2
 
 
+def test_end_to_end_execution_time_is_read_from_its_own_column(tmp_path, e2e):
+    site, browsers, profile = e2e
+    site.exec_header = "Scheduled Start Date"
+    site.exec_times = {"111111": "10/20/2026 10:00 PM", "222222": "10/21/2026 01:30 AM", "444444": "10/22/2026 11:00 PM"}
+    ctx = e2e_ctx(tmp_path, site, [ROLE_A])
+    ctx.settings["execution_time_header"] = "Scheduled Start Date"
+    try:
+        result = eng.run(ctx, browser_factory=browsers)
+    finally:
+        browsers.kill_all()
+    skip_if_browser_failed(browsers, result)
+    assert result.ok, (result.error, ctx.logs)
+    cats = result.snapshot_data["roles"][0]["categories"]
+    # the list table sits in a wrapper <div> whose text holds the header too: only the header cell itself is the column
+    assert [(r["number"], r.get("execution_time")) for r in cats[IMPLEMENTATION]["rows"]] == [
+        ("111111", "10/20/2026 10:00 PM"), ("222222", "10/21/2026 01:30 AM"), ("333333", None)]   # 333333: blank cell
+    assert cats[ROLLBACK]["rows"] == [{"number": "444444", "summary": "<script>alert(1)</script> & rollback",
+                                       "execution_time": "10/22/2026 11:00 PM"}]
+
+
 def test_end_to_end_wrong_password_is_reported_as_auth_and_chromium_is_closed(tmp_path, e2e):
     site, browsers, profile = e2e
     ctx = e2e_ctx(tmp_path, site, [ROLE_A], password="not-the-password")

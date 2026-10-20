@@ -438,7 +438,13 @@ class TestRun:
         assert result.summary == "12 open, 4 reminder, 4 breached"
         assert schemas.validate_snapshot(schemas.make_envelope("sla", result.snapshot_data, "2026-10-12T10:00:00")) == []
         assert result.snapshot_data["totals"]["open"] == 12
-        assert result.history_point == {"ts": "2026-10-12T10:00:00", "open": 12, "within": 3, "reminder": 4, "breached": 4}
+        point = dict(result.history_point)
+        groups = point.pop("groups")
+        assert point == {"ts": "2026-10-12T10:00:00", "open": 12, "within": 3, "reminder": 4, "breached": 4}
+        # per application + security user, adding up to the totals: what a manager's own history is rebuilt from
+        assert {k: sum(g[k] for g in groups) for k in ("open", "within", "reminder", "breached")} == {
+            "open": 12, "within": 3, "reminder": 4, "breached": 4}
+        assert all(set(g) == {"system", "user", "open", "within", "reminder", "breached"} for g in groups)
         breached_keys = {r["key"] for r in result.snapshot_data["requests"] if r["status"] == "breached"}
         assert set(result.history_extra["first_breach"]) == breached_keys and len(breached_keys) == 4
         assert set(result.history_extra["first_breach"].values()) == {"2026-10-12T10:00:00"}
@@ -794,53 +800,51 @@ def test_module_imports_without_browser_or_windows_packages():
 
 
 # ===================================================================================================
-# End to end: real Playwright + Chromium against tests/fake_portal.py
+# End to end: a real Chromium driven over CDP (the engine's own CdpBrowser) against tests/fake_portal.py
 # ===================================================================================================
 from tests.fake_portal import GROUPS_PATH, HOME_PATH, LOGIN_PATH, REASSIGN_PATH, FakePortal  # noqa: E402
 
 
-BROWSER = {"executable": ""}      # filled by chromium_ok: "" = Playwright's own default Chromium works here
+BROWSER = {"executable": ""}      # filled by chromium_ok: a Chromium the engine's own CdpBrowser can start here
+PROFILES = {"root": None}
 
 
-def _installed_chromiums():
-    """Chromium builds already in PLAYWRIGHT_BROWSERS_PATH (newest first), for a Playwright whose own revision is missing."""
+def _candidate_browsers():
+    """CHROME_PATH, the Chromium builds already in PLAYWRIGHT_BROWSERS_PATH (newest first), then cdp.find_browser."""
     root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "")
-    found = list(root.glob("chromium-*/chrome-linux/chrome")) + list(root.glob("chromium_headless_shell-*/chrome-linux/headless_shell"))
-    return [str(p) for p in sorted(found, reverse=True)]
+    found = [str(p) for p in sorted(root.glob("chromium-*/chrome-linux/chrome"), reverse=True)] if str(root) != "." else []
+    out = [os.environ.get("CHROME_PATH") or ""] + found + [cdp.find_browser("") or ""]
+    return [e for e in out if e]
 
 
 @pytest.fixture(scope="module")
-def chromium_ok():
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        pytest.skip("playwright is not installed")
+def chromium_ok(tmp_path_factory):
     errors = []
-    with sync_playwright() as pw:
-        for executable in [""] + _installed_chromiums():
-            try:
-                pw.chromium.launch(**({"executable_path": executable} if executable else {})).close()
-            except Exception as exc:                          # missing binary, no sandbox permission, ...
-                errors.append(str(exc).strip().splitlines()[0] if str(exc).strip() else repr(exc))
-                continue
-            BROWSER["executable"] = executable
-            return executable
-    pytest.skip("Chromium cannot start here: " + " | ".join(errors))
+    PROFILES["root"] = tmp_path_factory.mktemp("sla_profiles")
+    for executable in _candidate_browsers():
+        try:
+            cdp.CdpBrowser({"browser_executable": executable, "profile_dir": str(PROFILES["root"] / "probe")},
+                           headless=True).close()
+        except Exception as exc:                          # missing binary, no sandbox permission, ...
+            errors.append(str(exc).strip().splitlines()[0] if str(exc).strip() else repr(exc))
+            continue
+        BROWSER["executable"] = executable
+        return executable
+    pytest.skip("Chromium cannot start here: " + (" | ".join(errors) or "none found"))
 
 
 @pytest.fixture
 def quick(monkeypatch):
     monkeypatch.setattr(sla, "SETTLE_MS", 300)
     monkeypatch.setattr(sla, "PAGE_MS", 250)
-    # the e2e tests must never start a download
-    monkeypatch.setattr(sla, "install_chromium", lambda log: pytest.fail("a browser download was attempted"))
 
 
 def e2e_settings(portal, timeout=8, **over):
-    """Settings that point the engine at the fake portal. browser_channel "" = no installed Chrome / Edge is required;
-    browser_executable is only set when this machine's Playwright has no matching bundled Chromium."""
+    """Settings that point the engine at the fake portal, with the Chromium found by chromium_ok and a throw-away
+    browser profile (never the shared temp one)."""
     cfg = sla_settings(base_url=portal.url, browser_channel="", browser_executable=BROWSER["executable"], **over)
     cfg["timeout_seconds"] = timeout
+    cfg["profile_dir"] = tempfile.mkdtemp(dir=PROFILES["root"]) if PROFILES["root"] else ""
     return cfg
 
 
@@ -849,15 +853,37 @@ def portal_run(store, portal, password=PASSWORD, timeout=8, **over):
     return sla.run(ctx), ctx
 
 
-def spy(monkeypatch, name, record):
-    """Wrap sla.<name>; ``record(args, result)`` gets every call (to prove WHICH code path the browser flow took)."""
-    real = getattr(sla, name)
+def spy(monkeypatch, name, record, owner=sla):
+    """Wrap <owner>.<name>; ``record(args, result)`` gets every call (to prove WHICH code path the browser flow took)."""
+    real = getattr(owner, name)
 
     def wrapper(*args, **kw):
         out = real(*args, **kw)
         record(args, out)
         return out
-    monkeypatch.setattr(sla, name, wrapper)
+    monkeypatch.setattr(owner, name, wrapper)
+
+
+def click_log(monkeypatch):
+    """[(text, clicked)] for every click-by-text the engine tried, in order."""
+    texts, out = {}, []
+    real = sla.js_click_text
+
+    def finder(text):
+        expr = real(text)
+        texts[expr] = text
+        return expr
+    monkeypatch.setattr(sla, "js_click_text", finder)
+    spy(monkeypatch, "_click", lambda a, res: out.append((texts[a[1]], res)) if a[1] in texts else None)
+    return out
+
+
+def window_log(monkeypatch):
+    """How many page targets (tabs / windows) the browser had when it attached to the package's app page."""
+    out = []
+    spy(monkeypatch, "attach", lambda a, res: out.append(len([t for t in a[0]._targets() if t.get("type") == "page"])),
+        owner=cdp.CdpBrowser)
+    return out
 
 
 def expected_by_name(now=NOW):
@@ -880,9 +906,8 @@ def assert_scanned_everything(result):
 @pytest.mark.usefixtures("chromium_ok", "quick")
 class TestEndToEnd:
     def test_new_window_plain_table(self, store, monkeypatch):
-        windows, clicks, sources = [], [], []
-        spy(monkeypatch, "wait_for_app_page", lambda a, out: windows.append(len(a[0].pages)))
-        spy(monkeypatch, "click_text", lambda a, out: clicks.append((a[1], out)))
+        sources = []
+        windows, clicks = window_log(monkeypatch), click_log(monkeypatch)
         spy(monkeypatch, "pick_table", lambda a, out: sources.append(out["source"] if out else None))
         with FakePortal(sample_requests(NOW), open_mode="blank", variant="plain") as portal:
             result, ctx = portal_run(store, portal)
@@ -900,8 +925,8 @@ class TestEndToEnd:
         assert users["(Unassigned)"]["no_date"] == 1 and users[OWNER_A]["total"] == 3
 
     def test_same_tab_datatables_reads_every_page_through_the_api(self, store, monkeypatch):
-        windows, sources = [], []
-        spy(monkeypatch, "wait_for_app_page", lambda a, out: windows.append(len(a[0].pages)))
+        sources = []
+        windows = window_log(monkeypatch)
         spy(monkeypatch, "pick_table", lambda a, out: sources.append(out["source"] if out else None))
         with FakePortal(sample_requests(NOW), open_mode="same", variant="datatables", page_size=5) as portal:
             result, _ = portal_run(store, portal)
@@ -910,26 +935,35 @@ class TestEndToEnd:
             assert_scanned_everything(result)             # 12 rows although only 5 are in the DOM
 
     def test_paged_plain_table_is_followed_page_by_page_and_enter_logs_in(self, store, monkeypatch):
-        clicks, reads = [], []
-        spy(monkeypatch, "click_text", lambda a, out: clicks.append((a[1], out)))
+        reads, enters = [], []
+        clicks = click_log(monkeypatch)
+        spy(monkeypatch, "_press_enter", lambda a, out: enters.append(True))
         spy(monkeypatch, "pick_table", lambda a, out: reads.append(len(out["rows"]) if out else None))
         with FakePortal(sample_requests(NOW), variant="paged", page_size=5, login_style="english") as portal:
             result, _ = portal_run(store, portal)
             assert result.ok, result.error
             assert_scanned_everything(result)
             assert portal.logins == [True]
-            assert clicks == [("دخول", False)]             # no button text matched: the Enter key submitted the form
+            assert clicks == [("دخول", False)] and enters == [True]   # no button text matched: Enter submitted the form
             assert reads == [5, 5, 2]                      # first page, then "next" twice (5 + 5 + 2 = 12 rows)
 
     def test_selectors_override_and_search_button(self, store, monkeypatch):
-        clicks = []
-        spy(monkeypatch, "click_text", lambda a, out: clicks.append((a[1], out)))
+        clicks = click_log(monkeypatch)
         selectors = {"username": "#txtUserName", "password": "#txtPassword", "login_button": "#btnLogin"}
         with FakePortal(sample_requests(NOW), variant="search", login_style="english") as portal:
             result, _ = portal_run(store, portal, selectors=selectors)
             assert result.ok, result.error
             assert_scanned_everything(result)
             assert clicks == [("بحث", True)]               # the login used the selector; only the search was clicked by text
+
+    def test_gridview_header_and_footer_rows_are_not_requests(self, store, monkeypatch):
+        reads = []
+        spy(monkeypatch, "pick_table", lambda a, out: reads.append(len(out["rows"]) if out else None))
+        with FakePortal(sample_requests(NOW), variant="gridview") as portal:
+            result, _ = portal_run(store, portal)
+        assert result.ok, result.error
+        assert reads[0] == 12                              # the <th> header and footer rows of the body are left out
+        assert_scanned_everything(result)
 
     def test_wrong_password_is_a_clear_auth_error_and_debug_files_hide_it(self, store):
         before = {"alerted": {"k": 1}, "last_sent": "2026-10-12T09:00:00"}
@@ -989,13 +1023,12 @@ class TestEndToEnd:
         assert result.ok is False and result.error_kind is None and PASSWORD not in result.error
         assert "ERR_CONNECTION_REFUSED" in result.error or "Page.goto" in result.error
 
-    def test_js_normalisation_matches_python(self):
-        from playwright.sync_api import sync_playwright
-        samples = ["مُحَمَّد", "إأآ ا", "مدرسة", "على  مصطفى", "ـــ", "  Mixed CASE  ", "تحويل", "موظف اسناد - مستخدم السرية"]
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(**({"executable_path": BROWSER["executable"]} if BROWSER["executable"] else {}))
-            page = browser.new_page()
-            js = "(s) => {" + sla.JS_NORM + " return norm(s); }"
-            got = [page.evaluate(js, s) for s in samples]
+    def test_js_normalisation_matches_python(self, tmp_path):
+        samples = ["مُحَمَّد", "إأآ ا", "مدرسة", "على  مصطفى", "ـــ", "  Mixed CASE  ", "تحويل", "موظف اسناد - مستخدم السرية",
+                   "٠١٢٣ ٤٥٦٧٨٩"]
+        browser = cdp.CdpBrowser({"browser_executable": BROWSER["executable"], "profile_dir": str(tmp_path / "p")})
+        try:
+            got = [browser.eval("(() => {" + sla.JS_NORM + " return norm(" + json.dumps(s) + "); })()") for s in samples]
+        finally:
             browser.close()
         assert got == [sla.norm(s) for s in samples]

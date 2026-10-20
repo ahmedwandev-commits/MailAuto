@@ -53,6 +53,51 @@ def test_anonymous_gets_401_and_redirect(app):
     assert c.get("/admin").headers["Location"].endswith("/login")
 
 
+def change_password(b, current, new):
+    return b.client.post("/account/password", data={"current_password": current, "new_password": new,
+                                                    "confirm_password": new, "csrf_token": b.csrf})
+
+
+def test_a_password_reset_or_change_signs_out_every_other_session(app, admin, make_employee):
+    emp = make_employee("1001", "Aya")                                       # signed in with MyOwnPass123
+    thief = Browser(app)
+    assert thief.login("1001", "MyOwnPass123").status_code == 302             # somebody else learnt the password
+    assert thief.get("/api/me").status_code == 200
+    temp = admin.post("/api/admin/users/1001/reset-password", {}).get_json()["temp_password"]
+    owner = Browser(app)
+    assert owner.login("1001", temp).status_code == 302
+    assert change_password(owner, temp, "FreshPass456").status_code == 302    # the forced first change
+    assert owner.get("/api/me").status_code == 200                           # whoever changed it stays signed in
+    assert thief.get("/api/me").status_code == 401                           # the old cookie does not come back
+    assert emp.get("/api/me").status_code == 401
+
+    second = Browser(app)
+    assert second.login("1001", "FreshPass456").status_code == 302
+    assert change_password(owner, "FreshPass456", "OtherPass789").status_code == 302
+    assert owner.get("/api/me").status_code == 200 and second.get("/api/me").status_code == 401
+    assert thief.login("1001", "OtherPass789").status_code == 302 and thief.get("/api/me").status_code == 200
+
+
+def test_an_admin_who_resets_their_own_password_stays_signed_in(app, admin):
+    other = Browser(app)
+    assert other.login("admin", "AdminPass123").status_code == 302
+    assert admin.post("/api/admin/users/admin/reset-password", {}).status_code == 200
+    assert admin.get("/api/me").status_code == 403                           # signed in, must choose a new password
+    assert other.get("/api/me").status_code == 401
+
+
+def test_unknown_user_ids_are_checked_against_a_hash_as_costly_as_a_real_one(monkeypatch):
+    from calllog import security
+    used = []
+    monkeypatch.setattr(security, "check_password_hash", lambda pwhash, password: used.append(pwhash) or False)
+    method = lambda pwhash: pwhash.split("$", 1)[0]                          # e.g. pbkdf2:sha256:260000
+    assert security.verify_password(None, "guess") is False
+    assert method(used[-1]) == method(security.hash_password("guess"))
+    monkeypatch.setattr(security, "PBKDF2_ITERATIONS", 2000)                 # follows the configured cost
+    security.verify_password(None, "guess")
+    assert method(used[-1]) == method(security.hash_password("guess")) == "pbkdf2:sha256:2000"
+
+
 # ---------------------------------------------------------------- records
 def log_call(b, ip="75942", reason="solved", note="", branch=None):
     body = {"ip_phone": ip, "reason": reason, "note": note}
@@ -172,6 +217,25 @@ def test_admin_overview_records_and_filters(admin, make_employee, clock):
     assert week["chart"]["kind"] == "day" and len(week["chart"]["buckets"]) == 7
 
 
+def test_overview_names_and_counts_callers_who_were_disabled_or_promoted(admin, make_employee):
+    a, b = make_employee("1001", "Aya", "Identity"), make_employee("1002", "Omar", "Billing")
+    make_employee("1003", "Idle", "Billing")
+    log_call(a, "11111", "solved")
+    log_call(b, "22222", "solved")
+    assert admin.put("/api/admin/users/1001", {"active": False}).status_code == 200
+    assert admin.put("/api/admin/users/1002", {"role": "manager"}).status_code == 200
+
+    ov = admin.get("/api/admin/overview").get_json()
+    rows = {e["user_id"]: (e["name"], e["department"], e["active"], e["total"]) for e in ov["employees"]}
+    assert rows == {"1001": ("Aya", "Identity", False, 1), "1002": ("Omar", "Billing", True, 1),
+                    "1003": ("Idle", "Billing", True, 0)}
+    assert (ov["totals"]["active_employees"], ov["totals"]["employees"]) == (2, 3)   # never "2 of 1"
+    summary = list(openpyxl.load_workbook(io.BytesIO(admin.get("/export/report.xlsx").data))["Summary"].iter_rows(
+        min_row=2, values_only=True))
+    assert {r[0]: r[1:3] for r in summary} == {"1001": ("Aya", "Identity"), "1002": ("Omar", "Billing"),
+                                               "1003": ("Idle", "Billing")}
+
+
 def test_admin_can_edit_and_delete_any_record(admin, make_employee):
     emp = make_employee("1001")
     rid = log_call(emp).get_json()["record"]["id"]
@@ -238,6 +302,22 @@ def test_import_users_from_csv(admin, app):
                       content_type="multipart/form-data").status_code == 400
 
 
+def test_csv_imports_saved_by_excel_on_arabic_windows_keep_the_arabic(admin):
+    users = "user_id,name,department\n230966,خالد محمد,إدارة الهوية\n".encode("cp1256")
+    r = admin.post("/api/admin/users/import", data={"file": (io.BytesIO(users), "u.csv")},
+                   content_type="multipart/form-data")
+    assert r.status_code == 200 and r.get_json()["created"] == 1
+    listed = {u["user_id"]: u for u in admin.get("/api/admin/users").get_json()["users"]}
+    assert (listed["230966"]["name"], listed["230966"]["department"]) == ("خالد محمد", "إدارة الهوية")
+
+    branches = "Region,Branch No,Branch Name\nالإسكندرية,5,سموحة\n".encode("cp1256")
+    r = admin.post("/api/admin/branches/import", data={"file": (io.BytesIO(branches), "b.csv")},
+                   content_type="multipart/form-data")
+    assert r.status_code == 200 and r.get_json()["count"] == 1
+    items = admin.get("/api/branches").get_json()["branches"]
+    assert [(b["code"], b["name"], b["region"]) for b in items] == [("005", "سموحة", "الإسكندرية")]
+
+
 # ------------------------------------------------------------------- audit
 def test_audit_log_records_who_did_what(admin, make_employee):
     emp = make_employee("1001", "Aya")
@@ -294,6 +374,25 @@ def test_exports(admin, make_employee):
     assert len(list(openpyxl.load_workbook(io.BytesIO(mine.data)).active.iter_rows())) == 3
     actions = [e["action"] for e in admin.get("/api/admin/audit").get_json()["items"]]
     assert actions.count("export") >= 4
+
+
+def test_xlsx_exports_drop_control_characters_and_still_block_formulas(app, admin, make_employee):
+    emp = make_employee("1001", "Aya", "Identity")
+    log_call(emp, "75942", "solved", "first\x0bsecond")
+    log_call(emp, "75943", "solved", "\x01=HYPERLINK(\"http://evil\")")      # '=' only once the control is gone
+    Browser(app).login("x\x0by", "wrong-password")                         # anyone can put this in the audit log
+
+    for who, url, sheet in ((admin, "/export/records.xlsx", "Calls"), (admin, "/export/report.xlsx", "Calls"),
+                            (emp, "/export/my.xlsx", "My calls")):
+        r = who.get(url)
+        assert r.status_code == 200, url
+        cells = {row[5].value: row[12] for row in openpyxl.load_workbook(io.BytesIO(r.data))[sheet].iter_rows(min_row=2)}
+        assert cells["75942"].value == "firstsecond", url
+        assert cells["75943"].value == "=HYPERLINK(\"http://evil\")" and cells["75943"].data_type == "s", url
+    r = admin.get("/export/audit.xlsx")
+    assert r.status_code == 200
+    targets = [row[4] for row in openpyxl.load_workbook(io.BytesIO(r.data)).active.iter_rows(values_only=True)]
+    assert "xy" in targets
 
 
 # ----------------------------------------------------------------- storage

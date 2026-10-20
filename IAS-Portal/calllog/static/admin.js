@@ -8,7 +8,7 @@
   const REFRESH_MS = 5000;
   const state = {
     reasons: [], reasonByKey: {}, branches: [], today: "", tab: "overview", preset: "today", from: "", to: "",
-    rec: { page: 1 }, audit: { page: 1 }, sort: { key: "total", dir: -1 }, users: [], seen: {}, busy: false,
+    rec: { page: 1 }, audit: { page: 1 }, sort: { key: "total", dir: -1 }, users: [], seen: {}, busy: false, again: false,
   };
   const AUDIT_LABELS = {
     login: "Signed in", logout: "Signed out", login_failed: "Failed sign-in", login_blocked: "Sign-in blocked (too many attempts)",
@@ -105,7 +105,10 @@
   const loaders = { overview: loadOverview, records: loadRecords, employees: loadEmployees, branches: loadBranches, audit: loadAudit, export: renderExport };
 
   async function refresh(force) {
-    if (state.busy) return;
+    if (state.busy) {                     // a poll is in flight: what the user just asked for runs right after it
+      if (force) state.again = true;
+      return;
+    }
     state.busy = true;
     const tab = state.tab;
     state.lastRefresh = Date.now();
@@ -117,6 +120,7 @@
       if (!e.network && force) toast(e.message, "error");
     } finally {
       state.busy = false;
+      if (state.again) { state.again = false; refresh(true); }
     }
   }
 
@@ -225,7 +229,9 @@
   }
 
   async function loadRecords(force) {
-    const d = await api("GET", `/api/admin/records?${qs({ ...recFilters(), page: state.rec.page, page_size: 50 })}`);
+    const asked = state.rec.page;
+    const d = await api("GET", `/api/admin/records?${qs({ ...recFilters(), page: asked, page_size: 50 })}`);
+    if (state.tab !== "records" || state.rec.page !== asked) return null;    // the user moved on while this was loading
     state.rec.page = d.page;
     if (force || changed("records", d)) renderRecords(d);
     return d.server_time;
@@ -643,8 +649,9 @@
   }
 
   async function loadAudit(force) {
-    const a = state.audit;
+    const a = state.audit, asked = a.page;
     const d = await api("GET", `/api/admin/audit?${qs({ from: state.from, to: state.to, actor: a.actor, action: a.action, q: a.q, page: a.page })}`);
+    if (state.tab !== "audit" || state.audit.page !== asked) return null;     // the user moved on while this was loading
     state.audit.page = d.page;
     fillActions(d.actions);
     if (force || changed("audit", d)) renderAudit(d);

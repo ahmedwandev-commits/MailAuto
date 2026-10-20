@@ -3,20 +3,44 @@
 ``diff_events(module, old, new)`` compares the previous and the new snapshot of a module and returns a few
 aggregated events (one per kind per scan, never one per request, so a busy scan cannot flood the feed).
 ``job_event`` is for scan failures / recoveries. Events carry no passwords; subjects and names are included
-only for the first few items and the web app shows the feed to admin/manager only.
+only for the first few items and the web app shows the feed to admin/manager only. ``groups`` holds the count per
+team-deciding group (e-mail: its teams; SLA: application + security user; ITSM: role), so a manager of one team is
+shown the count of their own team only (calllog/ops/teams.py).
 """
-from . import schemas
+from . import schemas, teams
 
 SAMPLE = 3          # how many example items an event lists
 
 
-def _event(ts, module, level, kind, text, items=(), count=None):
+def _event(ts, module, level, kind, text, items=(), count=None, groups=None):
     ev = {"ts": ts, "module": module, "level": level, "kind": kind, "text": text}
     if items:
         ev["items"] = list(items)[:SAMPLE]
     if count is not None:
         ev["count"] = count
+    if groups is not None:
+        ev["groups"] = groups
     return ev
+
+
+def _groups(things, key, fields):
+    """[{**fields(thing), "n": how many}] per distinct ``key(thing)``."""
+    out = {}
+    for thing in things:
+        k = key(thing)
+        if k not in out:
+            out[k] = {**fields(thing), "n": 0}
+        out[k]["n"] += 1
+    return list(out.values())
+
+
+def _sla_groups(reqs):
+    return _groups(reqs, lambda r: (teams.sla_system(r), r.get("security_user", "")),
+                   lambda r: {"system": teams.sla_system(r), "user": r.get("security_user", "")})
+
+
+def _sla_item(r):
+    return {"user": r.get("security_user", ""), "key": r["key"], "system": teams.sla_system(r)}
 
 
 def _plural(n, word):
@@ -35,19 +59,18 @@ def _sla_events(old, new, ts):
         limit = new["data"].get("thresholds", {}).get("breach_minutes", 120)
         out.append(_event(ts, "sla", "danger", "sla_breached",
                           f"{_plural(len(newly_breached), 'ticket')} passed the {limit // 60:g} h SLA",
-                          [{"user": r.get("security_user", ""), "key": r["key"]} for r in newly_breached],
-                          len(newly_breached)))
+                          [_sla_item(r) for r in newly_breached], len(newly_breached), _sla_groups(newly_breached)))
     newly_warn = [r for k, r in reqs_new.items()
                   if r["status"] == schemas.SLA_REMINDER and reqs_old.get(k, {}).get("status") not in
                   (schemas.SLA_REMINDER, schemas.SLA_BREACHED)]
     if newly_warn:
         out.append(_event(ts, "sla", "warn", "sla_reminder",
                           f"{_plural(len(newly_warn), 'ticket')} reached the reminder time",
-                          [{"user": r.get("security_user", ""), "key": r["key"]} for r in newly_warn], len(newly_warn)))
-    closed = [k for k in reqs_old if k not in reqs_new]
+                          [_sla_item(r) for r in newly_warn], len(newly_warn), _sla_groups(newly_warn)))
+    closed = [r for k, r in reqs_old.items() if k not in reqs_new]
     if closed:
         out.append(_event(ts, "sla", "ok", "sla_closed", f"{_plural(len(closed), 'ticket')} completed",
-                          count=len(closed)))
+                          count=len(closed), groups=_sla_groups(closed)))
     return out
 
 
@@ -64,7 +87,8 @@ def _itsm_events(new, ts):
             text = f"{len(items)} new {category}" if kind == "new" else f"{len(items)} {category} closed"
             out.append(_event(ts, "itsm", level, f"itsm_{label}", text,
                               [{"number": c.get("number", ""), "summary": c.get("summary", "")[:80],
-                                "role": c.get("role", "")} for c in items], len(items)))
+                                "role": c.get("role", "")} for c in items], len(items),
+                              _groups(items, lambda c: c.get("role", ""), lambda c: {"role": c.get("role", "")})))
     return out
 
 
@@ -85,7 +109,8 @@ def _email_events(old, new, ts):
         out.append(_event(ts, "email", "danger", "email_escalated",
                           f"{_plural(len(newly_escalated), 'e-mail')} waiting past the SLA with no team reply",
                           [{"subject": r.get("subject", "")[:80], "team": r.get("team", "")} for r in newly_escalated],
-                          len(newly_escalated)))
+                          len(newly_escalated),
+                          _groups(newly_escalated, lambda r: tuple(teams.email_teams(r)), lambda r: {"teams": teams.email_teams(r)})))
     return out
 
 

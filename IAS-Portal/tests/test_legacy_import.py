@@ -372,7 +372,9 @@ def test_manage_import_merges_into_existing_settings(scripts, data_dir, tmp_path
 
 
 def test_seed_demo_explains_when_the_demo_module_is_missing(data_dir, monkeypatch):
+    import calllog.ops
     monkeypatch.setitem(sys.modules, "calllog.ops.demo", None)
+    monkeypatch.delattr(calllog.ops, "demo", raising=False)       # an earlier test may have imported it already
     with pytest.raises(SystemExit, match="demo data module"):
         manage.main(["seed-demo", "--data-dir", str(data_dir)])
 

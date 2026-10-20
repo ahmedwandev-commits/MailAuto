@@ -40,7 +40,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
-from . import collector_config, events, mailbox, notifications, schemas
+from . import collector_config, events, itsm_records, mailbox, notifications, schemas, sla_records
 from . import settings as hub_settings
 from .engines import common
 from .store import HISTORY_KEEP_DAYS, LOG_ROTATE_BYTES, OpsStore, now_iso
@@ -123,8 +123,13 @@ def password_source(cc, kind, username=None):
 
 
 def credential_signature(cc, kind, username):
-    """Fingerprint of the account (kept in memory only) to notice that somebody fixed the user or the password."""
-    raw = "|".join([str(username or ""), os.environ.get(common.PASSWORD_ENV[kind], ""), cc.file_password(kind) if cc else ""])
+    """Fingerprint of the account (kept in memory only) to notice that somebody fixed the user or the password - in
+    the environment, collector_config.json or the Windows Credential Manager (``collector.py --set-password``)."""
+    try:
+        password = collector_config.get_password(cc, kind, username)
+    except Exception:                               # noqa: BLE001 - no password anywhere yet
+        password = ""
+    raw = "|".join([str(username or ""), password_source(cc, kind, username) or "", password])
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -160,14 +165,17 @@ def next_active_start(settings, module, moment):
     """The first moment at or after ``moment`` when scheduled runs are allowed (``moment`` itself if they are now)."""
     _, hours = hub_settings.effective_schedule(settings, module)
     start, end = (hours.split("-") if hours else ("00:00", "23:59"))
+    # a night shift ("22:00-06:00") is two windows of each day: up to the end, and from the start on
+    windows = [(start, end)] if start <= end else [("00:00", end), (start, "23:59")]
     for offset in range(9):
         day = moment + timedelta(days=offset)
         if not day_allowed(settings, module, day):
             continue
-        begin = datetime.combine(day.date(), datetime.strptime(start, "%H:%M").time())
-        finish = datetime.combine(day.date(), datetime.strptime(end, "%H:%M").time()) + timedelta(seconds=59)
-        if moment <= finish:
-            return max(moment, begin)
+        for first, last in windows:
+            begin = datetime.combine(day.date(), datetime.strptime(first, "%H:%M").time())
+            finish = datetime.combine(day.date(), datetime.strptime(last, "%H:%M").time()) + timedelta(seconds=59)
+            if moment <= finish:
+                return max(moment, begin)
     return moment
 
 
@@ -272,7 +280,7 @@ def result_from_json(doc):
 
 
 def kill_process_tree(pid):
-    """End a child process and everything it started (Outlook scan helpers, Chrome, Playwright)."""
+    """End a child process and everything it started (Outlook scan helpers, Chrome / Edge)."""
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW, timeout=30)
         return
@@ -343,6 +351,7 @@ class _JobState:
         self.paused_since = None        # ISO text for the pages
         self.paused_ts = None           # epoch seconds, for the "has the config file changed since" test
         self.cred_sig = None
+        self.paused_source = None       # password source at the pause (kept in the heartbeat, never the password)
         self.runs_ok = 0
         self.runs_failed = 0
         self.last_status = None
@@ -362,6 +371,7 @@ class Runner:
         self.mailer_factory = mailer_factory
         self.isolate = isolate
         self.dry_run, self.no_email, self.debug, self.headed = dry_run, no_email, debug, headed
+        self._dry_slots = {}                           # dry run: day -> report slots "sent" (memory only, never written)
         self.console = console
         self.poll_seconds = poll_seconds
         self.heartbeat_seconds = heartbeat_seconds
@@ -454,6 +464,7 @@ class Runner:
         st.fail_streak = int(hb.get("consecutive_failures") or 0)
         if hb.get("paused") == "auth":
             st.paused, st.paused_since, st.paused_ts = "auth", hb.get("paused_since"), hb.get("paused_ts")
+            st.paused_source = hb.get("paused_source")
 
     # ------------------------------------------------------------------ settings and config
     def reload(self):
@@ -550,7 +561,10 @@ class Runner:
         if not self._enabled(job, settings) or st.paused:
             return None
         if job == "email_report":
-            moment = next_report_slot(settings, now, self._slots_done(now))
+            done = self._slots_done(now)
+            if report_slots_due(settings, now, done):             # a slot is still open: the retry, not the next slot
+                return max(now, st.next_run or now)
+            moment = next_report_slot(settings, now, done)
             return max(moment, st.next_run) if moment and st.next_run else moment
         moment = max(st.next_run or now, now)
         return next_active_start(settings, schemas.JOB_MODULE[job], moment)
@@ -581,14 +595,18 @@ class Runner:
 
     # ------------------------------------------------------------------ decisions
     def _slots_done(self, now):
+        dry = self._dry_slots.get(now.date().isoformat(), set())
         try:
             doc = self.store.read_state(REPORT_STATE)
         except Exception:
-            return set()
-        return set(doc.get("done") or []) if doc.get("day") == now.date().isoformat() else set()
+            return set(dry)
+        return (set(doc.get("done") or []) if doc.get("day") == now.date().isoformat() else set()) | dry
 
     def _mark_slots(self, now, slots):
-        if not slots or self.dry_run:
+        if slots and self.dry_run:                     # remembered for this process only, so a slot runs once
+            self._dry_slots.setdefault(now.date().isoformat(), set()).update(slots)
+            return
+        if not slots:
             return
         done = self._slots_done(now) | set(slots)
         try:
@@ -614,6 +632,9 @@ class Runner:
         kind = job if job in ACCOUNT_KINDS else None
         if kind and st.cred_sig is not None:
             return credential_signature(self.cc, kind, self._username(kind)) != st.cred_sig
+        if kind and st.paused_source:                              # paused by an earlier process: a new password source
+            if (password_source(self.cc, kind, self._username(kind)) or "none") != st.paused_source:
+                return True
         if st.paused_ts and self._cc_sig:                          # paused by an earlier collector process
             return self._cc_sig[0] / 1e9 > float(st.paused_ts)
         return False
@@ -625,6 +646,7 @@ class Runner:
                 return False
             self._say("The account details changed - scheduled runs resume.", job)
             st.paused, st.paused_since, st.paused_ts, st.cred_sig, st.fail_streak = None, None, None, None, 0
+            st.paused_source = None
         if job == "email_report":
             if st.next_run and now < st.next_run:
                 return False
@@ -768,6 +790,8 @@ class Runner:
                         break
             with self._children_lock:
                 self._children.pop(job, None)
+            if outcome == "done" and self._stop.is_set() and not os.path.exists(result_path):
+                outcome = "stopped"          # stop() killed the child before this loop looked at the stop flag
             return self._child_result(job, outcome, proc.returncode, seconds, result_path, out_path, log)
         finally:
             shutil.rmtree(work, ignore_errors=True)
@@ -812,6 +836,7 @@ class Runner:
         if status == "ok":
             st.runs_ok += 1
             st.fail_streak, st.paused, st.paused_since, st.paused_ts, st.cred_sig = 0, None, None, None, None
+            st.paused_source = None
             self._store_result(job, module, result, finished, elapsed)
             extra.update(last_ok_at=ts, last_error=None)
         elif status == "error":
@@ -821,6 +846,8 @@ class Runner:
             if result.error_kind == "auth":
                 st.paused, st.paused_since, st.paused_ts = "auth", ts, time.time()
                 st.cred_sig = credential_signature(self.cc, job, self._username(job)) if job in ACCOUNT_KINDS else None
+                st.paused_source = ((password_source(self.cc, job, self._username(job)) or "none")
+                                    if job in ACCOUNT_KINDS else None)
                 self._say("The login failed (wrong or missing user / password) - scheduled runs of this job are paused until "
                           "the account details are fixed (or someone presses Run now).", job)
         extra.update(last_run_at=ts, last_status=status)
@@ -828,7 +855,7 @@ class Runner:
             self._job_event(job, ts, status == "ok", previous_ok, error)
             st.last_status = status
         if slots and (status in ("ok", "skipped") or result.emails_sent):
-            self._mark_slots(finished, slots)
+            self._mark_slots(started, slots)            # the slots of the day they were due on, even if it ends after 00:00
 
         if job == "email_report" and status != "error":
             st.next_run = None
@@ -839,7 +866,8 @@ class Runner:
                    last_summary=summary, last_duration_seconds=round(elapsed, 2), runs_ok=st.runs_ok, runs_failed=st.runs_failed,
                    consecutive_failures=st.fail_streak,
                    retry_multiplier=self._retry_minutes(job, settings) // self._interval(job, settings),
-                   paused=st.paused, paused_since=st.paused_since, paused_ts=st.paused_ts, paused_reason=self._paused_reason(st),
+                   paused=st.paused, paused_since=st.paused_since, paused_ts=st.paused_ts, paused_source=st.paused_source,
+                   paused_reason=self._paused_reason(st),
                    next_run_at=now_iso(moment) if moment else None, emails_sent=int(result.emails_sent or 0), **extra)
         line = {"ok": f"Finished OK - {summary}", "error": f"FAILED - {error or 'unknown error'}",
                 "skipped": f"Skipped - {summary or 'nothing to do'}"}[status]
@@ -868,11 +896,24 @@ class Runner:
                     self.store.add_events(found)
             except Exception as exc:
                 log(f"Timeline events could not be written: {type(exc).__name__}: {exc}")
+            try:
+                self._record(module)
+            except Exception as exc:                          # the scan itself is stored; the web folds it later
+                log(f"The {module} recording could not be updated: {type(exc).__name__}: {exc}")
         if result.history_point or result.history_extra:
             try:
                 self._write_history(module, day, result.history_point, result.history_extra)
             except Exception as exc:
                 log(f"The history point could not be written: {type(exc).__name__}: {exc}")
+
+    def _record(self, module):
+        """Fold the scan just written into the SLA / ITSM recording (the SLA Analysis and Change requests tabs), here in
+        the collector, so a request that comes and goes while no web page is open is still recorded."""
+        if module == "sla":
+            sla_records.fold_latest_scan(self.store, sla_records.system_team_map(self.store.read_auto_assign()))
+        elif module == "itsm":
+            itsm = (self._settings or {}).get("itsm") or {}
+            itsm_records.fold_latest_scan(self.store, bool(itsm.get("complete_when_missing")))
 
     def _write_history(self, module, day, point, extra):
         if point:
@@ -973,6 +1014,8 @@ class Runner:
     # ------------------------------------------------------------------ housekeeping
     def housekeeping_if_due(self, now=None):
         """Once a day, outside business hours: delete what is old (HUB-DESIGN section 15)."""
+        if self.dry_run:                               # "write and send nothing": deleting old files included
+            return None
         now = now or self.clock()
         settings = self.reload()
         try:

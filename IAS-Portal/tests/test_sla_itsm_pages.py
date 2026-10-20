@@ -381,6 +381,60 @@ def test_sla_breached_first_then_filter_by_status_and_user(tab, hub):
     t.clean()
 
 
+def test_sla_links_from_home_open_the_linked_requests(tab, hub):
+    """Home links a security user, a status or a search straight to the requests behind the number."""
+    t = tab()
+    page = t.open("/sla?q=9007", ".sx-requests tbody tr")
+    expect(rows(page)).to_have_count(1)
+    assert page.input_value('input[aria-label="Search requests"]') == "9007"
+    page = t.open("/sla?status=breached", ".sx-requests tbody tr")
+    assert statuses(page) == ["breached"] * 4 and text(page, ".sx-count") == "4 of 31 requests"
+    mine = [r for r in hub["sla"]["requests"] if r["security_user"] == USERS[0]]
+    page = t.open(f"/sla?user={USERS[0]}", ".sx-requests tbody tr")
+    assert rows(page).count() == len(mine) and text(page, ".sx-count") == f"{len(mine)} of 31 requests"
+    page = t.open("/sla?tab=analysis", "#sx-tab-analysis")
+    expect(page.locator("#sx-tab-analysis")).to_have_attribute("aria-selected", "true")
+    t.clean()
+
+
+def test_the_sla_analysis_tab_is_live(ops, tab, hub):
+    """The SLA Analysis follows the collector like the live tab: a new scan updates it without a click."""
+    t = tab()
+    page = t.open("/sla?tab=analysis", '[data-kpi="an-open"]')
+    assert kpi(page, "an-open") == "31" and kpi(page, "an-closed-today") == "0"
+    assert kpi(page, "an-past") == str(hub["sla"]["totals"]["breached"])        # the same 2 h target as the live tab
+    later = NOW + dt.timedelta(minutes=5)
+    data = sla_snapshot(now=later)
+    data["requests"] = data["requests"][6:]                                       # six requests left their queues
+    data.update(totals=totals_of(data["requests"]), by_user=by_user(data["requests"]))
+    write_sla(ops, data, at=later, history=False)
+    for job in schemas.JOBS:
+        beat(ops, job, at=later)
+    t.poll_now()
+    expect(page.locator('[data-kpi="an-open"] [data-kpi-value]')).to_have_text("25")
+    assert kpi(page, "an-closed-today") == "6"
+    t.clean()
+
+
+def test_the_sla_analysis_says_how_many_requests_have_no_team(tab, hub):
+    """Requests whose application and security user map to no team are in no manager's view: the page says so."""
+    t = tab()
+    page = t.open("/sla?tab=analysis", '[data-kpi="an-open"]')
+    note = page.locator(".sx-banner.info:has-text('no team')")
+    expect(note).to_have_count(1)
+    assert "Auto Assign" in note.inner_text() and page.locator(".sx-banner.info svg path").first.get_attribute("d")
+    t.clean()
+
+
+def test_the_sla_analysis_says_dash_not_zero_percent_before_anything_closed(tab, hub):
+    t = tab()
+    page = t.open("/sla?tab=analysis", '[data-kpi="an-open"]')
+    within = page.locator('[data-kpi="an-within"]')
+    if within.count():                                                           # nothing timed has closed yet
+        assert kpi(page, "an-within") == "—" and "op-t-danger" not in within.get_attribute("class")
+    t.clean()
+
+
 def test_sla_search_ignores_arabic_spelling_and_says_when_nothing_matches(tab, hub):
     t = tab()
     page = t.open("/sla", ".sx-requests tbody tr")
@@ -563,6 +617,24 @@ def test_sla_banners_say_what_is_wrong(ops, tab, hub, clock):
     t.problems.clear()
 
 
+@pytest.mark.parametrize("path,ready", [("/sla", '[data-kpi="open"]'), ("/itsm", ".sx-role")])
+def test_a_manager_is_never_told_old_data_is_live(ops, tab, hub, path, ready):
+    """A manager does not see collector alarms (offline / failed), but a three-hour-old scan is not "Live" either."""
+    old = NOW - dt.timedelta(hours=3)
+    write_sla(ops, sla_snapshot(now=old), at=old, history=False)
+    write_itsm(ops, itsm_snapshot(now=old), at=old)
+    for job in schemas.JOBS:
+        beat(ops, job, at=old)
+    t = tab("mona")
+    page = t.open(path, ready)
+    banner = text(page, ".sx-fresh")
+    assert "Live" not in banner and "offline" not in banner and "06:00" in banner and "3 h" in banner, banner
+    t = tab()                                                                # the administrator still gets the alarm
+    page = t.open(path, ready)
+    assert "collector is offline" in text(page, ".sx-fresh")
+    t.problems.clear()
+
+
 @pytest.mark.parametrize("path,api,ready", [("/sla", "sla", '[data-kpi="open"]'), ("/itsm", "itsm", ".sx-role")])
 def test_pages_keep_the_last_scan_and_say_so_when_the_server_fails(tab, hub, path, api, ready):
     t = tab()
@@ -717,6 +789,27 @@ def test_itsm_expand_collapse_search_and_copy(tab, hub):
     t.clean()
 
 
+def test_itsm_link_from_home_opens_the_request(tab, hub):
+    t = tab()
+    page = t.open("/itsm?q=100303", ".sx-role")
+    expect(page.locator(".sx-reqs li")).to_have_count(1)
+    assert page.input_value('input[aria-label="Search the requests"]') == "100303"
+    t.clean()
+
+
+def test_a_table_paged_below_its_smallest_size_option_still_shows_its_pager(tab, hub):
+    """ITSM 'By role' pages by 10 while the size options start at 25: rows 11+ must stay reachable."""
+    t = tab()
+    page = t.open("/itsm", ".sx-role")
+    shown = page.evaluate("""() => {
+      const t = OPS.table({ columns: [{ key: "n", label: "N" }], rows: Array.from({ length: 16 }, (_, i) => ({ n: i })), pageSize: 10 });
+      document.body.append(t.el);
+      return { rows: t.el.querySelectorAll("tbody tr").length, pager: !t.el.querySelector(".op-table-foot").hidden };
+    }""")
+    assert shown == {"rows": 10, "pager": True}
+    t.clean()
+
+
 def test_itsm_long_lists_start_closed_and_open_on_demand(ops, tab, hub):
     data = itsm_snapshot()
     many = [{"number": str(500000 + i), "summary": f"Request {i}"} for i in range(12)]
@@ -811,13 +904,18 @@ def test_itsm_text_from_the_scoreboard_is_never_run_as_html(ops, tab, hub):
 
 # ---------------------------------------------------------------------------------------------- roles, themes, size
 @pytest.mark.parametrize("path,ready", [("/sla", '[data-kpi="open"]'), ("/itsm", ".sx-role")])
-def test_manager_sees_both_pages_and_runs_a_scan(tab, hub, ops, path, ready):
+def test_manager_sees_both_pages_but_only_an_admin_runs_a_scan(tab, hub, ops, path, ready):
+    """Run now is for administrators only (api.job_run); a manager reads the same page without the button."""
     t = tab("mona")
     page = t.open(path, ready)
-    page.click("button.btn-primary")
+    assert page.get_by_role("button", name="Run scan now").count() == 0
+    t.clean()
+    t = tab()
+    page = t.open(path, ready)
+    page.get_by_role("button", name="Run scan now").click()
     page.wait_for_selector("button.btn-primary:disabled")
     job = path[1:]
-    assert [r["requested_by"] for r in ops.pending_run_requests(job)] == ["mona"]
+    assert [r["requested_by"] for r in ops.pending_run_requests(job)] == ["admin"]
     t.clean()
 
 

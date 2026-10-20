@@ -70,8 +70,9 @@ def test_my_work_shows_the_employees_own_numbers(app, demo_data, tab):
     assert api["calls"]["today"]["total"] > 0
     assert str(api["calls"]["today"]["total"]) in text_of(page, ".my-stack .card:first-child")
     assert page.locator("#myStrip .op-strip-group").count() == 5
-    # the "Log a call" quick link is there for the employee
-    assert page.locator('a[href="/dashboard"]').count() == 1
+    # the "Log a call" quick link is there for the employee (besides the top bar's "Log calls")
+    assert page.locator('a.btn[href="/dashboard"]').count() == 1
+    assert page.locator('a.op-nav-link[href="/dashboard"]').count() == 1
     assert t.later_problems(*not_yet_written()) == [], t.problems
 
 

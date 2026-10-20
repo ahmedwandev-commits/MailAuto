@@ -376,7 +376,7 @@
     { id: "general", title: "General", cards: [
       { title: "Working days and hours", text: "Scheduled scans run only inside this window. “Run now” on the Collectors tab ignores it. Each module can have its own window.", fields: [
         { path: "general.work_days", type: "days", label: "Working days", hint: "Leave every day off to run on all days." },
-        { path: "general.active_hours", type: "hours", label: "Active hours", hint: "From-to, like 08:00-17:00. Empty = all day." },
+        { path: "general.active_hours", type: "hours", label: "Active hours", hint: "From-to, like 08:00-17:00 (a night shift like 22:00-06:00 runs across midnight). Empty = all day." },
         { path: "general.holidays", type: "lines", kind: "date", label: "Holidays", hint: "One date per line (2026-10-06). Nothing is scheduled on these days." }] }] },
     { id: "email", title: "E-mail", cards: [
       { title: "E-mail scan", text: "The read-only Outlook scan that fills the E-mail page.", fields: [
@@ -497,6 +497,9 @@
         { path: "itsm.roles", type: "lines", kind: "text", label: "Roles to read", hint: "One role per line, as named in ITSM." },
         { path: "itsm.categories", type: "kv", label: "Request categories", wide: true, hint: "The label shown on the page, and the pattern that matches its scoreboard line.",
           kv: { key: "text", value: "text", keyPlaceholder: "label", valuePlaceholder: "pattern", add: "Add a category", empty: "No categories.", mono: true } },
+        { path: "itsm.role_teams", type: "kv", label: "Team of each role", wide: true,
+          hint: "Which team a role belongs to, so a manager sees only their own team's roles. Only needed when the role name does not say it (\u201cIMP Card Management\u201d already means Card Management).",
+          kv: { key: "text", value: "team", keyPlaceholder: "role, as named in ITSM", add: "Add a role", empty: "No roles mapped - the role names decide." } },
         { path: "itsm.execution_time_header", type: "text", max: 100, label: "Execution-time column (optional)", hint: "The scoreboard column that holds each change request's scheduled execution time (what the business asks). Leave blank if the scoreboard has no such column." },
         { path: "itsm.complete_when_missing", type: "switch", label: "Count a request finished when it leaves the board", hint: "Turn on when the scoreboard has no “Implementation Completed” list: a pending request that disappears from a fully-read board is then recorded as completed." },
         SCHEDULE("itsm.schedule", "ITSM")] },

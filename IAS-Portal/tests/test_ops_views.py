@@ -169,7 +169,9 @@ def test_view_as_employee(admin, mgr, emp, make_account):
     page, _ = shell(admin, "/my?as=2001")
     html = admin.get("/my?as=2001").get_data(as_text=True)
     assert 'data-view-as="2001"' in html and "read only" in html and "Alice Employee" in html and 'href="/hub"' in html
-    assert 'data-view-as="2001"' in mgr.get("/my?as=2001").get_data(as_text=True)                  # a manager may look too
+    make_account("2003", "user", "Flex Employee", team="Flex Cube")
+    assert 'data-view-as="2003"' in mgr.get("/my?as=2003").get_data(as_text=True)                  # a manager may look too,
+    assert mgr.get("/my?as=2001").status_code == 404                                                # but only at their own team
     missing = admin.get("/my?as=nobody")
     assert missing.status_code == 404 and "Person not found" in missing.get_data(as_text=True)
     other = make_account("2002", "user", "Bob Employee")
@@ -458,11 +460,45 @@ def test_home_is_drawn_from_the_page_itself_and_makes_no_request_at_first(admin,
     page = t.open("/hub", "#hubCards .op-module")
     assert page.locator("#tlBody .op-tl-item").count() > 0 and page.locator("#attnBody .op-attn-item").count() > 0     # already drawn
     page.wait_for_timeout(1500)
-    assert api_calls == [], api_calls
+    # the notification bell (notify.js) has its own random start offset; the Home data itself is not asked for
+    assert [u for u in api_calls if "/api/ops/notifications" not in u] == [], api_calls
     seed = json.loads(page.get_attribute("#hub-page", "data-seed"))
     assert seed["overview"]["shared"]["calls"]["total"] == 60 and seed["events"] and len(seed["events"]) <= 60
     assert seed["overview"]["attention"] == admin.get("/api/ops/overview").get_json()["attention"]       # the same numbers a poll gives
     assert t.later_problems() == [], t.problems
+
+
+SLOW_NEXT_POLL = """(() => {                       // test hook: hold the answer of the next matching request 2.5 s
+  const real = window.fetch;
+  window.fetch = (url, opts) => {
+    const p = real(url, opts);
+    if (window.__slow && String(url).includes(window.__slow)) { window.__slow = ""; return p.then((r) => new Promise((ok) => setTimeout(() => ok(r), 2500))); }
+    return p;
+  };
+})();"""
+
+
+def test_admin_clicks_made_while_a_poll_is_loading_are_not_lost(demo_data, tab):
+    """The Calls dashboard polls every 5 s; a Next click or a tab switch during a slow poll must still happen."""
+    t = tab()
+    t.context.add_init_script(SLOW_NEXT_POLL)
+    page = t.open("/admin", "#tab-overview .tile")
+    page.click('button[data-tab="records"]')
+    page.wait_for_selector("#tab-records .pager:has-text('page 1 of 2')")
+    page.evaluate("window.__slow = '/api/admin/records'")
+    with page.expect_request(lambda r: "/api/admin/records" in r.url, timeout=15000):
+        pass                                                      # the background poll is now in flight (and held)
+    page.click("#tab-records .pager button:has-text('Next')")
+    page.wait_for_selector("#tab-records .pager:has-text('page 2 of 2')", timeout=10000)
+    page.wait_for_timeout(3000)                                   # the held answer (page 1) arrives and must not win
+    assert "page 2 of 2" in text_of(page, "#tab-records .pager")
+
+    page.evaluate("window.__slow = '/api/admin/records'")
+    with page.expect_request(lambda r: "/api/admin/records" in r.url, timeout=15000):
+        pass
+    page.click('button[data-tab="branches"]')
+    page.wait_for_selector("#tab-branches > *", timeout=10000)    # never polled again, so it must load now
+    assert t.later_problems(*not_yet_written()) == [], t.problems
 
 
 def test_home_falls_back_to_asking_when_the_first_paint_is_missing(admin, demo_data, tab, monkeypatch):
@@ -512,7 +548,9 @@ def test_manager_home_is_scoped_to_their_team(admin, demo_data, tab):
     t = tab(demo.MANAGER_ID, demo_data["password"])
     page = t.open("/hub", "#hubCards .op-module")
     page.wait_for_selector("#tlBody .op-tl-item, #tlBody .op-empty")
-    assert page.locator('a[href^="/system"]:visible, a[href="/calls"]:visible').count() == 0 and page.locator("#colLink").is_hidden()
+    assert page.locator('a[href^="/system"]:visible').count() == 0 and page.locator("#colLink").is_hidden()
+    # a manager's Calls link opens their own team's calls (views.py), not the admin Calls dashboard
+    assert page.inner_text("#hubCards .op-module-calls .op-module-link") == "My team's calls"
     assert "Flex Cube" in text_of(page, "#hubSub")
     teams = page.locator("#teamBody tbody tr td:first-child").all_inner_texts()
     assert teams == ["Flex Cube"]
@@ -644,6 +682,9 @@ def test_shared_strip_numbers_are_the_viewers_own(app, demo_data, tab, uid, labe
     assert [g["label"] for g in groups] == ["Calls today", label, "Tickets open", "ITSM requests", "Collectors"]
     assert groups[0]["value"] == str(api["calls"]["total"]) == "60"
     assert groups[2]["value"] == str(api["sla"]["open"]) and groups[4]["value"] in ("Online", "2 of 3 online")
+    down = [m for m, x in api["collector"]["modules"].items() if not x["online"]]
+    if down:                                    # "2 of 3 online" says WHICH scan is down (the demo's ITSM collector is stale)
+        assert down == ["itsm"] and groups[4]["sub"].startswith("ITSM offline")
     if uid == "1003":                                                      # an employee with no team sees no team's mail
         assert mail["value"] == "—" and "No team" in mail["sub"] and api["email"]["teams"] == []
     else:

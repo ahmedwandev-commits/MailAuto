@@ -1,6 +1,6 @@
 """The "sla" job: how long has every security request been with its security user (port of the old SLA.PY monitor).
 
-It logs in to the SSO portal with Playwright, opens the "User Provisioning Portal - موظف اسناد - مستخدم السرية" package,
+It logs in to the SSO portal with the PC's Edge / Chrome, opens the "User Provisioning Portal - موظف اسناد - مستخدم السرية" package,
 jumps to the Re-Assign page, reads the requests table (plain tables with paging and DataTables through their API), and
 measures the age of every request since "تاريخ الارسال للسرية". Entry point (docs/HUB-DESIGN.md sections 5.1, 6, 12):
 
@@ -41,7 +41,7 @@ from urllib.parse import quote, urlparse
 
 import json
 
-from .. import schemas
+from .. import schemas, teams
 from . import cdp
 from ..settings import DEFAULTS, deep_merge
 from .common import (
@@ -165,10 +165,11 @@ def find_col(columns, wanted):
     return None
 
 
-# --------------------------------------------------------------------------- browser (Playwright)
-# \u escapes = tatweel, the diacritics range, alef / taa marbuta / alef maqsura variants (same as common.norm_arabic)
+# --------------------------------------------------------------------------- browser (DevTools protocol)
+# Arabic-Indic digits, tatweel, the diacritics range, alef / taa marbuta / alef maqsura variants (same as common.norm_arabic)
 JS_NORM = r"""
-  const norm = s => (s || "").replace(/ـ/g, "").replace(/[ً-ْ]/g, "")
+  const _AR = {"٠":"0","١":"1","٢":"2","٣":"3","٤":"4","٥":"5","٦":"6","٧":"7","٨":"8","٩":"9"};
+  const norm = s => (s || "").replace(/[٠-٩]/g, d => _AR[d]).replace(/ـ/g, "").replace(/[ً-ْ]/g, "")
       .replace(/[إأآ]/g, "ا").replace(/ة/g, "ه").replace(/ى/g, "ي")
       .replace(/\s+/g, " ").trim().toLowerCase();
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
@@ -209,9 +210,11 @@ JS_READ_TABLES = "() => {" + r"""
     if (seen.has(t)) continue;
     const headRows = t.tHead ? [...t.tHead.rows] : [];
     let head = headRows.length ? [...headRows[headRows.length - 1].cells] : [];
-    if (!head.length && t.rows.length && [...t.rows[0].cells].every(c => c.tagName === "TH"))
+    const allTh = tr => [...tr.cells].every(c => c.tagName === "TH");
+    if (!head.length && t.rows.length && allTh(t.rows[0]))
       head = [...t.rows[0].cells];
-    const body = [...t.tBodies].flatMap(b => [...b.rows]).filter(tr => tr.cells.length > 1);
+    // no <thead> (an ASP.NET GridView): the header row, and a <th> footer row, sit in the body; neither is a request
+    const body = [...t.tBodies].flatMap(b => [...b.rows]).filter(tr => tr.cells.length > 1 && !allTh(tr));
     out.push({source: "dom", headers: head.map(cellText), rows: body.map(tr => [...tr.cells].map(cellText))});
   }
   return out;
@@ -988,5 +991,6 @@ def run(ctx, scraper=None):
     return JobResult(
         ok=True, snapshot_data=data, summary=summary + (f" - {note}" if note else ""), emails_sent=int(sent),
         history_point={"ts": ts, "open": totals["open"], "within": totals["within"],
-                       "reminder": totals["reminder"], "breached": totals["breached"]},
+                       "reminder": totals["reminder"], "breached": totals["breached"],
+                       "groups": teams.sla_groups(requests)},          # per application + user: a team's own history
         history_extra={"first_breach": {r["key"]: ts for r in requests if r["status"] == schemas.SLA_BREACHED}})

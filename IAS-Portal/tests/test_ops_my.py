@@ -208,13 +208,26 @@ def test_admin_can_view_as_an_employee_read_only_and_it_is_audited(app, admin, a
     assert admin.post("/api/ops/email/quality/appeal", {"message_id": "<a2>", "appeal": "on behalf of alice"}).status_code == 404
 
 
-def test_manager_view_as_is_limited_to_their_team(mgr, flex_mgr, alice, work):
+def test_manager_view_as_is_limited_to_their_team(admin, mgr, flex_mgr, alice, work):
+    assert flex_mgr.get("/api/ops/my?as=1001").status_code == 404     # Alice is in no team of this manager
+    assert admin.put("/api/admin/users/1001", {"teams": ["Flex Cube", "Card Management"]}).status_code == 200
     full = mgr.get("/api/ops/my?as=1001").get_json()
     assert {i["subject"] for i in full["email"]["replied"]["items"]} == {"Alice replied one", "Alice replied slow"}
     scoped = flex_mgr.get("/api/ops/my?as=1001").get_json()          # Flex Cube manager: "Alice replied one" is Card Management
     assert {i["subject"] for i in scoped["email"]["replied"]["items"]} == {"Alice replied slow"}
     assert "Alice replied one" not in json.dumps(scoped["email"])
     assert scoped["read_only"] is True
+
+
+def test_a_team_manager_cannot_open_the_page_of_someone_outside_their_teams(make_account, flex_mgr, mgr, work):
+    make_account("3001", "user", "Card Only", email="card.only@example.test", teams=["Card Management"])
+    make_account("3002", "manager", "Other Manager", email="other.mgr@example.test", teams=["Flex Cube"])
+    make_account("3003", "user", "Flex One", email="flex.one@example.test", teams=["Flex Cube"])
+    for uid in ("3001", "3002", "admin", "nobody"):                  # the same answer as for an unknown id
+        r = flex_mgr.get(f"/api/ops/my?as={uid}")
+        assert r.status_code == 404 and r.get_json()["error"] == "User not found.", uid
+    assert flex_mgr.get("/api/ops/my?as=3003").status_code == 200    # an employee of their own team
+    assert mgr.get("/api/ops/my?as=3001").status_code == 200         # a manager of every team sees every employee
 
 
 # ---------------------------------------------------------------------------- one set of numbers

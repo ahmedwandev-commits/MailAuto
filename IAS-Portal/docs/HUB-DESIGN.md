@@ -13,8 +13,8 @@ disagree, fix the code or change this file in the same commit.
  │ collector.py                  │ ────────▶ │ data\ops\snapshots\*.json       │ ────────▶ │ Flask app (calllog\)  │──▶ browsers
  │  jobs: email, email_report,   │           │ data\ops\history, overrides,    │ ◀──────── │  Home / Calls / Email │
  │        sla, itsm              │ ◀──────── │ jobs\requests (run-now), logs   │   write   │  SLA / ITSM / System  │
- │  (Outlook COM, Playwright,    │   read    └─────────────────────────────────┘ overrides └───────────────────────┘
- │   Chrome DevTools)            │
+ │  (Outlook COM, the PC's       │   read    └─────────────────────────────────┘ overrides └───────────────────────┘
+ │   Edge / Chrome via DevTools) │
  └───────────────────────────────┘
 ```
 
@@ -54,7 +54,7 @@ collector.py      launcher (top level, next to run.py)
 requirements-collector.txt
 ```
 
-Engines and `store.py` must **import on Linux/macOS without Outlook, Chrome, pywin32, Playwright or
+Engines and `store.py` must **import on Linux/macOS without Outlook, Chrome, pywin32 or
 pandas installed** (import those lazily inside the functions that need them). This is what makes them
 testable here. Do not add pandas to the project.
 
@@ -171,7 +171,23 @@ using the heartbeat's `last_error`).
   ]
 }
 ```
-History point (`ops/history/sla/<day>.json` = `{"points": [{"ts","open","within","reminder","breached"}], "first_breach": {key: ts}}`).
+History point (`ops/history/sla/<day>.json` = `{"points": [{"ts","open","within","reminder","breached","groups":[...]}], "first_breach": {key: ts}}`);
+`groups` = the counts per (application, security user), so a manager's history is rebuilt for their teams only.
+
+**SLA Analysis recording** (`ops/sla_records.json`, `calllog/ops/sla_records.py`, the Ticketing page's second tab).
+- The COLLECTOR folds every `sla` scan into the recording as it writes it (`fold_latest_scan`); the web pages fold
+  again as a safety net (a no-op once folded). A request on the page is open; one that is gone closed at that scan,
+  handled by the security user who held it. "Already folded" is an exact match on the scan time (summer time ends
+  without losing an hour). A request without a sent date gets no SLA clock, as on the Live tab.
+- The portal's `ALL_*.csv` export (Upload export, or the feed path in Settings) adds the confirmed requests with their
+  outcome. An export line and the live closure of the SAME request (same assignment minute and application) become one
+  record: the security user and the time it left the queue from the scan, the confirmation from the export. EmpNo is
+  shown as the person's security name (the account whose portal ID / user ID it is), so it gets that person's team.
+- The period filter is the period's work: a closed request counts in the period it closed in (like "Closed today" and
+  the by-day table), an open one in every period from its assignment on.
+- The "right now" strip counts like the Live tab: the scan's own status per request and its `breach_minutes`.
+- Team: the same rule as every page (`calllog/ops/teams.py`); a request no rule gives a team is shown to
+  administrators only, and the page says how many there are.
 
 ### 5.2 `itsm`
 
@@ -415,10 +431,11 @@ Rules for 24/7 safety:
 
 * **Jobs run in child processes** (`collector.py --run-job <job>` started by the runner, result handed back as a JSON file) with a hard
   timeout per job (email 20 min, email_report 30 min, sla 5 min, itsm 10 min, settings can lower them) and a kill of the whole process tree
-  (Outlook scan, Chrome, Playwright) on timeout. A hung COM call or a leaking browser can therefore never freeze the collector or grow
+  (Outlook scan, Chrome / Edge) on timeout. A hung COM call or a leaking browser can therefore never freeze the collector or grow
   memory for days.
 * **Never hammer a login.** A wrong or expired password (`JobResult.error_kind == "auth"`) stops the scheduled runs of that job until
-  the credential changes (collector_config.json mtime / password source changed) or an admin presses *Run now*; the System page and Home show
+  the credential changes (collector_config.json mtime / password source changed, or a new password saved with
+  `collector.py --set-password`) or an admin presses *Run now*; the System page and Home show
   "login failed - fix the password, retries paused". This protects the SSO account from a lock-out.
 * **Back-off**: after repeated failures the retry interval grows (1x, 2x, 4x ... capped at 30 min) and resets on success; the heartbeat says so.
 * **Heartbeat stamps carry epoch seconds** (`updated_ts`) next to the local ISO time, and online / stale decisions use the epoch, so daylight-saving

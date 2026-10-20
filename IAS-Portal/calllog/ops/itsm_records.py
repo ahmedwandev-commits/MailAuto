@@ -214,3 +214,33 @@ def housekeep(records, cfg, now):
         for num, _r in ordered[:max(0, len(records) - cap)]:
             del records[num]
     return before - len(records)
+
+
+def fold_latest_scan(store, complete_when_missing=False):
+    """Fold the latest ITSM scan (the ``itsm`` snapshot) into the change-request recording held by ``store``. The
+    collector calls this right after it writes each scan (nothing is lost while no web page is open); the web side calls
+    it again as a safety net. The snapshot is read and the records updated inside one store lock, and each scan is
+    folded once (exact match on its time). Returns how many NEW change orders were added."""
+    snap = store.read_snapshot("itsm")
+    generated = (snap or {}).get("generated_at") or ""
+    if not generated or not ((snap or {}).get("data") or {}).get("roles"):
+        return 0
+    if (store.read_itsm_records().get("last_generated") or "") == generated:
+        return 0
+    added = {"n": 0}
+
+    def change(d):
+        latest = store.read_snapshot("itsm") or {}
+        stamp, data = latest.get("generated_at") or "", latest.get("data") or {}
+        if not stamp or not data.get("roles") or (d.get("last_generated") or "") == stamp:
+            return
+        records = d.setdefault("records", {})
+        before = len(records)
+        record_scan(records, data, stamp)
+        if complete_when_missing:
+            mark_missing_completed(records, data, stamp)       # a pending CR that left the board is finished
+        housekeep(records, {"max_records": DEFAULT_MAX_RECORDS, "retention_days": DEFAULT_RETENTION_DAYS}, stamp)
+        d["last_generated"] = stamp
+        added["n"] = len(records) - before
+    store.update_itsm_records(change)
+    return added["n"]

@@ -24,10 +24,11 @@ sys.path.insert(0, str(ROOT))
 
 PAGES = {                                     # name -> (path, role, selector that means "the page has finished drawing")
     "admin": [("login", "/login", None), ("hub", "/hub", "#hub-page, main"), ("calls", "/admin", "main"),
-              ("email", "/email", "#email-page .op-kpi, #email-page"), ("sla", "/sla", "main"), ("itsm", "/itsm", "main"),
+              ("email", "/email", "#email-page .op-kpi, #email-page"), ("sla", "/sla", "main"),
+              ("sla-analysis", "/sla?tab=analysis", "[data-kpi='an-open'], #sla-page .op-empty"), ("itsm", "/itsm", "main"),
               ("system", "/system", "main"), ("my-as", "/my?as=1001", "main")],
     "manager": [("hub", "/hub", "main"), ("email", "/email", "#email-page .op-kpi, #email-page"), ("sla", "/sla", "main"),
-                ("itsm", "/itsm", "main")],
+                ("sla-analysis", "/sla?tab=analysis", "[data-kpi='an-open'], #sla-page .op-empty"), ("itsm", "/itsm", "main")],
     "employee": [("my", "/my", "main"), ("log-calls", "/dashboard", "main")],
 }
 

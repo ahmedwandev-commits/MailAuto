@@ -311,6 +311,7 @@ def test_events_endpoint_and_manager_scope(admin, flex_mgr, ops):
     mine = flex_mgr.get("/api/ops/events?day=2026-10-11").get_json()["events"]
     flat = json.dumps(mine)
     assert "Flex thing" in flat and "Card thing" not in flat and "Only card" not in flat
+    assert [(e["text"], e["count"]) for e in mine] == [("1 e-mail", 1)]      # the count is theirs too, not the sector's
     assert admin.get("/api/ops/events?day=bad").status_code == 400
     assert admin.get("/api/ops/events").get_json()["events"] == body["events"]            # default day = today
 
@@ -651,6 +652,41 @@ def test_decision_needs_an_appeal_and_team_access(admin, mgr, make_account, hub,
     assert ops.overrides("quality")["<r1@x>"]["rating_withdrawn"] is False
 
 
+def test_a_second_team_manager_keeps_handling_a_shared_mail(admin, make_account, hub, ops):
+    """A replied mail named for two teams is one row (team = the first). The second team's manager files their
+    assignment and their rating under their OWN team, so they can still handle both once the mail leaves the scan."""
+    cara = make_account("cara", "manager", "Cara Card", email="cara@example.test", team="Card Management")
+    bob = make_account("1002", "user", "Bob Employee", email="bob@example.test")
+    shared = replied_row("<s1@x>", "bob@example.test", all_teams=["Flex Cube", "Card Management"])
+    put_snapshot(ops, "email", email_data([shared]))
+    r = cara.post("/api/ops/email/assign", {"message_id": "<s1@x>", "assigned_to_email": "dan@example.test"})
+    assert r.status_code == 200 and r.get_json()["assignment"]["team"] == "Card Management"
+    assert cara.post("/api/ops/email/quality", {"message_id": "<s1@x>", "rating": "Needs Improvement"}).status_code == 200
+    assert ops.overrides("quality")["<s1@x>"]["team"] == "Card Management"
+    assert bob.post("/api/ops/email/quality/appeal", {"message_id": "<s1@x>", "appeal": "The customer asked late"}).status_code == 200
+    put_snapshot(ops, "email", email_data([]), at="2026-10-11T09:30:00")           # the mail left the scan
+    assert cara.post("/api/ops/email/quality/decision", {"message_id": "<s1@x>", "decision": "Rejected"}).status_code == 200
+    assert cara.delete("/api/ops/email/assign", json={"message_id": "<s1@x>"}).status_code == 200
+
+
+def test_view_as_shows_only_the_ratings_of_the_viewers_teams(admin, flex_mgr, make_account, hub, ops):
+    cara = make_account("cara", "manager", "Cara Card", email="cara@example.test", team="Card Management")
+    make_account("1002", "user", "Bob Employee", email="bob@example.test", team="Flex Cube")
+    put_snapshot(ops, "email", email_data([replied_row("<fx@x>", "bob@example.test", subject="FLEX ONLY SUBJECT")]))
+    assert flex_mgr.post("/api/ops/email/quality", {"message_id": "<fx@x>", "rating": "Needs Improvement",
+                                                    "note": "private coaching note"}).status_code == 200
+    seen = lambda who: [(q["subject"], q["note"]) for q in who.get("/api/ops/my?as=1002").get_json()["quality"]["reviews"]]  # noqa: E731
+    assert seen(flex_mgr) == [("FLEX ONLY SUBJECT", "private coaching note")]
+    assert seen(admin) == [("FLEX ONLY SUBJECT", "private coaching note")]
+    assert cara.get("/api/ops/my?as=1002").status_code == 404   # another team's manager cannot even open the page
+    # an employee of both teams: the Card manager opens the page but reads none of the Flex Cube ratings
+    make_account("1003", "user", "Dina Both", email="dina@example.test", teams=["Flex Cube", "Card Management"])
+    put_snapshot(ops, "email", email_data([replied_row("<fx2@x>", "dina@example.test", subject="FLEX TWO")]))
+    assert flex_mgr.post("/api/ops/email/quality", {"message_id": "<fx2@x>", "rating": "Good", "note": "kept private"}).status_code == 200
+    both = cara.get("/api/ops/my?as=1003").get_json()["quality"]
+    assert both["reviews"] == [] and both["counts"]["reviewed"] == 0
+
+
 def test_rerating_keeps_the_appeal_text_but_resets_the_decision(admin, mgr, hub, ops):
     mgr.post("/api/ops/email/quality", {"message_id": "<r1@x>", "rating": "Good"})
     ops.update_override("quality", "<r1@x>", lambda old: {**old, "appeal": "text", "appeal_decision": "Accepted",
@@ -755,6 +791,24 @@ def test_classification_suggestion_is_listed_scoped_and_learned_on_approval(app,
     assert ("ops_classification_learn", "<u1@x>", "admin") in audit_actions(app, clock)
     # the approved one is no longer proposed; the other still is
     assert {x["message_id"] for x in admin.get(SUGS).get_json()["suggestions"]} == {"<u2@x>"}
+
+
+def test_classification_suggestion_approval_cannot_move_a_mail_that_is_not_a_pending_suggestion(
+        admin, flex_mgr, make_account, hub, ops):
+    cara = make_account("cara", "manager", "Cara Card", email="cara@example.test", team="Card Management")
+    rows = [email_row("<card1@x>", team="Card Management", all_teams=["Card Management"], classified_by="system"),
+            uncls_replied_row("<u1@x>")]
+    put_snapshot(ops, "email", email_data(rows))
+    beat(ops, "email")
+    # another team's classified mail is not a suggestion: it cannot be pulled into the manager's own team
+    assert flex_mgr.post(SUG, {"message_id": "<card1@x>", "keyword": "card stuff", "team": "Flex Cube"}).status_code == 404
+    # a suggestion for another team cannot be filed under the manager's own team either
+    assert cara.post(SUG, {"message_id": "<u1@x>", "keyword": "password reset", "team": "Card Management"}).status_code == 403
+    assert ops.overrides("team") == {}
+    assert ops.read_settings_raw().get("email", {}).get("classification", {}).get("system_team_map", {}) == {}
+    # approving twice: the second time it is no longer pending
+    assert flex_mgr.post(SUG, {"message_id": "<u1@x>", "keyword": "password reset", "team": "Flex Cube"}).status_code == 200
+    assert flex_mgr.post(SUG, {"message_id": "<u1@x>", "keyword": "password reset", "team": "Flex Cube"}).status_code == 404
 
 
 def test_classification_suggestion_can_be_dismissed(app, admin, hub, ops, clock):
@@ -874,6 +928,35 @@ def test_sla_analysis_endpoint(admin, flex_mgr, emp, ops):
     assert admin.get("/api/ops/sla-analysis?from=2026-10-12").get_json()["meta"]["requests"] == 0
 
 
+def test_a_managers_empty_analysis_says_why_and_export_lines_name_people_like_the_scan(admin, flex_mgr, make_account, ops):
+    """A manager whose team has nothing recorded sees an (empty) analysis with the count of requests no rule gives a
+    team, not "nothing recorded"; an export line's EmpNo is shown as the person's security name - and so gets the
+    person's team, like their live requests."""
+    def seed(doc):
+        doc["records"] = {"u1": {"id": "u1", "system": "نظام غير معروف", "assigned_at": "2026-10-11T08:00:00",
+                                 "executor": "Nobody", "executed_at": "", "confirmed_at": "2026-10-11T09:00:00",
+                                 "final_outcome": "executed"},
+                          "x1": {"id": "x1", "system": "نظام تجريبي", "assigned_at": "2026-10-11T08:00:00",
+                                 "executor": "700101", "executed_at": "", "confirmed_at": "2026-10-11T09:30:00",
+                                 "final_outcome": "executed"}}
+    ops.update_sla_records(seed)
+    body = flex_mgr.get("/api/ops/sla-analysis").get_json()
+    assert body["available"] is True and body["meta"]["requests"] == 0 and body["unmapped"] == 2
+    make_account("700101", "user", "Hany", team="Flex Cube", security_name="هاني جمال", portal_id="700101")
+    body = flex_mgr.get("/api/ops/sla-analysis").get_json()
+    assert body["meta"]["requests"] == 1 and body["by_handler"][0]["handler"] == "هاني جمال"
+    assert body["options"]["executors"] == ["هاني جمال"] and body["unmapped"] == 1
+    assert flex_mgr.get("/api/ops/sla-config").get_json()["recorded"] == 1          # the same count everywhere
+
+
+def test_import_feed_says_what_is_wrong_instead_of_up_to_date(admin, tmp_path):
+    r = admin.post("/api/ops/sla-feed/import", {})
+    assert r.status_code == 400 and "No export feed is set" in r.get_json()["error"]
+    admin.put("/api/ops/sla-config", {"feed_path": str(tmp_path / "missing" / "ALL_2026.csv")})
+    r = admin.post("/api/ops/sla-feed/import", {})
+    assert r.status_code == 400 and "cannot see the export feed" in r.get_json()["error"]
+
+
 def test_itsm_analysis_records_execution_time_and_conclusion(admin, emp, ops):
     assert emp.get("/api/ops/itsm-analysis").status_code == 403           # the ITSM analysis is admin/manager only
     assert admin.get("/api/ops/itsm-analysis").get_json()["available"] is False      # no scan recorded yet
@@ -959,9 +1042,44 @@ def test_sla_analysis_records_a_request_that_left_the_queue_as_closed(admin, ops
     assert again["buckets"] == body["buckets"] and ops.read_sla_records()["last_scan"] == "2026-10-11T08:45:00"
 
 
+def test_the_analysis_right_now_strip_counts_like_the_live_tab(admin, ops):
+    """The SLA Analysis "right now" strip and the Live tickets tab count the same open requests the same way: the
+    scan's verdict for each request (a request does not turn breached on one tab only) and no SLA age without a
+    sent date - even when the scan is a while old."""
+    reqs = [("k1", "Alice", "2026-10-11T04:00:00", "breached"),      # 150 min old at the 06:30 scan
+            ("k2", "Alice", "2026-10-11T05:00:00", "reminder"),      # 90 min at the scan, 240 min by 09:00
+            ("k3", "Bob", None, "no_date")]                          # no sent date: not in the SLA
+    put_snapshot(ops, "sla", {"thresholds": {"warning_minutes": 60, "breach_minutes": 120},
+                              "totals": {"open": 3, "within": 0, "reminder": 1, "breached": 1, "no_date": 1},
+                              "by_user": [], "requests": [{"key": k, "security_user": u, "sent_at": t, "status": st,
+                                                           "fields": {"النظام": "Flexcube"}} for k, u, t, st in reqs]},
+                 at="2026-10-11T06:30:00")
+    live = admin.get("/api/ops/sla").get_json()["data"]["totals"]
+    strip = admin.get("/api/ops/sla-analysis").get_json()["live"]
+    assert strip["open"] == live["open"] == 3 and strip["breached"] == live["breached"] == 1
+    assert strip["breach_minutes"] == 120 and strip["oldest_minutes"] == 300.0         # k1 by the clock; k3 has no age
+    alice = next(g for g in strip["by_employee"] if g["executor"] == "Alice")
+    assert alice["breached"] == 1 and next(g for g in strip["by_employee"] if g["executor"] == "Bob")["oldest_minutes"] is None
+
+
+def test_the_analysis_today_holds_yesterdays_requests_still_open_and_the_ones_closed_today(admin, ops):
+    """Filtered to today (the default), the period counts the same requests as the "right now" strip next to it:
+    yesterday evening's requests that are still waiting, and the one that left its queue this morning."""
+    _sla_scan(ops, "2026-10-11T08:30:00", [("y1", "Alice", "2026-10-10T21:30:00"), ("y2", "Bob", "2026-10-10T22:10:00"),
+                                           ("t1", "Bob", "2026-10-11T08:20:00")])
+    admin.get("/api/ops/sla-analysis")
+    _sla_scan(ops, "2026-10-11T08:45:00", [("y2", "Bob", "2026-10-10T22:10:00"), ("t1", "Bob", "2026-10-11T08:20:00")])
+    body = admin.get("/api/ops/sla-analysis?from=2026-10-11&to=2026-10-11").get_json()
+    assert body["buckets"] == {"open": 2, "awaiting": 0, "closed": 1}
+    assert body["live"]["open"] == body["buckets"]["open"] and body["live"]["closed_today"] == body["buckets"]["closed"]
+    assert [r["handler"] for r in body["by_handler"]] == ["Alice"]
+    week = admin.get("/api/ops/sla-analysis?from=2026-10-01&to=2026-10-09").get_json()       # before any of them
+    assert week["meta"]["requests"] == 0
+
+
 EXPORT_CSV = ("ReqID2,FStatusID1,DateF,SStatusID,DateT1,EmpNo,ApplicationName\n"
-              "9001,اسناد لمستخدم السرية,10/10/2026 08:00:00 AM,تم التعزيز على التنفيذ,10/10/2026 09:30:00 AM,239582,Flexcube\n"
-              "9002,اسناد لمستخدم السرية,10/10/2026 08:00:00 AM,تم التعزيز على عدم التنفيذ,10/10/2026 01:00:00 PM,228834,DWP\n")
+              "9001,اسناد لمستخدم السرية,10/10/2026 08:00:00 AM,تم التعزيز على التنفيذ,10/10/2026 09:30:00 AM,700101,Flexcube\n"
+              "9002,اسناد لمستخدم السرية,10/10/2026 08:00:00 AM,تم التعزيز على عدم التنفيذ,10/10/2026 01:00:00 PM,700102,DWP\n")
 
 
 def _upload(who, data, name="ALL_2026.csv"):
@@ -975,7 +1093,7 @@ def test_sla_upload_portal_export_adds_closed_requests(app, clock, admin, flex_m
     body = admin.get("/api/ops/sla-analysis?from=2026-10-10&to=2026-10-10").get_json()
     assert body["buckets"]["closed"] == 2 and body["overall"]["not_executed"] == 1
     assert body["overall"]["median_minutes"] in (90.0, 300.0)                            # 1.5 h and 5 h full clocks
-    assert {h["handler"] for h in body["by_handler"]} == {"239582", "228834"}
+    assert {h["handler"] for h in body["by_handler"]} == {"700101", "700102"}
     assert _upload(admin, EXPORT_CSV.encode("utf-8")).get_json()["added"] == 0          # re-upload: nothing new
     assert ("ops_sla_upload", "ALL_2026.csv", "admin") in audit_actions(app, clock)
 
@@ -1100,6 +1218,18 @@ def test_email_export_has_overrides_green_header_and_safe_text(admin, flex_mgr, 
     assert b"'=HYPERLINK" in csv_resp.data
 
 
+def test_exports_drop_control_characters_and_still_block_formulas(admin, hub, ops):
+    rows = [email_row("<c1>", subject="Esc\x1bape"), email_row("<c2>", subject="\x01=HYPERLINK(\"http://evil\")")]
+    put_snapshot(ops, "email", email_data(rows))
+    ws = _book(admin.get("/export/ops/email.xlsx"))["E-mails"]
+    subjects = {row[1].value: row[1] for row in ws.iter_rows(min_row=2)}
+    assert set(subjects) == {"Escape", "=HYPERLINK(\"http://evil\")"}
+    assert subjects["=HYPERLINK(\"http://evil\")"].data_type == "s"
+    put_snapshot(ops, "sla", sla_data([sla_request("k1", "Sam\x02", **{"Remark\x03": "a\x0cb"})]))
+    head, row = list(_book(admin.get("/export/ops/sla.xlsx"))["Requests"].iter_rows(values_only=True))
+    assert row[0] == "Sam" and "Remark" in head and row[head.index("Remark")] == "ab"
+
+
 def test_email_export_is_team_scoped_for_managers(flex_mgr, hub):
     wb = _book(flex_mgr.get("/export/ops/email.xlsx"))
     subjects = {r[1] for r in wb["E-mails"].iter_rows(min_row=2, values_only=True)}
@@ -1134,8 +1264,8 @@ def test_overview_numbers_and_attention(admin, hub):
     assert body["sla"]["breached"] == 1 and body["sla"]["reminder"] == 1 and body["itsm"]["totals"]["Rollback Requests"] == 1
     assert body["itsm"]["role_errors"][0]["role"] == "IMP UAT I-Flex SMS"
     texts = [(a["level"], a["module"], a["text"]) for a in body["attention"]]
-    assert ("danger", "sla", "1 ticket passed the 2 h SLA") in texts
-    assert ("warn", "sla", "1 ticket reached the reminder time (1 h)") in texts
+    assert ("danger", "sla", "1 ticket open past the 2 h SLA") in texts
+    assert ("warn", "sla", "1 ticket open past the reminder time (1 h)") in texts
     assert ("danger", "email", "1 e-mail waiting past the SLA with no team reply") in texts
     assert ("warn", "email", "1 e-mail carried over from earlier days (oldest 2 days)") in texts
     assert ("info", "email", "1 e-mail not classified to a team") in texts
@@ -1345,3 +1475,127 @@ def test_hub_blueprints_are_registered(app):
     rules = {r.rule for r in app.url_map.iter_rules()}
     assert "/api/ops/shared" in rules and "/export/ops/<any(email,sla,itsm):module>.<any(xlsx,csv):fmt>" in rules
     assert app.extensions["ops"].root.name == "ops" and app.extensions["ops"].root.is_dir()
+
+
+# ---------------------------------------------------------------------- a manager sees only their own team, everywhere
+FLEX_SEC, CARD_SEC = "فريد فلكسوك", "كارلا كاردليك"
+FLEX_ROLE, CARD_ROLE = "IMP UAT I-Flex SMS", "IMP Card Management"
+
+
+@pytest.fixture
+def two_teams(ops, make_account):
+    """Data of TWO teams in every module (calls, SLA, ITSM, timeline, history, a report file) and an employee of each."""
+    flex = make_account("f1", "user", "Farid Flex", email="farid@example.test", team="Flex Cube", security_name=FLEX_SEC)
+    card = make_account("c1", "user", "Carla Card", email="carla@example.test", team="Card Management",
+                        security_name=CARD_SEC)
+    for _ in range(2):
+        flex.post("/api/records", {"ip_phone": "70001", "reason": "solved", "note": "flex call"})
+    for _ in range(3):
+        card.post("/api/records", {"ip_phone": "70002", "reason": "solved", "note": "CARDLEAK call"})
+    reqs = [sla_request("f-1", FLEX_SEC, "breached", 200), sla_request("f-2", FLEX_SEC),
+            sla_request("c-1", CARD_SEC, "breached", 300, **{"النظام": "DWP", "اسم الموظف": "CARDLEAK one"}),
+            sla_request("c-2", CARD_SEC, "reminder", 70, **{"النظام": "DWP"}),
+            sla_request("c-3", CARD_SEC, **{"النظام": "DWP"}),
+            sla_request("x-1", "(Unassigned)", **{"النظام": "T24"})]            # no rule gives this one a team
+    put_snapshot(ops, "sla", sla_data(reqs))
+    cat = lambda n, rows=(): {"count": n, "rows": list(rows), "warning": None, "note": None}            # noqa: E731
+    roles = [{"role": FLEX_ROLE, "error": None, "categories": {"Implementation Requests": cat(1, [{"number": "900001", "summary": "flex CR"}]),
+                                                                "Rollback Requests": cat(0)}},
+             {"role": CARD_ROLE, "error": None, "categories": {"Implementation Requests": cat(2, [{"number": "900101", "summary": "CARDLEAK CR"}]),
+                                                                "Rollback Requests": cat(1)}}]
+    put_snapshot(ops, "itsm", {"categories": ["Implementation Requests", "Rollback Requests"], "roles": roles,
+                               "totals": {"Implementation Requests": 3, "Rollback Requests": 1},
+                               "changes": {"new": [{"role": CARD_ROLE, "category": "Rollback Requests", "number": "900102",
+                                                    "summary": "CARDLEAK rollback"}], "closed": []}})
+    ops.add_events([
+        {"ts": "2026-10-11T08:40:00", "module": "sla", "level": "danger", "kind": "sla_breached", "text": "3 tickets passed the 2 h SLA",
+         "count": 3, "items": [{"user": FLEX_SEC, "key": "f-1", "system": "Flexcube"}, {"user": CARD_SEC, "key": "c-1", "system": "DWP"}],
+         "groups": [{"system": "Flexcube", "user": FLEX_SEC, "n": 1}, {"system": "DWP", "user": CARD_SEC, "n": 2}]},
+        {"ts": "2026-10-11T08:45:00", "module": "itsm", "level": "warn", "kind": "itsm_new", "text": "1 new Rollback Requests",
+         "count": 1, "items": [{"number": "900102", "summary": "CARDLEAK rollback", "role": CARD_ROLE}],
+         "groups": [{"role": CARD_ROLE, "n": 1}]}])
+    for module, point in (("sla", {"ts": "2026-10-11T08:30:00", "open": 6, "within": 3, "reminder": 1, "breached": 2,
+                                   "groups": [{"system": "Flexcube", "user": FLEX_SEC, "open": 2, "within": 1, "reminder": 0, "breached": 1},
+                                              {"system": "DWP", "user": CARD_SEC, "open": 3, "within": 1, "reminder": 1, "breached": 1},
+                                              {"system": "T24", "user": "(Unassigned)", "open": 1, "within": 1, "reminder": 0, "breached": 0}]}),
+                          ("itsm", {"ts": "2026-10-11T08:30:00", "totals": {"Implementation Requests": 3, "Rollback Requests": 1},
+                                    "per_role": {FLEX_ROLE: {"Implementation Requests": 1, "Rollback Requests": 0},
+                                                 CARD_ROLE: {"Implementation Requests": 2, "Rollback Requests": 1}}})):
+        ops.add_history_point(module, "2026-10-11", point)
+    (ops.report_dir("sla") / "SLA_latest.xlsx").write_bytes(b"CARDLEAK report of every team")
+    beat(ops, "sla")
+    beat(ops, "itsm")
+    return flex, card
+
+
+def test_a_team_manager_sees_only_their_team_in_every_module(app, admin, flex_mgr, two_teams, ops):
+    def leaks(resp):
+        if resp.mimetype.endswith("sheet"):                       # a workbook: every cell of every sheet
+            book = openpyxl.load_workbook(io.BytesIO(resp.data))
+            body = " ".join(str(v) for ws in book.worksheets for row in ws.iter_rows(values_only=True) for v in row)
+        else:
+            body = resp.get_data(as_text=True)
+        return [m for m in ("CARDLEAK", CARD_SEC, CARD_ROLE, "T24") if m in body]
+
+    sla = flex_mgr.get("/api/ops/sla").get_json()["data"]
+    assert [r["key"] for r in sla["requests"]] == ["f-1", "f-2"] and sla["totals"]["open"] == 2
+    assert [u["user"] for u in sla["by_user"]] == [FLEX_SEC]
+    itsm = flex_mgr.get("/api/ops/itsm").get_json()["data"]
+    assert [r["role"] for r in itsm["roles"]] == [FLEX_ROLE]
+    assert itsm["totals"] == {"Implementation Requests": 1, "Rollback Requests": 0} and itsm["changes"]["new"] == []
+    overview = flex_mgr.get("/api/ops/overview").get_json()
+    assert overview["sla"]["open"] == 2 and [u["user"] for u in overview["sla"]["top_users"]] == [FLEX_SEC]
+    assert overview["itsm"]["totals"]["Rollback Requests"] == 0
+    assert overview["calls"]["today"]["total"] == 2                                  # Farid's calls, not Carla's
+    shared = flex_mgr.get("/api/ops/shared").get_json()
+    assert (shared["sla"]["open"], shared["calls"]["total"], shared["itsm"]["totals"]["Rollback Requests"]) == (2, 2, 0)
+    events = flex_mgr.get("/api/ops/events?day=2026-10-11").get_json()["events"]
+    assert [(e["text"], e.get("count")) for e in events] == [("1 ticket passed the 2 h SLA", 1)]
+    sla_day = flex_mgr.get("/api/ops/sla/history?days=1").get_json()["days"][-1]["points"][-1]
+    assert (sla_day["open"], sla_day["breached"]) == (2, 1)
+    itsm_day = flex_mgr.get("/api/ops/itsm/history?days=1").get_json()["days"][-1]["points"][-1]
+    assert itsm_day["totals"] == {"Implementation Requests": 1, "Rollback Requests": 0} and list(itsm_day["per_role"]) == [FLEX_ROLE]
+    analysis = flex_mgr.get("/api/ops/sla-analysis").get_json()
+    assert analysis["options"]["teams"] == ["Flex Cube"] and analysis["options"]["executors"] in ([], [FLEX_SEC])
+    assert flex_mgr.get("/api/ops/reports").get_json()["reports"] == []
+    assert flex_mgr.get("/export/ops/report/sla/SLA_latest.xlsx").status_code == 404
+    app.extensions["ops_ticketing_run"] = {"running": False, "done": True, "team": "Card Management",
+                                           "log": ["CARDLEAK run"], "summary": "assigned 2 (CARDLEAK)"}
+    for path in ("/api/ops/sla", "/api/ops/itsm", "/api/ops/overview", "/api/ops/shared", "/api/ops/events?day=2026-10-11",
+                 "/api/ops/sla/history", "/api/ops/itsm/history", "/api/ops/sla-analysis", "/api/ops/itsm-analysis",
+                 "/api/ops/auto-assign/run-ticketing", "/export/ops/sla.csv", "/export/ops/sla.xlsx", "/export/ops/itsm.csv",
+                 "/export/ops/itsm.xlsx", "/hub"):
+        resp = flex_mgr.get(path)
+        assert resp.status_code == 200 and leaks(resp) == [], (path, leaks(resp))
+
+    # the administrator still sees everything, including the request no rule gives a team
+    everything = admin.get("/api/ops/sla").get_json()["data"]
+    assert everything["totals"]["open"] == 6 and admin.get("/api/ops/overview").get_json()["calls"]["today"]["total"] == 5
+    assert len(admin.get("/api/ops/reports").get_json()["reports"]) == 1
+
+
+def test_a_managers_numbers_agree_on_every_dashboard(flex_mgr, two_teams):
+    sla = flex_mgr.get("/api/ops/sla").get_json()["data"]["totals"]
+    overview = flex_mgr.get("/api/ops/overview").get_json()
+    shared = flex_mgr.get("/api/ops/shared").get_json()
+    calls = flex_mgr.get("/api/ops/team-calls").get_json()["totals"]
+    for key in ("open", "breached", "reminder", "within"):
+        assert sla[key] == overview["sla"][key] == shared["sla"][key] == overview["shared"]["sla"][key], key
+    assert calls["total"] == overview["calls"]["today"]["total"] == shared["calls"]["total"] == 2
+    itsm = flex_mgr.get("/api/ops/itsm").get_json()["data"]["totals"]
+    assert itsm == overview["itsm"]["totals"] == shared["itsm"]["totals"]
+
+
+def test_a_managers_email_answer_counts_only_their_team(flex_mgr, admin, hub, ops):
+    data = admin.get("/api/ops/email").get_json()["data"]
+    data["stats"]["team_replies"] = 9                                    # what the collector counted in Outlook, every team
+    data["stats"]["reply_breakdown"] = [{"name": "Replier bob", "team": "Flex Cube", "count": 2},
+                                        {"name": "Replier carol", "team": "Card Management", "count": 7}]
+    data["classification"] = {"counts": {"system": 5, "address": 0, "default_team": 0, "override": 0, "none": 1},
+                              "unclassified": 1, "unclassified_team": ""}             # as a real scan writes it
+    put_snapshot(ops, "email", data)
+    mine = flex_mgr.get("/api/ops/email").get_json()["data"]
+    assert mine["stats"]["team_replies"] == 2                            # Flex Cube's replies only
+    assert mine["classification"]["unclassified"] == 0 and mine["classification"]["counts"]["none"] == 0
+    assert admin.get("/api/ops/email").get_json()["data"]["classification"]["unclassified"] == 1
+    assert flex_mgr.get("/api/ops/sla-config").get_json().get("recorded", 0) <= admin.get("/api/ops/sla-config").get_json().get("recorded", 0)

@@ -57,16 +57,14 @@
 .sx-analysis-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .sx-analysis-head .sx-analysis-note { flex: 1; min-width: 200px; }
 .sx-analysis-tools { display: inline-flex; gap: 6px; flex-wrap: wrap; }
-.sx-titlebar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* SLA Analysis filter bar: by date (default today), employee, checker, team. */
 .sx-filter { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; margin: 2px 0 8px; }
 .sx-filter-f { display: flex; flex-direction: column; gap: 3px; font-size: 0.82rem; color: var(--muted); }
 .sx-filter-f input, .sx-filter-f select { font-size: 0.9rem; }
 .sx-filter .grow { flex: 1; }
-.sx-titlebar h1 { font-size: 1.4rem; }
 .sx-scan { display: block; margin-top: 2px; }
 .sx-ic { width: 16px; height: 16px; flex: none; }
-.sx-two { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 16px; align-items: start; }
+.sx-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
 @media (max-width: 1000px) { .sx-two { grid-template-columns: minmax(0, 1fr); } }
 
 /* ---------- freshness banner ---------- */
@@ -130,7 +128,8 @@ button.sx-kpi:hover { background: var(--wash); }
 .sx-link[aria-pressed="true"] { font-weight: 650; }
 table.sx-users { min-width: 0; }
 table.sx-users th[scope="row"] { font-weight: 500; color: var(--ink); font-size: inherit; padding: 9px 10px; text-align: start; border-bottom: 1px solid var(--hair); }
-table.sx-users td, table.sx-users th { padding-inline: 8px; }
+table.sx-users td, table.sx-users th { padding-inline: 6px; }
+table.sx-users { width: 100%; }
 table.sx-users tr.is-selected { background: var(--wash); }
 table.sx-requests { min-width: 820px; }
 table.sx-requests td { vertical-align: top; }

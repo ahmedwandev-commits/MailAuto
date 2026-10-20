@@ -129,7 +129,7 @@ def builtin_system_team_map():
 
 APPLICATION_ALIASES = {
     "Flexcube": [
-        "flexcube", "flex cube", "flex", "fcubs", "fc", "gl", "obma", "obcl", "fcprod", "flx", "oracle", "فليكس",
+        "flexcube", "flex cube", "flex", "fcubs", "fcub", "fc", "gl", "obma", "obcl", "fcprod", "flx", "oracle", "فليكس",
         "فلیکس", "الفليكس", "صناديق الاستثمار", "صناديق الاستثمار fcis", "fcis",
     ],
     "DWP": [
@@ -242,8 +242,9 @@ APPLICATION_ALIASES = {
 }
 
 SHORT_LATIN_ACRONYMS = frozenset((
-    "ACH", "ACI", "CCR", "CPS", "CRM", "CSD", "DMMS", "DWP", "ECM", "ECSD", "EIAM", "FC", "FCPROD", "FCUBS", "FLEX",
-    "FLX", "GL", "MFS", "OBCL", "OBDX", "OBMA", "PRIME", "REDI", "RTGS", "SBX", "SFTP", "TMS", "XCS", "XPRIME",
+    "ACH", "ACI", "BAW", "CCR", "CEM", "CPS", "CRM", "CSD", "CXM", "DMMS", "DWP", "ECM", "ECSD", "EIAM", "ERP", "FC",
+    "FCPROD", "FCUBS", "FLEX", "FLX", "GL", "MFS", "OBCL", "OBDX", "OBMA", "PRIME", "REDI", "RTGS", "SBX", "SFTP", "SSO",
+    "TMS", "XCS", "XPRIME",
 ))
 
 TEXT_NOISE_PHRASES = ("I-Flex SMS Team",)
