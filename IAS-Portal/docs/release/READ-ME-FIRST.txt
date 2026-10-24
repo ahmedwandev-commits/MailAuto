@@ -19,8 +19,9 @@ A NEW INSTALLATION
   To keep it running by itself (and up to date), use Windows Task Scheduler with  run.py --service
 
 THE COLLECTOR (Outlook, the SSO portal, ITSM) - on the PC that stays logged in to Outlook
-  1. Open collector_config.json (next to collector.py) in Notepad. The SSO-portal and ITSM user names
-     are already there; type the two passwords between the empty quotes and save.
+  1. collector_config.json (next to collector.py): an update keeps yours - this ZIP does not carry one.
+     On a new PC copy collector_config.example.json to collector_config.json, open it in Notepad, type
+     the SSO-portal and ITSM user names and passwords, and save.
   2. Check it:       python collector.py --check        (it never prints a password)
   3. Start it:       python collector.py --start        (--install-autostart = at every Windows log-in)
   Prefer not to keep a password in the file? Leave it empty and run
@@ -52,8 +53,9 @@ IAS PORTAL - اقرأني أولاً
   للتشغيل التلقائي استخدم Windows Task Scheduler مع  run.py --service
 
 الـ Collector (Outlook وبورتال الـ SSO و ITSM) - على الجهاز اللي فاتح Outlook
-  1. افتح collector_config.json (جنب collector.py) بالـ Notepad: أسماء المستخدمين موجودة، اكتب
-     الباسوردين بين علامات التنصيص الفاضية واحفظ.
+  1. collector_config.json (جنب collector.py): التحديث بيسيب ملفك زي ما هو - الـ ZIP ده مافيهوش الملف ده.
+     على جهاز جديد انسخ collector_config.example.json باسم collector_config.json وافتحه بالـ Notepad واكتب
+     أسماء المستخدمين والباسوردات (SSO و ITSM) واحفظ.
   2. اتأكد:     python collector.py --check        (عمره ما بيطبع باسورد)
   3. شغّله:     python collector.py --start        (--install-autostart = يشتغل مع كل دخول ويندوز)
   مش عايز الباسورد في الملف؟ سيبه فاضي وشغّل

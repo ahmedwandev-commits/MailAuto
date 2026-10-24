@@ -49,8 +49,10 @@ Admin and employee pages share one **Team status** strip (counts only: calls tod
    `--service` is a small supervisor that restarts it if it ever stops.
 6. Sign in as `admin` -> **System**: Collectors (online? last scan, next run, *Run now*), Settings (teams, recipients, schedule, SLA and ITSM options, **Classification**), Logs, Reports, Health.
 
-## The SLA (Ticketing)
+## The SLA (Ticketing and Insights › Analysis › SLA)
 
+* **Ticketing** shows the live tickets; the **SLA Analysis** is the "SLA" tab of **Insights › Analysis**
+  (`/analysis?tab=sla`, `static/sla-analysis.js`; old links `/sla#analysis` and `/sla?tab=analysis` go there).
 * **Every SLA number comes from the SSO portal only** - the Re-Assign queue (live tickets) and, for the SLA Analysis,
   «الاستفسار عن الطلبات» with each request's «الحالة التاريخية للطلب» (who did each step, when). Nothing is read from
   the FlexCube database and nothing is uploaded. The collector drives the PC's Edge / Chrome over the DevTools protocol
@@ -58,6 +60,17 @@ Admin and employee pages share one **Team status** strip (counts only: calls tod
 * The SLA = the first assignment («اسناد لمستخدم السرية») -> the reviewer's confirmation («تم التعزيز»); each stage of a
   request (branch approval, region / sector approval, waiting to be assigned, security user, reviewer, whole request) is
   timed against its own target (System › Settings › Ticketing › SLA recording).
+* **A live ticket is aged from its LAST assignment** to the security user holding it: the scan matches it to its status
+  history (رقم المستخدم + النظام + نوع الطلب, the current holder first) and counts from «اسناد لمستخدم السرية»; only a
+  request whose history is not read yet counts from «تاريخ الارسال للسرية». A request handed to another security user
+  is read again (its status does not change, its holder does).
+* **The SLA Analysis period is the assignment day** (first assignment) for every request, closed or not; a request
+  closed later still counts on its assignment day. The "Compared with the portal" card gives the portal's own inquiry
+  rows for the period's request dates (Third Party left out) next to what the history holds.
+* **Every row of the inquiry grid is read**: «Show» at its largest choice («All» = 1000), then the portal's «التالي»
+  pages; each page is checked against its «of N records»; a row's «التفاصيل» is opened on its own page; identical rows
+  stay separate requests. Every line of a request's status history is read (5 a page, sorted by name) - a history that
+  cannot be read whole is never recorded. `tests/fake_inquiry_portal.py` is the fake of that page for the tests.
 * Speed: a request's details are opened with the portal's own `__doPostBack` (one post-back per request, no clicks, no
   closing, no fixed waits); the history read stops at `sla.history_seconds` (default 180 s, always inside the scan's own
   time limit) and keeps everything it read; a request whose details cannot be read is tried twice, then left until its

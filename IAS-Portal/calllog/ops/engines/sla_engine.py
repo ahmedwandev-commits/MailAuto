@@ -942,8 +942,9 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
         rows, pbs = list(table["rows"]), list(table.get("pbs") or [None] * len(table["rows"]))
         shown = table["rows"]                             # the rows the grid shows right now
         total = grid_total_now()
+        wait = min(timeout_s, 15)                         # a DataTable that fetches each page from the portal
         if total is not None and len(rows) < total and browser.eval(JS_GRID_EXPAND):
-            t = _poll(read_table, lambda t: t is not None and len(t["rows"]) >= total, 3)
+            t = _poll(read_table, lambda t: t is not None and len(t["rows"]) >= total, wait)
             if t is not None and len(t["rows"]) > len(rows):
                 rows, pbs = list(t["rows"]), list(t.get("pbs") or [None] * len(t["rows"]))
                 shown = t["rows"]
@@ -954,7 +955,7 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
                     break
                 if not _click(browser, JS_GRID_NEXT):
                     break
-                t = _poll(read_table, lambda t: t is not None and t["rows"] and _rows_sig(t["rows"]) != sig, 3)
+                t = _poll(read_table, lambda t: t is not None and t["rows"] and _rows_sig(t["rows"]) != sig, wait)
                 if t is None or not t["rows"] or _rows_sig(t["rows"]) == sig:
                     break
                 sig = _rows_sig(t["rows"])
