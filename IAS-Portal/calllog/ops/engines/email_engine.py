@@ -1138,6 +1138,7 @@ def calculate_statistics(cfg, rows, team_replies, included_emails):
             key=lambda d: (-d["count"], d["name"])),
         "quality_reviewed": sum(1 for r in counted if r.get("quality_rating")),
         "quality_excellent": sum(1 for r in counted if r.get("quality_rating") == "Excellent"),
+        "quality_very_good": sum(1 for r in counted if r.get("quality_rating") == "Very Good"),
         "quality_good": sum(1 for r in counted if r.get("quality_rating") == "Good"),
         "quality_needs_improvement": sum(1 for r in counted if r.get("quality_rating") == "Needs Improvement"),
         "quality_appeals": sum(1 for r in rows if r.get("quality_appeal")),
@@ -1480,7 +1481,7 @@ def _snapshot_stats(stats):
         system_volume=_counter_dict(stats["system_volume"]),
         business_address_volume=_counter_dict(stats["business_address_volume"]),
         quality={"reviewed": stats["quality_reviewed"], "excellent": stats["quality_excellent"],
-                 "good": stats["quality_good"], "needs_improvement": stats["quality_needs_improvement"],
+                 "very_good": stats.get("quality_very_good", 0), "good": stats["quality_good"], "needs_improvement": stats["quality_needs_improvement"],
                  "appeals": stats["quality_appeals"], "coverage_rate": round(stats["quality_coverage_rate"], 2),
                  "repliable_count": stats["repliable_count"], "manager_reply_count": stats["manager_reply_count"]},
         trend=stats.get("trend") or {})

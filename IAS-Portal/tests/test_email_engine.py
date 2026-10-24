@@ -701,8 +701,8 @@ def test_assignment_and_quality_are_overlaid_on_the_row(store):
             by["answered"]["quality_appeal"]) == ("Needs Improvement", "short answer", "Incomplete answer", "I disagree")
     s = out.stats
     assert (s["assigned_count"], s["quality_reviewed"], s["quality_needs_improvement"], s["quality_appeals"]) == (1, 1, 1, 1)
-    assert s["quality_scorecard"] == [{"name": "Alice", "team": "Flex Cube", "reviewed": 1, "excellent": 0, "good": 0,
-                                       "needs": 1, "score": 25.0}]
+    assert s["quality_scorecard"] == [{"name": "Alice", "team": "Flex Cube", "reviewed": 1, "excellent": 0,
+                                       "very_good": 0, "good": 0, "needs": 1, "score": 25.0}]
 
 
 def test_quality_scorecard_index_leaderboard_and_matrix(store):
@@ -733,6 +733,26 @@ def test_quality_scorecard_index_leaderboard_and_matrix(store):
     recounted = overlay.recount(eng.to_snapshot_data(out, make_ctx(store))["rows"], {})["quality"]
     assert (recounted["reviewed"], recounted["excellent"], recounted["good"], recounted["needs_improvement"]) == (7, 2, 3, 2)
     assert recounted["coverage_rate"] == pytest.approx(85.7, abs=0.05)
+
+
+def test_a_very_good_rating_is_counted_on_its_own_and_scores_between_excellent_and_good(store):
+    """The manager's four ratings: Excellent 100, Very Good 90, Good 75, Needs Improvement 25."""
+    assert rules.RATINGS == ("Excellent", "Very Good", "Good", "Needs Improvement")
+    assert rules.RATING_POINTS == {"Excellent": 100, "Very Good": 90, "Good": 75, "Needs Improvement": 25}
+    items = []
+    for name, rating in (("v1", "Very Good"), ("v2", "Excellent"), ("v3", "Very Good")):
+        original = mail(subject=name, minutes_ago=200)
+        items += [original, reply(original, sender=ALICE, after=10)]
+        store.set_override("quality", mid(original), {"rating": rating})
+    out = scan(make_ctx(store), *items)
+    s = out.stats
+    alice = next(e for e in s["quality_scorecard"] if e["name"] == "Alice")
+    assert (alice["excellent"], alice["very_good"], alice["good"], alice["needs"]) == (1, 2, 0, 0)
+    assert alice["score"] == pytest.approx(93.3, abs=0.05)
+    assert s["team_quality_index"][0]["very_good"] == 2
+    assert (s["quality_reviewed"], s["quality_excellent"], s["quality_very_good"]) == (3, 1, 2)
+    recounted = overlay.recount(eng.to_snapshot_data(out, make_ctx(store))["rows"], {})["quality"]
+    assert (recounted["reviewed"], recounted["very_good"]) == (3, 2)
 
 
 # -------------------------------------------------------------------------------------------- statistics
@@ -806,7 +826,7 @@ def test_snapshot_is_json_safe_contract_shaped_and_valid(ctx):
                                     "speed_quality_matrix", "person_trends", "repeat_issue_alerts"}
     assert data["date"] == "2026-10-11" and data["sla_target_minutes"] == 60
     assert data["teams"] == ["MFA Team", "Flex Cube", "Card Management", "Third Party", "Open System", "Unclassified"]
-    assert set(data["stats"]["quality"]) == {"reviewed", "excellent", "good", "needs_improvement", "appeals",
+    assert set(data["stats"]["quality"]) == {"reviewed", "excellent", "very_good", "good", "needs_improvement", "appeals",
                                              "coverage_rate", "repliable_count", "manager_reply_count"}
     assert data["classification"]["counts"]["system"] >= 2    # FCUBS+DWP mail (one row) and the Veridium mail
     by_subject = {r["subject"]: r for r in data["rows"]}

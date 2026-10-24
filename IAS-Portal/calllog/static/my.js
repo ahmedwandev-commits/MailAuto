@@ -284,7 +284,7 @@
       return OPS.card("My quality reviews", {}, OPS.emptyState({ title: "No reviews yet", icon: "activity",
         text: "When a manager reviews one of your replies, it shows here with its rating." }));
     }
-    const tone = (r) => (r === "Needs Improvement" ? "warn" : r === "Excellent" ? "ok" : "info");
+    const tone = (r) => (r === "Needs Improvement" ? "warn" : r === "Excellent" || r === "Very Good" ? "ok" : "info");
     const rows = q.reviews.map((rev) => h("tr", {},
       h("td", {}, rev.rating ? OPS.chip(rev.rating, tone(rev.rating)) : h("span", { class: "hint" }, "—"),
         rev.rating_withdrawn ? h("div", { class: "hint" }, "withdrawn") : null),

@@ -92,7 +92,8 @@ END_OF_DAY_SUBJECT = "End of Day Summary - Team Reply Analytics"
 # Status colours of the old script (kept: people read them the same way in Excel, charts and mails).
 GREEN, RED, AMBER, BLUE, PURPLE, BROWN = "#007336", "#E4572E", "#FFA320", "#2E86AB", "#7B4FA6", "#B0472B"
 INK, MUTED, LINE, PAGE_BG, CARD_BG, GREY = "#33404f", "#667488", "#eef1f6", "#eef1f6", "#F4F8FC", "#8a95a3"
-RATING_COLOURS = {"Excellent": GREEN, "Good": BLUE, "Needs Improvement": BROWN}
+VERY_GOOD = "#3E9E63"
+RATING_COLOURS = {"Excellent": GREEN, "Very Good": VERY_GOOD, "Good": BLUE, "Needs Improvement": BROWN}
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -879,7 +880,8 @@ def _quality_section(stats, sample):
     reviewed, repliable = _int(stats.get("quality_reviewed")), _int(stats.get("repliable_count"))
     cards = [_kpi("Replies Reviewed", f"{reviewed} / {repliable}", PURPLE),
              _kpi("Review Coverage", f"{_float(stats.get('quality_coverage_rate')):.0f}%", BLUE),
-             _kpi("Excellent / Good", f"{_int(stats.get('quality_excellent'))} / {_int(stats.get('quality_good'))}", GREEN),
+             _kpi("Excellent / Very Good / Good", f"{_int(stats.get('quality_excellent'))} / "
+                  f"{_int(stats.get('quality_very_good'))} / {_int(stats.get('quality_good'))}", GREEN),
              _kpi("Needs Improvement", _int(stats.get("quality_needs_improvement")), RED)]
     html_out = _heading("Reply Quality") + _kpi_grid(cards)
     if _int(stats.get("quality_appeals")):
@@ -983,7 +985,7 @@ def build_assignment_email_html(person_name, items, today):
 
 def build_quality_feedback_html(person_name, items, today):
     """``items``: [(message_id, review)] - every review of this person that was not e-mailed yet."""
-    positives = sum(1 for _, r in items if r.get("rating") in ("Excellent", "Good"))
+    positives = sum(1 for _, r in items if r.get("rating") in ("Excellent", "Very Good", "Good"))
     reviewers = sorted({str(r.get("reviewed_by") or "").strip() for _, r in items
                         if str(r.get("reviewed_by") or "").strip() and str(r.get("reviewed_by")).strip().lower() != "dashboard"})
     tone = ("Thank you for the quality of your replies - keep it up." if positives == len(items)
@@ -1021,11 +1023,13 @@ def build_end_of_day_html(rows, stats, today, excel_attached=True):
     for sc in stats.get("quality_scorecard") or []:
         arrow, color = _trend_arrow(directions.get(sc["name"]))
         scorecard.append(_tr(_td(sc["name"], bold=True), _td(sc["team"]), _td(sc["reviewed"]),
-                             _td(sc["excellent"], bold=True, color=GREEN), _td(sc["good"], bold=True, color=BLUE),
+                             _td(sc["excellent"], bold=True, color=GREEN),
+                             _td(sc.get("very_good", 0), bold=True, color=VERY_GOOD), _td(sc["good"], bold=True, color=BLUE),
                              _td(sc["needs"], bold=True, color=BROWN),
                              _td(f'{_float(sc["score"]):.0f} <span style="color:{color};">{arrow}</span>', bold=True, raw=True)))
     index = [_tr(_td(t["team"], bold=True), _td(f"{_float(t['index']):.0f}", bold=True), _td(t["reviewed"]),
-                 _td(t["excellent"], color=GREEN), _td(t["good"], color=BLUE), _td(t["needs"], color=BROWN))
+                 _td(t["excellent"], color=GREEN), _td(t.get("very_good", 0), color=VERY_GOOD), _td(t["good"], color=BLUE),
+                 _td(t["needs"], color=BROWN))
              for t in stats.get("team_quality_index") or []]
     alerts = [_tr(_td(a["name"], bold=True), _td(a["team"]), _td(f"{_int(a['needs'])} flags", bold=True, color=BROWN))
               for a in stats.get("repeat_issue_alerts") or []]
@@ -1046,9 +1050,10 @@ def build_end_of_day_html(rows, stats, today, excel_attached=True):
     body += _heading("Reply Quality Reviews") + _table(["Subject", "Replied by", "Rating", "Note"], reviews,
                                                        "No quality reviews recorded today.")
     body += _heading("Quality Scorecard by Person") + _table(
-        ["Team member", "Team", "Reviewed", "Excellent", "Good", "Needs improvement", "Score"], scorecard,
+        ["Team member", "Team", "Reviewed", "Excellent", "Very good", "Good", "Needs improvement", "Score"], scorecard,
         "No quality reviews recorded today.")
-    body += _heading("Team Quality Index") + _table(["Team", "Index /100", "Reviewed", "Excellent", "Good", "Needs improvement"],
+    body += _heading("Team Quality Index") + _table(["Team", "Index /100", "Reviewed", "Excellent", "Very good", "Good",
+                                                     "Needs improvement"],
                                                     index, "No reviews recorded today.")
     if alerts:
         body += _heading("Repeated Quality Issues", BROWN) + _table(["Team member", "Team", "Recent issues"], alerts,

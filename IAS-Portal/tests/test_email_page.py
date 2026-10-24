@@ -100,6 +100,26 @@ def test_email_pending_action_writes_an_override(app, admin, ops_store, demo_dat
     assert t.later_problems(*not_yet_written()) == [], t.problems
 
 
+def test_a_reply_can_be_rated_very_good(app, admin, ops_store, demo_data, tab):
+    """The rating dialog offers Excellent, Very Good, Good and Needs Improvement; "Very Good" is saved as it is."""
+    t = tab()
+    page = t.open("/email", '.em-tab:has-text("Replied")')
+    page.click('.em-tab:has-text("Replied")')
+    review = page.locator(f"{panel(page)} .op-table tbody tr button").filter(has_text=re.compile(r"^Review$")).first
+    review.wait_for()
+    before = set(ops_store.overrides("quality"))
+    review.click()
+    page.wait_for_selector("dialog.dlg select[aria-label='Rating']")
+    offered = page.locator("dialog.dlg select[aria-label='Rating'] option").all_inner_texts()
+    assert offered[1:] == ["Excellent", "Very Good", "Good", "Needs Improvement"]
+    page.select_option("dialog.dlg select[aria-label='Rating']", "Very Good")
+    page.click("dialog.dlg button:has-text('Save review')")
+    page.wait_for_selector("#toast .toast-msg")
+    added = {k: v for k, v in ops_store.overrides("quality").items() if k not in before}
+    assert [v["rating"] for v in added.values()] == ["Very Good"]
+    assert t.later_problems(*not_yet_written()) == [], t.problems
+
+
 def test_email_is_scoped_for_a_manager(app, demo_data, tab):
     t = tab(demo.MANAGER_ID, demo_data["password"])
     page = t.open("/email", "#email-page .em-kpis .op-kpi")

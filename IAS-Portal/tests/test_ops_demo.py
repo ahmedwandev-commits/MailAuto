@@ -100,7 +100,7 @@ def test_email_rows_cover_every_situation_the_pages_show(ops):
     assert len(split) >= 4 and {r["message_id"] for r in split}.__len__() < len(split)
     assert any(r["assigned_to_email"] for r in rows) and any(r["reply_by_manager"] for r in rows)
     assert any(r["quality_rating"] for r in rows) and any(r["quality_appeal"] for r in rows)
-    assert {"Excellent", "Good", "Needs Improvement"} <= {r["quality_rating"] for r in rows}
+    assert {"Excellent", "Very Good", "Good", "Needs Improvement"} <= {r["quality_rating"] for r in rows}
     assert {"Flex Cube", "Card Management", "MFA Team", "Third Party", "Open System"} <= {r["team"] for r in rows}
     assert stats["pending"] == sum(1 for r in rows if r["status"] == schemas.EMAIL_PENDING)
     assert stats["quality"]["reviewed"] == sum(1 for r in rows if r["quality_rating"] and not r["rating_withdrawn"])

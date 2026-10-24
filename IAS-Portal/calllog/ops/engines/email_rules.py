@@ -279,8 +279,18 @@ CUSTOM_NEEDLES = {"flex cube": "flex", "e form": "form"}
 SHORT_REPLY_WORD_LIMIT = 6
 FORWARD_FALLBACK_WORD_LIMIT = 10
 UNCLASSIFIED = "Unclassified"
-RATINGS = ("Excellent", "Good", "Needs Improvement")
-RATING_POINTS = {"Excellent": 100, "Good": 75, "Needs Improvement": 25}
+RATINGS = ("Excellent", "Very Good", "Good", "Needs Improvement")          # a manager's ratings of an e-mail reply
+RATING_POINTS = {"Excellent": 100, "Very Good": 90, "Good": 75, "Needs Improvement": 25}
+RATING_KEYS = {"Excellent": "excellent", "Very Good": "very_good", "Good": "good", "Needs Improvement": "needs"}
+
+
+def score_of(counts):
+    """The 0-100 score of {excellent, very_good, good, needs} counts (None when nothing is rated)."""
+    rated = sum(int(counts.get(k) or 0) for k in RATING_KEYS.values())
+    if not rated:
+        return None
+    return round(sum(int(counts.get(key) or 0) * RATING_POINTS[r] for r, key in RATING_KEYS.items()) / rated, 1)
+
 
 # The mail address of some team members carries a routing prefix ("flexcube.jane@..."); the same person often replies
 # from the plain address, so the prefix-less form is mapped to the team too.
@@ -912,22 +922,21 @@ def _points(rating):
 
 
 def build_quality_scorecard(rows, directory):
-    """Per-person reviewed counts and score (Excellent 100, Good 75, Needs Improvement 25), worst first."""
+    """Per-person reviewed counts and score (Excellent 100, Very Good 90, Good 75, Needs Improvement 25), worst
+    first."""
     people = {}
     for row in rows:
         if not _reviewed(row):
             continue
         person = row.get("first_reply_by", "") or "Unknown"
-        entry = people.setdefault(person, {"name": person, "team": "", "reviewed": 0, "excellent": 0, "good": 0,
-                                           "needs": 0})
+        entry = people.setdefault(person, {"name": person, "team": "", "reviewed": 0, "excellent": 0, "very_good": 0,
+                                           "good": 0, "needs": 0})
         entry["team"] = _person_team(row, directory)
         entry["reviewed"] += 1
-        rating = row["quality_rating"]
-        entry["excellent" if rating == "Excellent" else "good" if rating == "Good" else "needs"] += 1
+        entry[RATING_KEYS.get(row["quality_rating"], "needs")] += 1
     scorecard = []
     for entry in people.values():
-        total = entry["excellent"] * 100 + entry["good"] * 75 + entry["needs"] * 25
-        entry["score"] = round(total / (entry["reviewed"] or 1), 1)
+        entry["score"] = score_of(entry) or 0.0
         scorecard.append(entry)
     scorecard.sort(key=lambda e: (e["score"], -e["reviewed"], e["name"]))
     return scorecard
@@ -937,12 +946,13 @@ def build_team_quality_index(scorecard):
     """0-100 quality index per team, weighted by review count, best team first."""
     teams = {}
     for e in scorecard:
-        t = teams.setdefault(e["team"], {"weighted": 0.0, "reviewed": 0, "excellent": 0, "good": 0, "needs": 0})
+        t = teams.setdefault(e["team"], {"weighted": 0.0, "reviewed": 0, "excellent": 0, "very_good": 0, "good": 0,
+                                         "needs": 0})
         t["weighted"] += e["score"] * e["reviewed"]
-        for k in ("reviewed", "excellent", "good", "needs"):
-            t[k] += e[k]
+        for k in ("reviewed", "excellent", "very_good", "good", "needs"):
+            t[k] += e.get(k, 0)
     index = [{"team": team, "index": round(d["weighted"] / d["reviewed"], 1), "reviewed": d["reviewed"],
-              "excellent": d["excellent"], "good": d["good"], "needs": d["needs"]}
+              "excellent": d["excellent"], "very_good": d["very_good"], "good": d["good"], "needs": d["needs"]}
              for team, d in teams.items() if d["reviewed"]]
     index.sort(key=lambda x: (-x["index"], x["team"]))
     return index

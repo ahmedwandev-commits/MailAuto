@@ -16,6 +16,8 @@ history and change requests from the ITSM recording. Pure functions over plain d
 import hashlib
 from datetime import date, datetime, timedelta
 
+from .engines.email_rules import RATING_KEYS, score_of as _score     # Excellent / Very Good / Good / Needs Improvement
+
 KEEP_DAYS = 730                 # two years of e-mail intake
 SEEN_DAYS = 35                  # ids of counted mails are remembered this long (a carried-over mail is seen again)
 MAX_RANGE_DAYS = 731
@@ -319,12 +321,7 @@ def change(current, previous):
 
 
 # ------------------------------------------------------------------------------------------- quality reviews
-RATING_KEYS = {"Excellent": "excellent", "Good": "good", "Needs Improvement": "needs"}
-
-
-def _score(c):
-    rated = c["excellent"] + c["good"] + c["needs"]
-    return round((c["excellent"] * 100 + c["good"] * 75 + c["needs"] * 25) / rated, 1) if rated else None
+COUNT_KEYS = tuple(RATING_KEYS.values())             # excellent, very_good, good, needs (Needs Improvement)
 
 
 def quality_stats(entries, d_from, d_to, keep=None, received_by_team=None, roles=None, received_total=None):
@@ -336,7 +333,7 @@ def quality_stats(entries, d_from, d_to, keep=None, received_by_team=None, roles
     ``received_total`` the mails of all those teams counted once (a mail to two teams is one mail). ``roles`` =
     {reviewer user id: role}. A rating withdrawn after an appeal counts for the reviewer's activity but not as a rated
     mail."""
-    blank = lambda: {"excellent": 0, "good": 0, "needs": 0}          # noqa: E731
+    blank = lambda: dict.fromkeys(COUNT_KEYS, 0)                     # noqa: E731
     reviewers, by_team, people = {}, {}, {}
     daily = {d: 0 for d in date_range(d_from, d_to)}
     total = withdrawn = appeals = waiting = 0
@@ -385,13 +382,13 @@ def quality_stats(entries, d_from, d_to, keep=None, received_by_team=None, roles
         team_rows.append({"team": name, "received": received, "rated": t["rated"],
                           "coverage_pct": round(100.0 * t["rated"] / received, 1) if received else None,
                           "reviewers": len(t["reviewers"]), "score": _score(t),
-                          **{k: t[k] for k in ("excellent", "good", "needs")}})
+                          **{k: t[k] for k in COUNT_KEYS}})
     team_rows.sort(key=lambda x: (-x["rated"], -x["received"], x["team"]))
     reviewer_rows = sorted(({**r, "teams": sorted(r["teams"])} for r in reviewers.values()),
                            key=lambda x: (-x["ratings"], x["name"].casefold()))
     people_rows = sorted(({**p, "score": _score(p)} for p in people.values()),
                          key=lambda x: (-x["rated"], x["name"].casefold()))
-    counts = {k: sum(t[k] for t in team_rows) for k in ("excellent", "good", "needs")}
+    counts = {k: sum(t[k] for t in team_rows) for k in COUNT_KEYS}
     if received_total is None:
         received_total = sum(t["received"] for t in team_rows)
     return {"rated": total, **counts, "score": _score(counts), "withdrawn": withdrawn, "appeals": appeals,

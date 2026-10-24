@@ -752,7 +752,7 @@
       const q = m.quality;
       const qualityBlock = q && q.rating ? h("div", { class: "op-mv-quality" },
         h("div", { class: "op-mv-reply-h" }, icon("check"), h("span", {}, "Quality review"),
-          chip(q.rating, q.rating === "Needs Improvement" ? "warn" : q.rating === "Excellent" ? "ok" : "info"),
+          chip(q.rating, q.rating === "Needs Improvement" ? "warn" : q.rating === "Excellent" || q.rating === "Very Good" ? "ok" : "info"),
           q.withdrawn ? chip("Withdrawn", "na") : null),
         h("div", { class: "op-mv-reply-sub", dir: "auto" },
           CL.bidi(["Rated by " + (q.reviewed_by || "a manager"), q.reviewed_at ? fmtWhen(q.reviewed_at, null) : ""].filter(Boolean).join(" · "))),

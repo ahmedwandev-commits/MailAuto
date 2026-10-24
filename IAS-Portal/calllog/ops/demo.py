@@ -22,6 +22,7 @@ from .. import security
 from ..storage import StorageError, iso_now
 from . import mailbox, notifications, overlay, schemas
 from . import settings as hub_settings
+from .engines.email_rules import RATING_KEYS, score_of
 
 DEMO_PASSWORD = "demo-pass-2026"
 DOMAIN = "demo.example"
@@ -86,8 +87,8 @@ SPLIT_MAILS = [   # one mail whose text names systems of two teams - split into 
     ("MFA Team", "Open System", "New joiners need tokens and CRM access", "Veridium (MFA); CRM"),
 ]
 CYCLE = ["fast", "fast", "pending", "slow", "fast", "no_action", "late", "fast", "pending", "fast"]
-QUALITY_NOTES = {"Excellent": "Clear answer with the exact steps.", "Good": "Correct, could be shorter.",
-                 "Needs Improvement": "The customer had to ask twice."}
+QUALITY_NOTES = {"Excellent": "Clear answer with the exact steps.", "Very Good": "Right and complete, one step unclear.",
+                 "Good": "Correct, could be shorter.", "Needs Improvement": "The customer had to ask twice."}
 REPLY_TEXT = "Dear colleague, the request is done on our side. Please check and tell us if anything is missing."
 
 JOB_ERRORS = {"email": "Cannot connect to Outlook after 5 tries", "email_report": "Could not save the Excel file",
@@ -361,8 +362,8 @@ def _rate(rows, overrides, now):
     for r in replied:
         by_team.setdefault(r["team"], []).append(r)
     replied = [r for group in zip_longest(*by_team.values()) for r in group if r]       # round robin: every team gets ratings
-    ratings = ["Excellent", "Good", "Needs Improvement", "Excellent", "Good", "Needs Improvement", "Good", "Excellent",
-               "Needs Improvement", "Excellent", "Good", "Good", "Needs Improvement", "Excellent"]
+    ratings = ["Excellent", "Good", "Needs Improvement", "Very Good", "Good", "Needs Improvement", "Very Good", "Excellent",
+               "Needs Improvement", "Excellent", "Good", "Very Good", "Needs Improvement", "Excellent"]
     for i, (row, rating) in enumerate(zip(replied, ratings)):
         entry = {"rating": rating, "note": QUALITY_NOTES[rating], "reasons": "Incomplete answer" if rating == "Needs Improvement" else "",
                  "replied_by": row["first_reply_by"], "replied_by_email": row["first_reply_email"], "reviewed_by": MANAGER[1],
@@ -387,13 +388,13 @@ def _quality_block(rows):
     for r in rows:
         if r["quality_rating"] and not r["rating_withdrawn"] and not r["reply_by_manager"]:
             p = people.setdefault(r["first_reply_by"], {"name": r["first_reply_by"], "team": r["team"], "reviewed": 0,
-                                                        "excellent": 0, "good": 0, "needs": 0, "minutes": []})
+                                                        "excellent": 0, "very_good": 0, "good": 0, "needs": 0, "minutes": []})
             p["reviewed"] += 1
-            p["excellent" if r["quality_rating"] == "Excellent" else "good" if r["quality_rating"] == "Good" else "needs"] += 1
+            p[RATING_KEYS.get(r["quality_rating"], "needs")] += 1
             p["minutes"].append(r["response_minutes"] or 0)
     scorecard = []
     for p in people.values():
-        score = round((p["excellent"] * 100 + p["good"] * 75 + p["needs"] * 25) / p["reviewed"], 1)
+        score = score_of(p)
         scorecard.append({k: v for k, v in p.items() if k != "minutes"} | {"score": score, "_minutes": p["minutes"]})
     scorecard.sort(key=lambda e: (e["score"], -e["reviewed"], e["name"]))
     matrix = []

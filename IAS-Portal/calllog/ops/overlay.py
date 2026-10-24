@@ -515,6 +515,7 @@ def _quality_block(rows, old):
     return {**(old or {}),
             "reviewed": len(counted),
             "excellent": sum(1 for r in counted if r["quality_rating"] == "Excellent"),
+            "very_good": sum(1 for r in counted if r["quality_rating"] == "Very Good"),
             "good": sum(1 for r in counted if r["quality_rating"] == "Good"),
             "needs_improvement": sum(1 for r in counted if r["quality_rating"] == "Needs Improvement"),
             "appeals": sum(1 for r in rows if r.get("quality_appeal")),

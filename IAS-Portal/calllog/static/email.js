@@ -141,7 +141,7 @@
   }
 
   async function reviewDialog(row) {
-    const ratings = (state.options && state.options.ratings) || ["Excellent", "Good", "Needs Improvement"];
+    const ratings = (state.options && state.options.ratings) || ["Excellent", "Very Good", "Good", "Needs Improvement"];
     const reasons = (state.options && state.options.quality_reasons) || [];
     const ratingSel = h("select", { "aria-label": "Rating", required: true },
       h("option", { value: "" }, "Choose a rating…"), ratings.map((r) => h("option", { value: r, selected: r === row.quality_rating }, r)));
@@ -513,7 +513,7 @@
   }
 
   // ------------------------------------------------------------------ Quality tab
-  function ratingTone(rt) { return rt === "Needs Improvement" ? "warn" : rt === "Excellent" ? "ok" : "info"; }
+  function ratingTone(rt) { return rt === "Needs Improvement" ? "warn" : rt === "Excellent" || rt === "Very Good" ? "ok" : "info"; }
 
   async function decideAppeal(row, decision) {
     const accept = decision === "Accepted";
@@ -632,6 +632,7 @@
       const base = replied.filter((r) => !qf.person || personKey(r) === qf.person).length;
       sq = { reviewed: counted.length, coverage_rate: base ? (100 * counted.length) / base : 0,
         excellent: counted.filter((r) => r.quality_rating === "Excellent").length,
+        very_good: counted.filter((r) => r.quality_rating === "Very Good").length,
         good: counted.filter((r) => r.quality_rating === "Good").length,
         needs_improvement: counted.filter((r) => r.quality_rating === "Needs Improvement").length,
         appeals: rated.filter((r) => r.quality_appeal).length };
@@ -639,6 +640,7 @@
     const kpis = h("div", { class: "em-kpis" },
       OPS.kpi({ label: "Reviewed", value: fmtNum(sq.reviewed || 0), sub: OPS.fmtPct(sq.coverage_rate) + " coverage", icon: "check" }),
       OPS.kpi({ label: "Excellent", value: fmtNum(sq.excellent || 0), tone: "ok", icon: "check" }),
+      OPS.kpi({ label: "Very good", value: fmtNum(sq.very_good || 0), tone: "ok", icon: "check" }),
       OPS.kpi({ label: "Good", value: fmtNum(sq.good || 0), icon: "check" }),
       OPS.kpi({ label: "Needs improvement", value: fmtNum(sq.needs_improvement || 0), tone: sq.needs_improvement ? "warn" : null, icon: "alert" }),
       OPS.kpi({ label: "Appeals waiting", value: fmtNum(rows().filter((r) => r.quality_appeal && !r.appeal_decision && keep(r)).length),
@@ -658,6 +660,7 @@
           { key: "team", label: "Team", render: (r) => bidi(r.team || "—"), text: (r) => r.team },
           { key: "reviewed", label: "Reviewed", num: true, sort: true },
           { key: "excellent", label: "Excellent", num: true, sort: true },
+          { key: "very_good", label: "Very good", num: true, sort: true, render: (r) => fmtNum(r.very_good || 0) },
           { key: "good", label: "Good", num: true, sort: true },
           { key: "needs", label: "Needs improvement", num: true, sort: true },     // the scorecard's own field name
         ],

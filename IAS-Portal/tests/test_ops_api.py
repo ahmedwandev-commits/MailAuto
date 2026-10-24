@@ -232,7 +232,7 @@ def test_absent_snapshot_is_200_with_meta(admin):
     body = r.get_json()
     assert body["snapshot"] is None and body["meta"]["online"] is False and body["meta"]["generated_at"] is None
     email = admin.get("/api/ops/email").get_json()
-    assert email["snapshot"] is None and email["options"]["ratings"] == ["Excellent", "Good", "Needs Improvement"]
+    assert email["snapshot"] is None and email["options"]["ratings"] == ["Excellent", "Very Good", "Good", "Needs Improvement"]
 
 
 def test_module_answer_carries_envelope_meta_and_options(admin, hub):
@@ -599,6 +599,20 @@ def test_quality_review_validation_and_storage(app, admin, mgr, hub, ops, clock)
     assert admin.post("/api/ops/email/quality", {"message_id": "<p1@x>", "rating": "Good"}).status_code == 409     # no reply
     assert admin.post("/api/ops/email/quality", {"message_id": "<nope>", "rating": "Good"}).status_code == 404
     assert ("ops_quality", "<r2@x>", "mona") in audit_actions(app, clock)
+
+
+def test_a_manager_can_rate_a_reply_very_good(admin, mgr, hub, ops):
+    """Excellent, Very Good, Good, Needs Improvement: the page offers the four, the API takes "Very Good", the counts
+    and the quality statistics carry it on its own."""
+    options = admin.get("/api/ops/email").get_json()["options"]
+    assert options["ratings"] == ["Excellent", "Very Good", "Good", "Needs Improvement"]
+    assert mgr.post("/api/ops/email/quality", {"message_id": "<r2@x>", "rating": "Very Good"}).status_code == 200
+    assert ops.overrides("quality")["<r2@x>"]["rating"] == "Very Good"
+    quality = admin.get("/api/ops/email").get_json()["data"]["stats"]["quality"]
+    assert quality["very_good"] == 1 and quality["reviewed"] == 1
+    stats = admin.get("/api/ops/analytics?from=2026-10-01&to=2026-10-11").get_json()["quality"]
+    assert stats["very_good"] == 1 and stats["score"] == 90.0
+    assert admin.post("/api/ops/email/quality", {"message_id": "<r2@x>", "rating": "Very good!"}).status_code == 400
 
 
 def test_quality_rules_manager_replies_and_own_reply(admin, mgr, hub, ops):

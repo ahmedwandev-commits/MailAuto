@@ -148,6 +148,13 @@ HOW TO UPDATE (your data is kept)
    - NEW PLACE: the whole SLA Analysis is now Insights > Analysis > "SLA". Ticketing keeps the live tickets,
      with an "SLA Analysis" button. Old links (/sla#analysis, /sla?tab=analysis) open the new place.
 
+15. E-MAIL QUALITY: NEW RATING "VERY GOOD"
+   - A manager now rates a reply Excellent, Very Good, Good or Needs Improvement (E-mail > Replied >
+     Review). Points: Excellent 100, Very Good 90, Good 75, Needs Improvement 25.
+   - "Very good" is counted on its own everywhere: E-mail > Quality (tile, scorecard), Insights > Analysis >
+     E-mail quality (tile, who rated, by employee), My quality reviews, and the end-of-day e-mail (scorecard,
+     team index). Earlier ratings stay as they were.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -247,3 +254,10 @@ IAS PORTAL - الجديد في هذا التحديث
      عدد النتايج لازم يساوي «Inquiry rows». الـ Third Party مستبعد زي كل حتة في الـ SLA، والمدير بيشوف فريقه بس.
    - مكان جديد: تحليل الـ SLA كله بقى في Insights > Analysis > "SLA". صفحة Ticketing فيها التيكتس اللايف
      وزرار "SLA Analysis". اللينكات القديمة (/sla#analysis و /sla?tab=analysis) بتفتح المكان الجديد.
+
+15. جودة الإيميلات: تقييم جديد "Very Good"
+   - المدير بقى يقيّم الرد Excellent أو Very Good أو Good أو Needs Improvement (E-mail > Replied > Review).
+     النقاط: Excellent 100 و Very Good 90 و Good 75 و Needs Improvement 25.
+   - "Very good" بيتحسب لوحده في كل حتة: E-mail > Quality (الكارت والـ scorecard)، و Analysis > E-mail quality
+     (الكارت ومين قيّم وكل موظف)، و My quality reviews، وإيميل آخر اليوم (الـ scorecard ومؤشر الفريق).
+     التقييمات القديمة زي ما هي.

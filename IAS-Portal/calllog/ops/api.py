@@ -31,13 +31,13 @@ from . import analytics, auto_assign, health, itsm_records, mailbox, notificatio
 from . import settings as hub_settings
 from .engines import common
 from .engines.common import norm_arabic
+from .engines.email_rules import RATINGS
 from .store import now_iso
 
 _TICKETING_LOCK = threading.Lock()                 # one browser-driven ticketing auto-assign run at a time per process
 
 bp = Blueprint("ops_api", __name__)
 
-RATINGS = ("Excellent", "Good", "Needs Improvement")
 DECISIONS = ("Accepted", "Rejected")
 # Pre-set reasons offered when rating a reply (from the old e-mail dashboard) so ratings stay analysable.
 QUALITY_REASONS = ["Incomplete answer", "Wrong information", "Tone / wording", "Too slow", "Missing follow-up",
@@ -640,6 +640,7 @@ def my_quality(user, viewer=None):
     return {"configured": True,
             "counts": {"reviewed": len(counted),
                        "excellent": sum(1 for e in counted if e.get("rating") == "Excellent"),
+                       "very_good": sum(1 for e in counted if e.get("rating") == "Very Good"),
                        "good": sum(1 for e in counted if e.get("rating") == "Good"),
                        "needs_improvement": sum(1 for e in counted if e.get("rating") == "Needs Improvement"),
                        "appeals": sum(1 for _, e in mine if e.get("appeal")),
@@ -1780,7 +1781,7 @@ def email_quality():
     message_id = clean_message_id(body.get("message_id"))
     rating = str(body.get("rating") or "").strip()
     if rating not in RATINGS:
-        raise ApiError("Rating must be Excellent, Good or Needs Improvement.")
+        raise ApiError("Rating must be Excellent, Very Good, Good or Needs Improvement.")
     note = clean_text(body.get("note"), "Note", 500, multiline=True)
     reasons = _clean_reasons(body.get("reasons"))
     rows = current_rows(message_id)

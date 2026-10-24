@@ -212,6 +212,7 @@
       OPS.kpi({ label: "Replies rated", value: fmtNum(q.rated), sub: q.withdrawn ? `${fmtNum(q.withdrawn)} withdrawn after an appeal` : "e-mail replies only", hero: true, icon: "check" }),
       OPS.kpi({ label: "Rated of the e-mails received", value: pct(q.coverage_pct), sub: `${fmtNum(q.received)} received`, icon: "mail" }),
       OPS.kpi({ label: "Excellent", value: fmtNum(q.excellent), tone: "ok", icon: "check" }),
+      OPS.kpi({ label: "Very good", value: fmtNum(q.very_good || 0), tone: "ok", icon: "check" }),
       OPS.kpi({ label: "Good", value: fmtNum(q.good), icon: "check" }),
       OPS.kpi({ label: "Needs improvement", value: fmtNum(q.needs), tone: q.needs ? "warn" : null, icon: "alert" }),
       OPS.kpi({ label: "Average score", value: q.score == null ? "—" : fmtNum(q.score), sub: `${fmtNum(q.appeals_waiting)} appeal(s) waiting of ${fmtNum(q.appeals)}`, icon: "activity" }));
@@ -223,6 +224,7 @@
         { key: "role", label: "Role", render: (r) => roleText(r.role), text: (r) => roleText(r.role) },
         { key: "ratings", label: "Ratings", num: true, sort: true, render: (r) => fmtNum(r.ratings) },
         { key: "excellent", label: "Excellent", num: true, sort: true, render: (r) => fmtNum(r.excellent) },
+        { key: "very_good", label: "Very good", num: true, sort: true, render: (r) => fmtNum(r.very_good || 0) },
         { key: "good", label: "Good", num: true, sort: true, render: (r) => fmtNum(r.good) },
         { key: "needs", label: "Needs impr.", num: true, sort: true, render: (r) => fmtNum(r.needs) },
         { key: "withdrawn", label: "Withdrawn", num: true, sort: true, render: (r) => fmtNum(r.withdrawn) },
@@ -256,6 +258,7 @@
           { key: "team", label: "Team", render: (r) => h("span", { dir: "auto" }, r.team), text: (r) => r.team },
           { key: "rated", label: "Rated", num: true, sort: true, render: (r) => fmtNum(r.rated) },
           { key: "excellent", label: "Excellent", num: true, sort: true, render: (r) => fmtNum(r.excellent) },
+          { key: "very_good", label: "Very good", num: true, sort: true, render: (r) => fmtNum(r.very_good || 0) },
           { key: "good", label: "Good", num: true, sort: true, render: (r) => fmtNum(r.good) },
           { key: "needs", label: "Needs impr.", num: true, sort: true, render: (r) => fmtNum(r.needs) },
           { key: "score", label: "Score", num: true, sort: (r) => r.score || 0, render: (r) => (r.score == null ? "—" : fmtNum(r.score)) },
