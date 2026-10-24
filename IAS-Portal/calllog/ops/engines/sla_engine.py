@@ -736,6 +736,64 @@ def js_detail_snapshot(tokens=()):
 })()""")
 
 
+# The inquiry results grid (its headers) and its DataTables wrapper: what the grid helpers below act on - never the
+# status-history table of an open «تفاصيل الطلب»
+JS_FIND_GRID = r"""
+  const gwant = ['تاريخ الطلب', 'مستخدم السرية', 'الحالة'].map(norm);
+  const ghead = t => t.tHead ? t.tHead.rows[t.tHead.rows.length - 1] : t.rows[0];
+  const grid = [...document.querySelectorAll('table')].find(t => { const hr = ghead(t); if (!hr) return false;
+    const nh = [...hr.cells].map(c => norm(c.textContent)); return gwant.every(w => nh.some(h => h === w || h.includes(w))); });
+  const gwrap = grid ? (grid.closest('.dataTables_wrapper') || grid.parentElement) : null;
+"""
+
+# The grid's own «Showing 1 to 20 of N records» and «no data» line
+JS_INQUIRY_STATE = ("(() => {" + JS_NORM + JS_FIND_GRID
+                    + "const i = gwrap && gwrap.querySelector('.dataTables_info, [id$=\"_info\"]');"
+                    + "return {found: !!grid, empty: !!(gwrap && gwrap.querySelector('td.dataTables_empty')),"
+                    + " info: i ? (i.textContent || '').trim() : ''}; })()")
+
+# «Show» of the grid set to its largest choice («All»): what the user picks when the grid holds more than one page
+JS_GRID_EXPAND = ("(() => {" + JS_NORM + JS_FIND_GRID + r"""
+  const sel = gwrap && gwrap.querySelector('.dataTables_length select, select[name$="_length"]');
+  if (!sel || !sel.options.length) return false;
+  const opts = [...sel.options];
+  const best = opts.find(o => o.value === '-1') || opts.reduce((a, b) => ((+b.value || 0) > (+a.value || 0) ? b : a), opts[0]);
+  if (!best || sel.value === best.value) return false;
+  sel.value = best.value; sel.dispatchEvent(new Event('change', {bubbles: true}));
+  return true; })()""")
+
+# The grid's DataTables "next" button (its own pager, never the status history's), when enabled: its centre or null
+JS_GRID_NEXT = ("(() => {" + JS_NORM + JS_FIND_GRID + r"""
+  const n = gwrap && gwrap.querySelector('.dataTables_paginate .next:not(.disabled), .paginate_button.next:not(.disabled)');
+  if (!n || n.closest('.disabled')) return null;
+  try { n.scrollIntoView({block: 'center'}); } catch (e) {}
+  const r = n.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; })()""")
+
+# The portal's OWN next page of results («التالي» under the grid: the server sends at most a page of rows, «All» = 1000
+# on the bank's portal): an ASP.NET pager post-back {t, a}, else the control's centre {x, y}; null on the last page.
+# The DataTables pager and anything in a details box are not it.
+JS_SERVER_NEXT = ("(() => {" + JS_NORM + JS_FIND_GRID + r"""
+  if (!grid) return null;
+  const PB = /__doPostBack\(\s*['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]\s*\)/;
+  const src = el => (el.getAttribute('href') || '') + ' ' + (el.getAttribute('onclick') || '');
+  const after = el => !!(grid.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const ctls = [...document.querySelectorAll('a, input[type=submit], input[type=button], button')]
+    .filter(visible).filter(after)
+    .filter(el => !el.closest('.dataTables_paginate, .dataTables_length, .modal, [role=dialog], .ui-dialog'));
+  const n = ctls.find(el => /Page\$Next/i.test(src(el))) || ctls.find(el => textOf(el) === norm('التالي'));
+  if (!n || n.disabled || n.hasAttribute('disabled') || /aspNetDisabled|disabled/.test(n.className || '')) return null;
+  const m = PB.exec(src(n));
+  if (m) return {t: m[1], a: m[2]};
+  try { n.scrollIntoView({block: 'center'}); } catch (e) {}
+  const r = n.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; })()""")
+
+MAX_SERVER_PAGES = 50                      # the portal's own result pages walked per search (1000 rows each)
+
+
+def _rows_sig(rows):
+    return "\x1f".join("\x1e".join(map(str, r)) for r in rows or [])
+
+
 JS_GRID_PRESENT = ("(() => {" + JS_NORM
                    + "const want = [norm('تاريخ الطلب'), norm('مستخدم السرية'), norm('الحالة')];"
                    + "return [...document.querySelectorAll('table')].some(t => { const hr = t.tHead ? t.tHead.rows[t.tHead.rows.length - 1] : t.rows[0];"
@@ -783,6 +841,12 @@ def _close_details(browser):
 
 def _signature(snap):
     return "\x1f".join("\x1e".join(map(str, r)) for r in (snap or {}).get("rows") or [])
+
+
+def _detail_sig(snap):
+    """What tells one open «تفاصيل الطلب» from the previous one: its request number with its history lines - the rows
+    of one form (one per application, each its own number) can have the very same history lines."""
+    return str((snap or {}).get("number") or "") + "\x1d" + _signature(snap)
 
 
 def _complete_history(browser, snap, tokens=()):
@@ -864,35 +928,108 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
                      lambda t: t is not None and (t["rows"] or (browser.eval(JS_GRID_STATE) or {}).get("empty")),
                      timeout_s)
 
+    read_table = lambda: pick_inquiry_table(browser.eval(READ_TABLES))        # noqa: E731
+
+    def grid_total_now():
+        with suppress(Exception):
+            return info_total((browser.eval(JS_INQUIRY_STATE) or {}).get("info"))
+        return None
+
+    def whole_page(table):
+        """Every row of the result page shown now, with the page's own «of N records» (None when it shows none): the
+        DataTables rows, else - when the grid holds only the rows of its current page - «Show» set to its largest
+        choice and then its own pages one by one. Identical rows are kept (two requests can look the same)."""
+        rows, pbs = list(table["rows"]), list(table.get("pbs") or [None] * len(table["rows"]))
+        shown = table["rows"]                             # the rows the grid shows right now
+        total = grid_total_now()
+        if total is not None and len(rows) < total and browser.eval(JS_GRID_EXPAND):
+            t = _poll(read_table, lambda t: t is not None and len(t["rows"]) >= total, 3)
+            if t is not None and len(t["rows"]) > len(rows):
+                rows, pbs = list(t["rows"]), list(t.get("pbs") or [None] * len(t["rows"]))
+                shown = t["rows"]
+        if table["source"] == "dom" or (total is not None and len(rows) < total):
+            sig = _rows_sig(shown)
+            for _ in range(MAX_PAGES):
+                if total is not None and len(rows) >= total:
+                    break
+                if not _click(browser, JS_GRID_NEXT):
+                    break
+                t = _poll(read_table, lambda t: t is not None and t["rows"] and _rows_sig(t["rows"]) != sig, 3)
+                if t is None or not t["rows"] or _rows_sig(t["rows"]) == sig:
+                    break
+                sig = _rows_sig(t["rows"])
+                rows.extend(t["rows"])
+                pbs.extend(t.get("pbs") or [None] * len(t["rows"]))
+        return rows, pbs, total
+
+    def server_next(sig):
+        """Go to the portal's next result page; the new page's table, or None (last page / it did not change)."""
+        nxt = browser.eval(JS_SERVER_NEXT)
+        if not nxt:
+            return None
+        mark_page(browser)
+        if "t" in nxt:
+            if not browser.eval(js_postback(nxt["t"], nxt["a"])):
+                return None
+        else:
+            browser.click_at(nxt["x"], nxt["y"])
+        wait_postback(browser, timeout_s)
+        t = _poll(read_table, lambda t: t is not None and t["rows"] and _rows_sig(t["rows"]) != sig, timeout_s)
+        return t if t is not None and t["rows"] and _rows_sig(t["rows"]) != sig else None
+
     t0 = time.monotonic()
     table = search()
     searches, search_s = 1, time.monotonic() - t0
-    grid_total = None
-    with suppress(Exception):                             # the grid's own «of N records» (for the log / the check)
-        grid_total = info_total((browser.eval(JS_GRID_STATE) or {}).get("info"))
     debug.snap(browser, "inquiry")
     if table is None:
         raise PortalError("The inquiry results table did not appear after the search.")
-    rows, pbs = list(table["rows"]), list(table.get("pbs") or [None] * len(table["rows"]))
-    if table["source"] == "dom":                         # plain paging: walk the pages
-        for _ in range(MAX_PAGES):
-            if not _click(browser, js_next_page()):
-                break
-            t = _poll(lambda: pick_inquiry_table(browser.eval(READ_TABLES)),
-                      lambda t: t is not None and any(r not in rows for r in t["rows"]), 3)
-            new = [(r, p) for r, p in zip(t["rows"] if t else [], (t.get("pbs") if t else None) or []) if r not in rows]
-            if not new:
-                break
-            rows.extend(r for r, _ in new)
-            pbs.extend(p for _, p in new)
-    grid = sla_history.grid_rows(table["headers"], rows)
-    # the postback of each grid row, by its key (grid_rows drops footer lines: map them through the row cells)
-    pb_of = {}
-    for r, p in zip(rows, pbs):
-        if p:
-            keyed = sla_history.grid_rows(table["headers"], [r])
-            if keyed:
-                pb_of[keyed[0]["key"]] = p
+    headers = table["headers"]
+    # the portal's result pages: {sig (its rows as first shown: to know it again), rows, pbs, total}
+    pages = []
+    while True:
+        rows, pbs, total = whole_page(table)
+        pages.append({"sig": _rows_sig(table["rows"]), "rows": rows, "pbs": pbs, "total": total})
+        if len(pages) >= MAX_SERVER_PAGES:
+            break
+        table = server_next(_rows_sig(table["rows"]))
+        if table is None:
+            break
+    current_page = len(pages) - 1
+    rows = [r for p in pages for r in p["rows"]]
+    page_of_row = [n for n, p in enumerate(pages) for _ in p["rows"]]
+    pb_rows = [b for p in pages for b in p["pbs"]]
+    indexed = sla_history.grid_rows_indexed(headers, rows)
+    grid = [it for _, it in indexed]
+    page_of = {it["key"]: page_of_row[n] for n, it in indexed}
+    pb_of = {it["key"]: pb_rows[n] for n, it in indexed if pb_rows[n]}     # each row's own «التفاصيل» post-back
+    totals = [p["total"] for p in pages]
+    grid_total = sum(totals) if totals and all(t is not None for t in totals) else None
+    short = [(n + 1, len(p["rows"]), p["total"]) for n, p in enumerate(pages)
+             if p["total"] is not None and len(p["rows"]) < p["total"]]
+    log(f"SLA history: inquiry grid {len(rows)} row(s)" + (f" over {len(pages)} result pages" if len(pages) > 1 else "")
+        + (f", the portal lists {grid_total}" if grid_total is not None else "")
+        + ("".join(f"; page {n}: only {got} of its {want} rows could be read" for n, got, want in short)))
+
+    def goto(page):
+        """Show result page ``page``: forward with «التالي», back by a new search (it starts on the first page). True
+        when the page shown is the one read before (same rows)."""
+        nonlocal current_page, searches
+        if page == current_page:
+            return True
+        if current_page < 0 or page < current_page:
+            t = search()
+            searches += 1
+            current_page = 0
+            if t is None or _rows_sig(t["rows"]) != pages[0]["sig"]:
+                current_page = -1
+                return False
+        while current_page < page:
+            t = server_next(pages[current_page]["sig"])
+            if t is None or _rows_sig(t["rows"]) != pages[current_page + 1]["sig"]:
+                current_page = -1                         # not known: the next page wanted starts with a new search
+                return False
+            current_page += 1
+        return True
     index = plan.get("index") or {}
     budget = int(cfg.get("history_max_details") or DEFAULTS["sla"]["history_max_details"])
     # a request still with the branch (registered / confirmed by its supervisor) has no SLA step yet: opened once it moves
@@ -903,8 +1040,11 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
             and not excluded(it["system"])}
     # when a scan cannot read them all, the requests still with a security user first (their live clock starts at the
     # assignment line), then the ones awaiting the reviewer, then the closed ones; the oldest request first within each
-    ordered = sorted(grid, key=lambda it: (it["key"] not in todo, sla_history.detail_priority(it["status"], plan["cfg"]) or 0,
+    # the result page shown now first (a row's post-back opens it on ITS page only), then the others in order
+    ordered = sorted(grid, key=lambda it: (page_of[it["key"]] != current_page, page_of[it["key"]],
+                                           it["key"] not in todo, sla_history.detail_priority(it["status"], plan["cfg"]) or 0,
                                            (sla_history.parse_time(it["date"]) or datetime.max)))
+    lost_pages = set()
     items, opened, failed, streak, unverified, partial = [], 0, 0, 0, 0, 0
     read_numbers = {}                                     # request number -> grid key, this scan
     prev_sig = ""
@@ -920,10 +1060,17 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
                            else "detail budget")
             items.append({"grid": it, "id": "", "history": None})
             continue
+        if page_of[it["key"]] in lost_pages or not goto(page_of[it["key"]]):
+            if page_of[it["key"]] not in lost_pages:
+                lost_pages.add(page_of[it["key"]])
+                log(f"SLA history: result page {page_of[it['key']] + 1} could not be shown again; its rows are read "
+                    "next scan")
+            items.append({"grid": it, "id": "", "history": None})
+            continue
         t1 = time.monotonic()
         tokens = [it.get("employee_no"), it.get("user_no")]
         fresh = lambda s: bool(s.get("open") and s.get("number") and s.get("ready") == "complete"   # noqa: E731
-                               and not s.get("busy") and not s.get("leaving") and _signature(s) != prev_sig
+                               and not s.get("busy") and not s.get("leaving") and _detail_sig(s) != prev_sig
                                and read_numbers.get(s["number"], it["key"]) == it["key"])
         got, snap, in_page = None, None, False
         try:
@@ -944,7 +1091,7 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
                     in_page = bool((snap or {}).get("in_page"))
             if snap and fresh(snap):
                 number = str(snap["number"]).strip()
-                prev_sig = _signature(snap)
+                prev_sig = _detail_sig(snap)
                 whole = _complete_history(browser, snap, tokens)
                 if whole is None:
                     partial += 1
@@ -976,6 +1123,7 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
                     continue
                 table = search()
                 searches += 1
+                current_page = 0                          # a new search shows the first result page
                 if table is None:
                     stopped = "the inquiry grid did not come back"
         except Exception as exc:                          # keep what was read: the rest waits for the next scan
@@ -985,7 +1133,8 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     timing = {"seconds": round(total_s, 1), "search_seconds": round(search_s, 1), "searches": searches,
               "drills": len(drill_s), "drill_avg_seconds": round(sum(drill_s) / len(drill_s), 2) if drill_s else None,
               "drill_max_seconds": round(max(drill_s), 2) if drill_s else None, "postback_rows": len(pb_of),
-              "stopped": stopped, "partial": partial, "grid_total": grid_total}
+              "stopped": stopped, "partial": partial, "grid_total": grid_total, "grid_pages": len(pages),
+              "grid_short": bool(short)}
     log(f"SLA history: {len(grid)} request(s) on the inquiry page, {opened} status histor(ies) read"
         + (f", {failed} could not be read" if failed else "") + (f", {left} left for the next scan" if left else "")
         + f" - {timing['seconds']} s (search {timing['search_seconds']} s"

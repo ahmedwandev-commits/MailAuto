@@ -1085,6 +1085,10 @@ def sla_analysis_get():
         return ((not person or sla_history._norm(g.get("holder")) == person)
                 and all(sla_history._norm(g.get(k)) == v for k, v in grid_text.items()))
     period.update(sla_history.right_now(view["grid"], view["open"], view["index"], cfg, now, keep))
+    # the portal's own «الاستفسار عن الطلبات» rows of the period's request dates, next to what the history holds
+    period["portal"] = {**sla_history.portal_comparison(view["grid"], view["index"], filt["date_from"], filt["date_to"],
+                                                        cfg),
+                        "last_read": view["recorder"]["last_read"]}
     answer = dict(available=True, server_time=now, scope=overlay.scope_label(scope), unmapped=view["unmapped"],
                   scan_interval=health.module_interval(hub_cfg(), "sla"), recorder=view["recorder"],
                   left_out=view["left_out"], options=options, filter={k: (v or "") for k, v in filt.items()}, **period)
@@ -1328,6 +1332,9 @@ def sla_history_account(number="", name=""):
     return by_no.get(str(number or "").strip()) or by_name.get(sla_history._norm(name))
 
 
+SLA_CLOSED_REACH_DAYS = 14       # closing-day files read past the period's end: requests assigned in it, closed later
+
+
 def sla_history_view(scope, date_from="", date_to=""):
     """The SLA history a viewer may see: {records (closed in the period's days + every open one), open, index, grid,
     cfg, recorder, left_out, unmapped}. Every record gets its team from the PERSON who executed it (or holds it) - their
@@ -1354,8 +1361,9 @@ def sla_history_view(scope, date_from="", date_to=""):
     days = store.sla_closed_days()
     if date_from:
         days = [d for d in days if d >= date_from]
-    if date_to:
-        days = [d for d in days if d <= date_to]
+    if date_to:                 # the period is the ASSIGNMENT day: a request closed up to two weeks later belongs to it
+        reach = min(date.fromisoformat(date_to) + timedelta(days=SLA_CLOSED_REACH_DAYS), auth.now().date()).isoformat()
+        days = [d for d in days if d <= max(reach, date_to)]
     records = {}
     for day in days:
         records.update(store.read_sla_closed_day(day))

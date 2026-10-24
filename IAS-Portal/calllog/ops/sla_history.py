@@ -316,17 +316,23 @@ def grid_rows(headers, rows):
     has no time, so the same employee, system and request type can be listed twice in a day - two requests, each with
     its own «رقم الطلب». The second and later rows with the same fields get an occurrence number in their key (in grid
     order), so no request is ever folded into another; the first keeps the key it always had."""
+    return [item for _, item in grid_rows_indexed(headers, rows)]
+
+
+def grid_rows_indexed(headers, rows):
+    """``grid_rows`` as [(index of the row in ``rows``, item)]: the page row each request came from (its own
+    «التفاصيل» post-back), footer lines left out."""
     col = {k: find_col(headers, v) for k, v in GRID_COLUMNS.items()}
     # «رقم الموظف» must not be taken by «رقم الموظف TP»: find_col prefers the exact header, so it is not
     out, seen = [], {}
-    for r in rows or []:
+    for n, r in enumerate(rows or []):
         item = {k: (_clean(r[i]) if i is not None and i < len(r) else "") for k, i in col.items()}
         if not any(item[k] for k in ("date", "employee_no", "system", "status")):
             continue                                   # a footer / "no data" line
         base = grid_key(item)
         seen[base] = seen.get(base, 0) + 1
         item["key"] = base if seen[base] == 1 else grid_key(item, seen[base])
-        out.append(item)
+        out.append((n, item))
     return out
 
 
