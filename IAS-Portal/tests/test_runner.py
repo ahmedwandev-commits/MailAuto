@@ -1024,10 +1024,15 @@ def test_a_second_collector_on_the_same_pc_is_refused(tmp_path, monkeypatch, cap
 
 
 def test_missing_packages_are_listed_not_crashed_on(monkeypatch, capsys):
-    monkeypatch.setattr(collector, "missing_packages", lambda: ["keyring"])
+    """A missing CORE package stops the collector with what to run; an optional one (keyring, pywin32) does not: it
+    starts, says what that means, and runs every job it can (a PC without internet still scans)."""
+    monkeypatch.setattr(collector, "missing_packages", lambda: ["Flask"])
     monkeypatch.setenv(collector.RESTART_FLAG, "1")
     assert collector.ensure_packages() == 1
     assert "still missing" in capsys.readouterr().out
+    monkeypatch.setattr(collector, "missing_packages", lambda: ["keyring"])
+    assert collector.ensure_packages() is None
+    assert "keyring is not installed" in capsys.readouterr().out
     monkeypatch.setattr(collector, "missing_packages", lambda: [])
     assert collector.ensure_packages() is None
 

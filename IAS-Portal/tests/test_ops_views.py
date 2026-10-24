@@ -208,10 +208,11 @@ def nav_of(browser, url):
 
 def test_top_bar_links_per_role(admin, mgr, emp):
     assert [(h, t) for h, t, _ in nav_of(admin, "/hub")] == [("/hub", "Home"), ("/calls", "Calls"), ("/email", "E-mail"), ("/sla", "Ticketing"),
-                                                              ("/itsm", "ITSM"), ("/auto-assign", "Auto Assign"), ("/admin#employees", "Users"),
-                                                              ("/system#settings", "Settings"), ("/system#logs", "Logs"), ("/system#collectors", "System")]
+                                                              ("/itsm", "ITSM"), ("/auto-assign", "Auto Assign"), ("/analysis", "Analysis"),
+                                                              ("/admin#employees", "Users"), ("/system#settings", "Settings"),
+                                                              ("/system#logs", "Logs"), ("/system#collectors", "System")]
     assert [(h, t) for h, t, _ in nav_of(mgr, "/hub")] == [("/hub", "Home"), ("/calls", "Calls"), ("/email", "E-mail"), ("/sla", "Ticketing"),
-                                                            ("/itsm", "ITSM"), ("/auto-assign", "Auto Assign")]
+                                                            ("/itsm", "ITSM"), ("/auto-assign", "Auto Assign"), ("/analysis", "Analysis")]
     assert [(h, t) for h, t, _ in nav_of(emp, "/my")] == [("/dashboard", "Log calls"), ("/my", "My work")]
 
 
@@ -460,7 +461,7 @@ def test_home_shows_the_sector_and_agrees_with_the_api(admin, demo_data, tab, sc
     assert items.count() == len(overview["attention"]) >= 5
     levels = [re.search(r"op-t-(\w+)", c).group(1) for c in items.evaluate_all("els => els.map(e => e.className)")]
     assert levels == sorted(levels, key=["danger", "warn", "info"].index)
-    assert page.locator("#colBody .op-job").count() == 4 and "Offline" in text_of(page, "#colBody")           # the demo's stale ITSM collector
+    assert page.locator("#colBody .op-job").count() == len(schemas.JOBS) and "Offline" in text_of(page, "#colBody")           # the demo's stale ITSM collector
     assert page.locator("#tlBody .op-tl-item").count() == len(admin.get(f"/api/ops/events?day={NOW.date()}").get_json()["events"])
     assert page.locator("#teamBody tbody tr").count() == len([t for t in overview["email"]["teams"]])
     assert "not classified" in text_of(page, "#teamBody")
@@ -737,7 +738,7 @@ def test_system_health_tab(admin, demo_data, tab, scheme):
     assert page.inner_text('[data-kpi="signins"] .op-kpi-value') == str(health["audit_today"]["failed_sign_ins"])
     assert page.locator("#tab-health .op-problems li").count() == len(health["problems"])
     assert "3 of 3" in text_of(page, '[data-kpi="snapshots"]')
-    assert page.locator("#tab-health table tbody tr").count() == 3 + 4                   # snapshots + heartbeats
+    assert page.locator("#tab-health table tbody tr").count() == 3 + len(schemas.JOBS)    # snapshots + heartbeats
     assert "Disk free" in text_of(page, "#tab-health") and page.locator("#tab-health .op-stackbar").count() == 1
     assert page.get_attribute('#sysTabs [data-tab="health"]', "aria-selected") == "true"
     assert t.later_problems() == [], t.problems
@@ -762,7 +763,7 @@ def test_system_collectors_tab_and_run_now(app, ops, demo_data, tab):
     t = tab()
     page = open_system(t, "collectors")
     page.wait_for_selector("#tab-collectors .op-table-box tbody tr")
-    assert page.locator("#tab-collectors .op-table-box tbody tr").count() == 4
+    assert page.locator("#tab-collectors .op-table-box tbody tr").count() == len(schemas.JOBS)   # the daily summary too
     assert "Offline" in text_of(page, "#tab-collectors") and "Online" in text_of(page, "#tab-collectors")
     assert "demo.sla.user" in text_of(page, "#tab-collectors") and "email.target_archive_name" in text_of(page, "#tab-collectors")
     assert "password" not in text_of(page, "#tab-collectors").lower().replace("password set", "").replace("a job without a password", "")

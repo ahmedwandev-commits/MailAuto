@@ -463,7 +463,8 @@ def test_manager_sees_only_their_team_with_recounted_stats(admin, flex_mgr, mgr,
     assert stats["business_address_volume"] == {} and stats["trend"] == {}
     assert "Card limit change" not in json.dumps(mine) and "Card limit change" in json.dumps(full)
     assert len(mgr.get("/api/ops/email").get_json()["data"]["rows"]) == 6          # team "__all__" = everything
-    assert mine["options"]["people"] == [] and mine["options"]["scope"] == "Flex Cube"
+    # a manager may hand a mail to anybody (also to another team): the same people as the administrator
+    assert mine["options"]["people"] == full["options"]["people"] and mine["options"]["scope"] == "Flex Cube"
 
 
 def test_manager_quality_sections_carry_nothing_about_other_teams(admin, flex_mgr, hub, ops):
@@ -482,7 +483,9 @@ def test_manager_quality_sections_carry_nothing_about_other_teams(admin, flex_mg
     assert len(admin.get("/api/ops/email").get_json()["data"]["quality"]["scorecard"]) == 2
 
 
-def test_options_people_come_from_settings_and_are_scoped(admin, flex_mgr, hub):
+def test_options_people_come_from_the_accounts_and_the_settings(admin, flex_mgr, hub):
+    """Every active account with a mailbox (named and teamed from the account), then the Settings team-member
+    addresses without an account. A manager gets the same list: a mail can be handed to another team."""
     cfg = admin.get("/api/ops/settings").get_json()["settings"]
     cfg["email"]["team_members_by_team"] = {"Flex Cube": ["flexcube.Alice.Smith2@example.test"],
                                            "Card Management": ["carla.cardholder@example.test"]}
@@ -490,11 +493,12 @@ def test_options_people_come_from_settings_and_are_scoped(admin, flex_mgr, hub):
     assert admin.put("/api/ops/settings", cfg).status_code == 200
     people = admin.get("/api/ops/email").get_json()["options"]["people"]
     assert {p["email"]: (p["name"], p["team"]) for p in people} == {
+        "fadi@example.test": ("Fadi Flex", "Flex Cube"),
         "flexcube.alice.smith2@example.test": ("Alice Smith2", "Flex Cube"),
         "carla.cardholder@example.test": ("Carla Cardholder", "Card Management"),
         "solo.person@example.test": ("Solo Person", "")}
     mine = flex_mgr.get("/api/ops/email").get_json()["options"]["people"]
-    assert [p["email"] for p in mine] == ["flexcube.alice.smith2@example.test"]
+    assert mine == people
 
 
 # ---------------------------------------------------------------------------- e-mail actions
@@ -656,9 +660,10 @@ def test_decision_needs_an_appeal_and_team_access(admin, mgr, make_account, hub,
 
 def test_a_second_team_manager_keeps_handling_a_shared_mail(admin, make_account, hub, ops):
     """A replied mail named for two teams is one row (team = the first). The second team's manager files their
-    assignment and their rating under their OWN team, so they can still handle both once the mail leaves the scan."""
+    assignment and their rating under their OWN team, so they can still handle both once the mail leaves the scan.
+    A reply is rated only by the managers of the team of the person who wrote it - here Card Management's."""
     cara = make_account("cara", "manager", "Cara Card", email="cara@example.test", team="Card Management")
-    bob = make_account("1002", "user", "Bob Employee", email="bob@example.test")
+    bob = make_account("1002", "user", "Bob Employee", email="bob@example.test", team="Card Management")
     shared = replied_row("<s1@x>", "bob@example.test", all_teams=["Flex Cube", "Card Management"])
     put_snapshot(ops, "email", email_data([shared]))
     r = cara.post("/api/ops/email/assign", {"message_id": "<s1@x>", "assigned_to_email": "dan@example.test"})
@@ -901,82 +906,6 @@ def test_auto_assign_disabled_does_nothing(admin, flex_mgr, make_account, ops):
 
 
 # ---------------------------------------------------------------------------- SLA analysis (live recording)
-def test_sla_analysis_endpoint(admin, flex_mgr, emp, ops):
-    assert emp.get("/api/ops/sla-analysis").status_code == 403            # the Ticketing analysis is admin/manager only
-    assert admin.get("/api/ops/sla-analysis").get_json()["available"] is False      # nothing recorded yet
-
-    def seed(doc):
-        doc["records"] = {
-            "r1": {"id": "r1", "system": "Flexcube", "team": "Flex Cube", "assigned_at": "2026-10-11T10:00:00",
-                   "executor": "Alice", "executed_at": "2026-10-11T10:30:00", "exec_outcome": "executed",
-                   "checker": "Omar", "confirmed_at": "2026-10-11T11:00:00", "final_outcome": "executed"},
-            "r2": {"id": "r2", "system": "Prepaid", "team": "Card Management", "assigned_at": "2026-10-11T10:00:00",
-                   "executor": "Bob", "executed_at": "2026-10-11T10:20:00", "exec_outcome": "executed",
-                   "checker": "Sara", "confirmed_at": "2026-10-11T10:50:00", "final_outcome": "executed"}}
-    ops.update_sla_records(seed)
-    body = flex_mgr.get("/api/ops/sla-analysis").get_json()          # the Flex Cube manager sees only their team
-    assert body["available"] is True and body["overall"]["n"] == 1 and body["meta"]["sla_minutes"] == 180
-    assert body["buckets"]["closed"] == 1
-    assert body["employee_clock"]["median_minutes"] == 30.0 and body["manager_clock"]["median_minutes"] == 30.0
-    assert body["by_employee"][0]["executor"] == "Alice" and body["by_checker"][0]["checker"] == "Omar"
-    assert [t["team"] for t in body["by_team"]] == ["Flex Cube"]     # scoped: Card Management is hidden
-    whole = admin.get("/api/ops/sla-analysis").get_json()            # an administrator sees every team
-    assert whole["overall"]["n"] == 2 and {t["team"] for t in whole["by_team"]} == {"Flex Cube", "Card Management"}
-    # the filter bar: by executor, checker, team, and a date range
-    assert whole["options"]["executors"] == ["Alice", "Bob"] and whole["options"]["teams"] == ["Card Management", "Flex Cube"]
-    assert admin.get("/api/ops/sla-analysis?executor=Alice").get_json()["overall"]["n"] == 1
-    assert admin.get("/api/ops/sla-analysis?team=Card%20Management").get_json()["by_team"][0]["team"] == "Card Management"
-    assert admin.get("/api/ops/sla-analysis?from=2026-10-11&to=2026-10-11").get_json()["overall"]["n"] == 2
-    assert admin.get("/api/ops/sla-analysis?from=2026-10-12").get_json()["meta"]["requests"] == 0
-
-
-def test_a_managers_empty_analysis_says_why_and_export_lines_name_people_like_the_scan(admin, flex_mgr, make_account, ops):
-    """A manager whose team has nothing recorded sees an (empty) analysis with the count of requests no rule gives a
-    team, not "nothing recorded"; an export line's EmpNo is shown as the person's security name - and so gets the
-    person's team, like their live requests."""
-    def seed(doc):
-        doc["records"] = {"u1": {"id": "u1", "system": "نظام غير معروف", "assigned_at": "2026-10-11T08:00:00",
-                                 "executor": "Nobody", "executed_at": "", "confirmed_at": "2026-10-11T09:00:00",
-                                 "final_outcome": "executed"},
-                          "x1": {"id": "x1", "system": "نظام تجريبي", "assigned_at": "2026-10-11T08:00:00",
-                                 "executor": "700101", "executed_at": "", "confirmed_at": "2026-10-11T09:30:00",
-                                 "final_outcome": "executed"}}
-    ops.update_sla_records(seed)
-    body = flex_mgr.get("/api/ops/sla-analysis").get_json()
-    assert body["available"] is True and body["meta"]["requests"] == 0 and body["unmapped"] == 2
-    make_account("700101", "user", "Hany", team="Flex Cube", security_name="هاني جمال", portal_id="700101")
-    body = flex_mgr.get("/api/ops/sla-analysis").get_json()
-    assert body["meta"]["requests"] == 1 and body["by_handler"][0]["handler"] == "هاني جمال"
-    assert body["options"]["executors"] == ["هاني جمال"] and body["unmapped"] == 1
-    assert flex_mgr.get("/api/ops/sla-config").get_json()["recorded"] == 1          # the same count everywhere
-
-
-def test_a_request_for_several_applications_counts_for_each_of_their_teams(admin, flex_mgr, make_account, ops):
-    """One export request (ReqID2) with a Flexcube line and a Prepaid line belongs to both teams: each manager sees it,
-    the by-team table lists it under both, and it is still one request."""
-    for name, team in (("Flexcube", "Flex Cube"), ("Prepaid", "Card Management")):
-        assert admin.post("/api/ops/auto-assign/apps", {"name": name, "team": team}).status_code == 200
-    card_mgr = make_account("cara", "manager", "Cara Card", email="cara@example.test", team="Card Management")
-    export = ("ReqID2,FStatusID1,DateF,SStatusID,DateT1,EmpNo,ApplicationName\n"
-              "77,اسناد لمستخدم السرية,10/11/2026 08:00:00 AM,تم التعزيز على التنفيذ,10/11/2026 09:00:00 AM,700101,Flexcube\n"
-              "77,اسناد لمستخدم السرية,10/11/2026 08:00:00 AM,تم التعزيز على التنفيذ,10/11/2026 09:00:00 AM,700101,Prepaid\n")
-    r = _upload(admin, export.encode("utf-8"))
-    assert r.status_code == 200, r.get_json()
-    whole = admin.get("/api/ops/sla-analysis").get_json()
-    assert whole["overall"]["n"] == 1 and {t["team"] for t in whole["by_team"]} == {"Flex Cube", "Card Management"}
-    assert {s["system"] for s in whole["by_system"]} == {"Flexcube", "Prepaid"}
-    for mgr in (flex_mgr, card_mgr):
-        assert mgr.get("/api/ops/sla-analysis").get_json()["overall"]["n"] == 1
-
-
-def test_import_feed_says_what_is_wrong_instead_of_up_to_date(admin, tmp_path):
-    r = admin.post("/api/ops/sla-feed/import", {})
-    assert r.status_code == 400 and "No export feed is set" in r.get_json()["error"]
-    admin.put("/api/ops/sla-config", {"feed_path": str(tmp_path / "missing" / "ALL_2026.csv")})
-    r = admin.post("/api/ops/sla-feed/import", {})
-    assert r.status_code == 400 and "cannot see the export feed" in r.get_json()["error"]
-
-
 def test_itsm_analysis_records_execution_time_and_conclusion(admin, emp, ops):
     assert emp.get("/api/ops/itsm-analysis").status_code == 403           # the ITSM analysis is admin/manager only
     assert admin.get("/api/ops/itsm-analysis").get_json()["available"] is False      # no scan recorded yet
@@ -1026,103 +955,12 @@ def test_sla_config_endpoints(admin, flex_mgr, emp):
     assert admin.get("/api/ops/sla-config").get_json()["config"]["sla_minutes"] == 240
 
 
-def test_sla_feed_import(admin, tmp_path):
-    csv_path = tmp_path / "feed.csv"
-    csv_path.write_text("ReqID,الحالة,مستخدم السرية,مراجع السرية,النظام\n"
-                        "1,تم التعزيز على التنفيذ,Alice,Omar,Flexcube\n"
-                        "2,تم التنفيذ,Bob,,CRM\n"
-                        "3,قيد الإجراء,,,SWIFT\n", encoding="utf-8")
-    admin.put("/api/ops/sla-config", {"feed_path": str(csv_path)})
-    r = admin.post("/api/ops/sla-feed/import", {}).get_json()
-    assert r["ok"] is True and r["added"] == 3 and r["recorded"] == 3
-    body = admin.get("/api/ops/sla-analysis").get_json()
-    assert body["available"] is True and body["meta"]["requests"] == 3
-    assert body["buckets"] == {"open": 1, "awaiting": 1, "closed": 1}
-    assert admin.post("/api/ops/sla-feed/import", {}).get_json()["added"] == 0      # idempotent: nothing new on re-read
-
-
 def _sla_scan(ops, at, reqs):
     """A live SLA snapshot (the Re-Assign scrape) holding ``reqs`` = [(key, security user, sent at)]."""
     put_snapshot(ops, "sla", {"thresholds": {"warning_minutes": 60, "breach_minutes": 120}, "totals": {}, "by_user": [],
                               "requests": [{"key": k, "security_user": u, "sent_at": t, "age_minutes": 0,
                                             "status": "within", "fields": {"النظام": "Flexcube", "اسم الموظف": "x"}}
                                            for k, u, t in reqs]}, at=at)
-
-
-def test_sla_analysis_records_a_request_that_left_the_queue_as_closed(admin, ops):
-    _sla_scan(ops, "2026-10-11T08:30:00", [("k1", "Alice", "2026-10-11T08:00:00"), ("k2", "Bob", "2026-10-11T08:10:00")])
-    body = admin.get("/api/ops/sla-analysis").get_json()             # the analysis folds the latest scan itself
-    assert body["available"] is True and body["buckets"] == {"open": 2, "awaiting": 0, "closed": 0}
-    _sla_scan(ops, "2026-10-11T08:45:00", [("k2", "Bob", "2026-10-11T08:10:00")])        # k1 left Alice's queue
-    body = admin.get("/api/ops/sla-analysis").get_json()
-    assert body["buckets"] == {"open": 1, "awaiting": 0, "closed": 1}
-    assert body["by_handler"][0]["handler"] == "Alice" and body["overall"]["median_minutes"] == 45.0
-    assert body["live"]["closed_today"] == 1 and body["live"]["open"] == 1
-    assert body["scan_interval"] == 15                                 # "Closed today" says how often the scans look
-    again = admin.get("/api/ops/sla-analysis").get_json()                                 # the same scan: no change
-    assert again["buckets"] == body["buckets"] and ops.read_sla_records()["last_scan"] == "2026-10-11T08:45:00"
-
-
-def test_the_analysis_right_now_strip_counts_like_the_live_tab(admin, ops):
-    """The SLA Analysis "right now" strip and the Live tickets tab count the same open requests the same way: the
-    scan's verdict for each request (a request does not turn breached on one tab only) and no SLA age without a
-    sent date - even when the scan is a while old."""
-    reqs = [("k1", "Alice", "2026-10-11T04:00:00", "breached"),      # 150 min old at the 06:30 scan
-            ("k2", "Alice", "2026-10-11T05:00:00", "reminder"),      # 90 min at the scan, 240 min by 09:00
-            ("k3", "Bob", None, "no_date")]                          # no sent date: not in the SLA
-    put_snapshot(ops, "sla", {"thresholds": {"warning_minutes": 60, "breach_minutes": 120},
-                              "totals": {"open": 3, "within": 0, "reminder": 1, "breached": 1, "no_date": 1},
-                              "by_user": [], "requests": [{"key": k, "security_user": u, "sent_at": t, "status": st,
-                                                           "fields": {"النظام": "Flexcube"}} for k, u, t, st in reqs]},
-                 at="2026-10-11T06:30:00")
-    live = admin.get("/api/ops/sla").get_json()["data"]["totals"]
-    strip = admin.get("/api/ops/sla-analysis").get_json()["live"]
-    assert strip["open"] == live["open"] == 3 and strip["breached"] == live["breached"] == 1
-    assert strip["breach_minutes"] == 120 and strip["oldest_minutes"] == 300.0         # k1 by the clock; k3 has no age
-    alice = next(g for g in strip["by_employee"] if g["executor"] == "Alice")
-    assert alice["breached"] == 1 and next(g for g in strip["by_employee"] if g["executor"] == "Bob")["oldest_minutes"] is None
-
-
-def test_the_analysis_today_holds_yesterdays_requests_still_open_and_the_ones_closed_today(admin, ops):
-    """Filtered to today (the default), the period counts the same requests as the "right now" strip next to it:
-    yesterday evening's requests that are still waiting, and the one that left its queue this morning."""
-    _sla_scan(ops, "2026-10-11T08:30:00", [("y1", "Alice", "2026-10-10T21:30:00"), ("y2", "Bob", "2026-10-10T22:10:00"),
-                                           ("t1", "Bob", "2026-10-11T08:20:00")])
-    admin.get("/api/ops/sla-analysis")
-    _sla_scan(ops, "2026-10-11T08:45:00", [("y2", "Bob", "2026-10-10T22:10:00"), ("t1", "Bob", "2026-10-11T08:20:00")])
-    body = admin.get("/api/ops/sla-analysis?from=2026-10-11&to=2026-10-11").get_json()
-    assert body["buckets"] == {"open": 2, "awaiting": 0, "closed": 1}
-    assert body["live"]["open"] == body["buckets"]["open"] and body["live"]["closed_today"] == body["buckets"]["closed"]
-    assert [r["handler"] for r in body["by_handler"]] == ["Alice"]
-    week = admin.get("/api/ops/sla-analysis?from=2026-10-01&to=2026-10-09").get_json()       # before any of them
-    assert week["meta"]["requests"] == 0
-
-
-EXPORT_CSV = ("ReqID2,FStatusID1,DateF,SStatusID,DateT1,EmpNo,ApplicationName\n"
-              "9001,اسناد لمستخدم السرية,10/10/2026 08:00:00 AM,تم التعزيز على التنفيذ,10/10/2026 09:30:00 AM,700101,Flexcube\n"
-              "9002,اسناد لمستخدم السرية,10/10/2026 08:00:00 AM,تم التعزيز على عدم التنفيذ,10/10/2026 01:00:00 PM,700102,DWP\n")
-
-
-def _upload(who, data, name="ALL_2026.csv"):
-    return who.post("/api/ops/sla-feed/upload", data={"file": (io.BytesIO(data), name)}, content_type="multipart/form-data")
-
-
-def test_sla_upload_portal_export_adds_closed_requests(app, clock, admin, flex_mgr, ops):
-    assert _upload(flex_mgr, EXPORT_CSV.encode("utf-8")).status_code == 403              # administrators only
-    r = _upload(admin, ("\ufeff" + EXPORT_CSV).encode("utf-8")).get_json()
-    assert r["ok"] is True and r["portal_export"] is True and r["added"] == 2 and r["recorded"] == 2
-    body = admin.get("/api/ops/sla-analysis?from=2026-10-10&to=2026-10-10").get_json()
-    assert body["buckets"]["closed"] == 2 and body["overall"]["not_executed"] == 1
-    assert body["overall"]["median_minutes"] in (90.0, 300.0)                            # 1.5 h and 5 h full clocks
-    assert {h["handler"] for h in body["by_handler"]} == {"700101", "700102"}
-    assert _upload(admin, EXPORT_CSV.encode("utf-8")).get_json()["added"] == 0          # re-upload: nothing new
-    assert ("ops_sla_upload", "ALL_2026.csv", "admin") in audit_actions(app, clock)
-
-
-def test_sla_upload_rejects_the_wrong_file(admin):
-    assert _upload(admin, b"x", name="report.xlsx").status_code == 400
-    bad = _upload(admin, "a,b\n1,2\n".encode("utf-8"))
-    assert bad.status_code == 400 and "ALL_*.csv" in bad.get_json()["error"]
 
 
 def test_job_log_tail(admin, ops):
@@ -1687,8 +1525,16 @@ def test_a_team_manager_sees_only_their_team_in_every_module(app, admin, flex_mg
     assert (sla_day["open"], sla_day["breached"]) == (2, 1)
     itsm_day = flex_mgr.get("/api/ops/itsm/history?days=1").get_json()["days"][-1]["points"][-1]
     assert itsm_day["totals"] == {"Implementation Requests": 1, "Rollback Requests": 0} and list(itsm_day["per_role"]) == [FLEX_ROLE]
-    analysis = flex_mgr.get("/api/ops/sla-analysis").get_json()
-    assert analysis["options"]["teams"] == ["Flex Cube"] and analysis["options"]["executors"] in ([], [FLEX_SEC])
+    for rid, system, who in (("h-flex", "Flexcube", FLEX_SEC), ("h-card", "T24", CARD_SEC)):    # the status history
+        rec = {"id": rid, "source": "history", "stage": "closed", "first_assigned_at": "2026-10-11T07:00:00",
+               "assigned_at": "2026-10-11T07:00:00", "executed_at": "2026-10-11T07:30:00",
+               "confirmed_at": "2026-10-11T08:00:00", "system": system, "executor": who, "holder": who,
+               "final_outcome": "executed", "exec_outcome": "executed", "outcome": "completed"}
+        ops.update_sla_closed_day("2026-10-11", lambda d, rec=rec: d.update({rec["id"]: rec}))
+    ops.update_sla_history_state(lambda d: d.update(last_history="2026-10-11T08:55:00"))
+    analysis = flex_mgr.get("/api/ops/sla-analysis?from=2026-10-11&to=2026-10-11").get_json()
+    assert analysis["options"]["teams"] == ["Flex Cube"] and analysis["options"]["executors"] == [FLEX_SEC]
+    assert analysis["meta"]["requests"] == 1
     assert flex_mgr.get("/api/ops/reports").get_json()["reports"] == []
     assert flex_mgr.get("/export/ops/report/sla/SLA_latest.xlsx").status_code == 404
     app.extensions["ops_ticketing_run"] = {"running": False, "done": True, "team": "Card Management",

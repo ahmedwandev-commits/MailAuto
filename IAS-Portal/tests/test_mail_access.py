@@ -17,7 +17,8 @@ from test_ops_api import audit_actions, make_account, ops  # noqa: F401
 NOT_AVAILABLE = {"error": "That e-mail is not available."}
 
 # (actor, mail) -> may open?   actors: alice (assignee), bob / carol (other employees), fadi (Flex Cube manager),
-# cara (Card Management manager), mona (every team), admin
+# cara (Card Management manager), mona (every team), admin. A manager also reads the Unclassified mails (to file them
+# under a team, assign them or mark them as needing no action); an employee only the ones assigned to them.
 MATRIX = {
     "alice": {"alice_open": True, "alice_done": True, "bob_open": False, "free_flex": False, "free_card": False,
               "free_uncl": False, "uncl_alice": True, "replied_free": False, "prep_alice": True, "big_alice": True,
@@ -28,10 +29,10 @@ MATRIX = {
     "carol": {name: False for name in ("alice_open", "alice_done", "bob_open", "free_flex", "free_card", "free_uncl",
                                        "uncl_alice", "replied_free", "prep_alice", "big_alice", "gone_alice")},
     "fadi": {"alice_open": True, "alice_done": True, "bob_open": True, "free_flex": True, "free_card": False,
-             "free_uncl": False, "uncl_alice": False, "replied_free": True, "prep_alice": True, "big_alice": True,
+             "free_uncl": True, "uncl_alice": True, "replied_free": True, "prep_alice": True, "big_alice": True,
              "gone_alice": True},
     "cara": {"alice_open": False, "alice_done": False, "bob_open": False, "free_flex": False, "free_card": True,
-             "free_uncl": False, "uncl_alice": False, "replied_free": False, "prep_alice": False, "big_alice": False,
+             "free_uncl": True, "uncl_alice": True, "replied_free": False, "prep_alice": False, "big_alice": False,
              "gone_alice": False},
     "mona": {name: True for name in ("alice_open", "alice_done", "bob_open", "free_flex", "free_card", "free_uncl",
                                      "uncl_alice", "replied_free", "prep_alice", "big_alice", "gone_alice")},

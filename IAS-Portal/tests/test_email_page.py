@@ -107,10 +107,14 @@ def test_email_is_scoped_for_a_manager(app, demo_data, tab):
     page.wait_for_selector(f"{panel(page)} .op-table tbody tr, {panel(page)} .op-empty")
     teams = set(page.locator(f"{panel(page)} .op-table tbody tr td:nth-child(4)").all_inner_texts())
     assert teams <= {"Flex Cube", ""}                                  # the Flex Cube manager sees only their team
-    # a manager of one team never sees the Unclassified bucket
+    # a manager also files the Unclassified mails (assign a team or create a rule): the bucket lists them, and no
+    # mail of another team
     page.click('.em-tab:has-text("Unclassified")')
     page.wait_for_selector(f"{panel(page)} .op-empty, {panel(page)} .op-table")
-    assert "Nothing unclassified" in text_of(page, panel(page)) or page.locator(f"{panel(page)} .op-table tbody tr").count() == 0
+    assert "assign a team or create a rule" in text_of(page, panel(page))
+    mine = page.request.get(page.url.split("/email")[0] + "/api/ops/email").json()
+    assert all(r.get("team") == "Unclassified" for r in mine["unclassified"])
+    assert 0 < page.locator(f"{panel(page)} .op-table tbody tr").count() == len(mine["unclassified"])
     assert t.later_problems(*not_yet_written()) == [], t.problems
 
 

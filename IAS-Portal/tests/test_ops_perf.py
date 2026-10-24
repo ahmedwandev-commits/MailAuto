@@ -152,7 +152,7 @@ def test_healthz_needs_no_sign_in_and_shows_no_names(app):
     body = resp.get_json()
     assert body["ok"] is True
     assert set(body) == {"ok", "time", "collectors"}
-    assert set(body["collectors"]) == {"email", "email_report", "sla", "itsm"}
+    assert set(body["collectors"]) == {"email", "email_report", "sla", "itsm", "daily_summary"}
     assert all(value is False for value in body["collectors"].values())          # nothing has reported yet
 
 

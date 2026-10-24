@@ -408,7 +408,8 @@ def test_a_content_free_thread_walks_past_the_second_to_the_third_message(ctx):
     ("x", "المصادقه البيومتريه", "MFA Team"),              # other letter forms of the same words
     ("x", "SFTP transfer is late", "Third Party"),
     ("x", "CRM screen frozen", "Open System"),
-    ("FCUBS issue", "please look at the Windows server", "Open System"),    # the body decides, the subject only falls back
+    ("FCUBS issue", "please look at the CRM server", "Open System"),    # the body decides, the subject only falls back
+    ("FCUBS issue", "please look at the Windows server", "Flex Cube"),  # a weak everyday word never outvotes a system
     ("FCUBS issue", "please look", "Flex Cube"),
     ("x", "flex-cube and E-form", "Flex Cube"),
     ("x", "nothing technical here at all", "Unclassified"),
@@ -448,10 +449,11 @@ def test_one_fcubs_mention_counts_as_one_application():
 
 def test_ties_between_teams_go_by_priority_and_the_priority_is_tunable():
     r = rules.build_rules({})
-    assert r.detect("x", "Windows and DWP")[1] == "Card Management"            # specific team before the generic one
-    assert r.detect("x", "Windows and DWP")[2] == ["Card Management", "Open System"]
+    assert r.detect("x", "CRM and DWP")[1] == "Card Management"                # specific team before the generic one
+    assert r.detect("x", "CRM and DWP")[2] == ["Card Management", "Open System"]
     flipped = rules.build_rules({"advanced": {"team_priority": ["Open System", "Card Management"]}})
-    assert flipped.detect("x", "Windows and DWP")[1] == "Open System"
+    assert flipped.detect("x", "CRM and DWP")[1] == "Open System"
+    assert r.detect("x", "Windows and DWP")[2] == ["Card Management"]          # a weak word never adds a second team
 
 
 def test_several_keywords_of_one_application_count_once():
@@ -494,7 +496,7 @@ def test_an_unmapped_reply_answers_every_team_of_a_multi_team_mail(ctx):
 
 
 def test_linked_teams_share_reply_credit(store):
-    body = "Veridium enrolment and Windows reinstall"
+    body = "Veridium enrolment and CRM reinstall"
     original = mail(subject="Linked", conv="CONV-L", body=body)
     answer = reply(original, sender=CAROL)
     alone = only_row(scan(make_ctx(store), original, answer))          # one reply clears all: a single Replied mail
@@ -544,7 +546,8 @@ def test_admin_rule_beats_the_built_in_map_for_the_same_keyword(store):
     assert (builtin["team"], mine["team"]) == ("Open System", "Card Management")
     r = rules.build_rules({"classification": {"system_team_map": {"fcubs": "Third Party"}}})
     systems, team, all_teams = r.detect("x", "FCUBS issue")
-    assert team == "Third Party" and "Flex Cube" in all_teams          # the other built-in word (FCUB) still names its team
+    assert team == "Third Party" and all_teams == ["Third Party"]      # "FCUB" is a whole word: not found inside "FCUBS"
+    assert r.detect("x", "FCUBS and FCUB issue")[2] == ["Flex Cube", "Third Party"]   # written on its own it still counts
 
 
 def test_admin_latin_rules_match_whole_words_and_arabic_rules_match_inside_words():
@@ -1071,7 +1074,8 @@ def test_the_substring_prefilter_never_changes_a_match():
     for text in texts:
         normalised = rules.normalize_arabic(text)
         for patterns in (r._builtin, r._mine):
-            brute = [(kw, team) for kw, team, pattern, _needle in patterns if pattern.search(normalised)]
+            brute = [(kw, team, pattern.search(normalised).start(), False)
+                     for kw, team, pattern, _needle in patterns if pattern.search(normalised)]
             assert r._scan(patterns, normalised) == brute, text
     for phrase in rules.NO_ACTION_KEYWORDS_EN + rules.NO_ACTION_KEYWORDS_AR:
         reason = r.explain_no_action("x", f"well, {phrase}.")[1]

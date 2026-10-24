@@ -107,10 +107,13 @@ def test_manager_with_two_teams_acts_on_both_but_not_a_third(make_account, world
     assert m.post("/api/ops/email/no-action", {"message_id": "<card1>"}).status_code == 200
     denied = m.post("/api/ops/email/no-action", {"message_id": "<third1>"})
     assert denied.status_code == 403 and "another team" in denied.get_json()["error"]
-    # a mail of a team outside their scope is also invisible on the Email page (and so is any Unclassified one)
+    # a mail of a team outside their scope is also invisible on the Email page; the Unclassified ones are not in their
+    # team's rows (their KPIs stay their own) but come in a list of their own, for the manager to file under a team
     page = m.get("/api/ops/email").get_json()
     subjects = {row["subject"] for row in page["data"]["rows"]}
-    assert "Third pending one" not in subjects and MARK not in json.dumps(page, ensure_ascii=False)
+    assert "Third pending one" not in subjects and MARK not in json.dumps(page["data"], ensure_ascii=False)
+    assert MARK in json.dumps(page["unclassified"], ensure_ascii=False)
+    assert "Third pending one" not in json.dumps(page, ensure_ascii=False)
 
 
 def test_classification_rules_are_limited_to_a_managers_own_teams(make_account, world):
