@@ -397,41 +397,95 @@ def test_sla_links_from_home_open_the_linked_requests(tab, hub):
     t.clean()
 
 
-def test_the_sla_analysis_tab_is_live(ops, tab, hub):
-    """The SLA Analysis follows the collector like the live tab: a new scan updates it without a click."""
+# ------------------------------------------------------------------ the SLA Analysis: Insights › Analysis › SLA
+def history_rec(rid, assigned, confirmed="", system="Flexcube"):
+    return {"id": rid, "source": "history", "stage": "closed" if confirmed else "open", "first_assigned_at": assigned,
+            "assigned_at": assigned, "executed_at": confirmed, "confirmed_at": confirmed, "system": system,
+            "executor": USERS[0], "holder": USERS[0], "final_outcome": "executed" if confirmed else "",
+            "exec_outcome": "executed" if confirmed else "", "outcome": "completed" if confirmed else "in_progress"}
+
+
+def write_history(ops, closed=(), open_=(), grid=None, index=None, at=NOW):
+    """The SLA history as the collector records it: closed requests filed by their closing day, the open ones, and the
+    latest inquiry grid with its index."""
+    for r in closed:
+        ops.update_sla_closed_day(r["confirmed_at"][:10], lambda d, r=r: d.update({r["id"]: r}))
+    ops.update_sla_history_state(lambda d: d.update(open={r["id"]: r for r in open_}, grid=grid or {},
+                                                    index=index or {}, last_history=iso(at)))
+
+
+def grid_entry(status, stage, system="Flexcube"):
+    return {"status": status, "stage": stage, "system": system, "holder": USERS[0], "checker": "", "employee": "موظف",
+            "request_type": "اضافة صلاحية", "user_no": "9001", "request_date": "2026-10-11T00:00:00", "since": iso(NOW)}
+
+
+def todays_history(ops, at=NOW):
+    closed = [history_rec("c1", "2026-10-11T07:00:00", "2026-10-11T08:00:00"),
+              history_rec("c2", "2026-10-11T06:00:00", "2026-10-11T08:30:00")]
+    grid = {"g1": grid_entry("تم التعزيز على التنفيذ", "closed"), "g2": grid_entry("تم التعزيز على التنفيذ", "closed"),
+            "g3": grid_entry("اسناد لمستخدم السرية", "open"), "g4": grid_entry("تسجيل", "pre"),
+            "g5": grid_entry("رفض", "rejected")}
+    write_history(ops, closed, [history_rec("o1", "2026-10-11T08:20:00")], grid,
+                  {"g1": {"id": "c1"}, "g2": {"id": "c2"}, "g3": {"id": "o1"}}, at)
+
+
+def test_the_sla_analysis_is_the_sla_tab_of_insights_analysis_and_compares_with_the_portal(ops, tab, hub):
+    """Today's requests (by assignment day) from the status history, and the portal's own inquiry rows next to them."""
+    todays_history(ops)
     t = tab()
-    page = t.open("/sla?tab=analysis", '[data-kpi="an-open"]')
-    assert kpi(page, "an-open") == "31" and kpi(page, "an-closed-today") == "0"
-    assert kpi(page, "an-past") == str(hub["sla"]["totals"]["breached"])        # the same 2 h target as the live tab
-    later = NOW + dt.timedelta(minutes=5)
-    data = sla_snapshot(now=later)
-    data["requests"] = data["requests"][6:]                                       # six requests left their queues
-    data.update(totals=totals_of(data["requests"]), by_user=by_user(data["requests"]))
-    write_sla(ops, data, at=later, history=False)
-    for job in schemas.JOBS:
-        beat(ops, job, at=later)
-    t.poll_now()
-    expect(page.locator('[data-kpi="an-open"] [data-kpi-value]')).to_have_text("25")
-    assert kpi(page, "an-closed-today") == "6"
+    page = t.open("/analysis?tab=sla", '[data-kpi="an-closed"]')
+    assert page.locator("#ax-tab-sla").get_attribute("aria-selected") == "true"
+    assert kpi(page, "an-closed") == "2"
+    portal = {k: page.locator(f'[data-portal="{k}"] strong').inner_text()
+              for k in ("rows", "with_security", "with_branch", "rejected", "read", "not_read")}
+    assert portal == {"rows": "5", "with_security": "3", "with_branch": "1", "rejected": "1", "read": "3", "not_read": "1"}
+    assert "2 of them confirmed" in text(page, '[data-portal="with_security"]')
     t.clean()
 
 
-def test_the_sla_analysis_says_how_many_requests_have_no_team(tab, hub):
-    """Requests whose application and security user map to no team are in no manager's view: the page says so."""
+def test_old_links_to_the_ticketing_analysis_tab_open_its_new_place(ops, tab, hub):
+    todays_history(ops)
     t = tab()
-    page = t.open("/sla?tab=analysis", '[data-kpi="an-open"]')
+    for old in ("/sla#analysis", "/sla?tab=analysis"):
+        page = t.open(old, '[data-kpi="an-closed"]')
+        assert "/analysis?" in page.url and "tab=sla" in page.url        # the page adds its own period to the address
+    page = t.open("/sla", ".sx-requests tbody tr")
+    assert page.locator(".sx-analysis-link").get_attribute("href") == "/analysis?tab=sla"
+    assert page.locator(".sx-tab").count() == 0                                # Ticketing keeps the live tickets only
+    t.clean()
+
+
+def test_the_sla_analysis_is_live(ops, tab, hub):
+    """A scan that records another closed request shows up without a click."""
+    todays_history(ops)
+    t = tab()
+    page = t.open("/analysis?tab=sla", '[data-kpi="an-closed"]')
+    assert kpi(page, "an-closed") == "2"
+    later = NOW + dt.timedelta(minutes=5)
+    write_history(ops, [history_rec("c3", "2026-10-11T08:40:00", "2026-10-11T09:04:00")],
+                  [], {}, {}, at=later)
+    t.poll_now()
+    expect(page.locator('[data-kpi="an-closed"] [data-kpi-value]')).to_have_text("3")
+    t.clean()
+
+
+def test_the_sla_analysis_says_how_many_requests_have_no_team(ops, tab, hub):
+    """Requests whose application and security user map to no team are in no manager's view: the page says so."""
+    write_history(ops, [history_rec("c1", "2026-10-11T07:00:00", "2026-10-11T08:00:00", system="Unmapped App")])
+    t = tab()
+    page = t.open("/analysis?tab=sla", '[data-kpi="an-closed"]')
     note = page.locator(".sx-banner.info:has-text('no team')")
     expect(note).to_have_count(1)
     assert "Auto Assign" in note.inner_text() and page.locator(".sx-banner.info svg path").first.get_attribute("d")
     t.clean()
 
 
-def test_the_sla_analysis_says_dash_not_zero_percent_before_anything_closed(tab, hub):
+def test_the_sla_analysis_says_dash_not_zero_percent_before_anything_closed(ops, tab, hub):
+    write_history(ops, [], [history_rec("o1", "2026-10-11T08:20:00")])
     t = tab()
-    page = t.open("/sla?tab=analysis", '[data-kpi="an-open"]')
+    page = t.open("/analysis?tab=sla", '[data-kpi="an-within"]')
     within = page.locator('[data-kpi="an-within"]')
-    if within.count():                                                           # nothing timed has closed yet
-        assert kpi(page, "an-within") == "—" and "op-t-danger" not in within.get_attribute("class")
+    assert kpi(page, "an-within") == "—" and "op-t-danger" not in within.get_attribute("class")
     t.clean()
 
 

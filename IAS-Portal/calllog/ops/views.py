@@ -89,6 +89,8 @@ def email():
 @bp.get("/sla")
 @page(*auth.OPS_ROLES)
 def sla():
+    if request.args.get("tab") == "analysis":            # the SLA Analysis moved to Insights › Analysis
+        return redirect(url_for("hub_pages.analysis", tab="sla"))
     return render_template("sla.html")
 
 

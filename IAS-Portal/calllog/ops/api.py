@@ -1051,8 +1051,8 @@ def module_history(module):
 def sla_analysis_get():
     """The LIVE SLA analysis of security requests: each request's lifecycle is recorded across scans/feeds and split
     into the employee clock (assignment -> execution, by مستخدم السرية) and the manager clock (execution ->
-    confirmation, by مراجع السرية). Read-only, limited to the viewer's teams like every page, shown as a tab on the
-    Ticketing page (admins + managers)."""
+    confirmation, by مراجع السرية). Read-only, limited to the viewer's teams like every page, shown as the "SLA"
+    tab of Insights › Analysis (admins + managers)."""
     now = auth.now().isoformat(timespec="seconds")
     try:
         apply_sla_scan()                                    # the Live tickets recording stays current too
@@ -1103,10 +1103,12 @@ SLA_FILTER_KEYS = ("executor", "checker", "team", "system", "branch", "request_t
 
 
 def sla_filter_args(args):
-    """The SLA Analysis filter from the query string: the period (from / to) and the text filters (sla_history.
-    filter_records)."""
+    """The SLA Analysis filter from the query string: the period (from / to; ``today=1`` = the server's day) and the text
+    filters (sla_history.filter_records)."""
     filt = {"date_from": parse_day(args.get("from")) if args.get("from") else "",
             "date_to": parse_day(args.get("to")) if args.get("to") else ""}
+    if args.get("today") and not (filt["date_from"] or filt["date_to"]):   # the page's first view: the SERVER's today
+        filt["date_from"] = filt["date_to"] = auth.now().date().isoformat()
     for key in SLA_FILTER_KEYS:
         filt[key] = str(args.get(key) or "").strip()[:150]
     if filt["outcome"] and filt["outcome"] not in sla_history.OUTCOMES:

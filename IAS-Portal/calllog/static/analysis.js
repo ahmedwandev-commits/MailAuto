@@ -1,5 +1,6 @@
 "use strict";
-/* Analysis page (/analysis): calls, e-mails, tickets and change requests over a period, for administrators and managers
+/* Analysis page (/analysis): calls, e-mails, tickets and change requests over a period, and the SLA of the security
+   requests (the "SLA" tab: static/sla-analysis.js, moved here from Ticketing), for administrators and managers
    (a manager sees only their own team(s)). GET /api/ops/analytics?from&to&team gives, per module: the daily trend, the
    hour-of-day profile, the weekday x hour heat map, the peaks, the split by team and the change against the previous
    period of the same length.
@@ -36,7 +37,7 @@
     state.from = q.get("from") || "";
     state.to = q.get("to") || "";
     state.team = q.get("team") || "";
-    state.tab = MODULES.includes(q.get("tab")) || q.get("tab") === "quality" ? q.get("tab") : "overview";
+    state.tab = MODULES.includes(q.get("tab")) || ["sla", "quality"].includes(q.get("tab")) ? q.get("tab") : "overview";
     state.preset = q.get("preset") || (state.from ? "" : "30");
   }
   function writeUrl() {
@@ -128,9 +129,9 @@
 
   function tabs() {
     const names = { overview: "Overview", calls: "Calls", email: "E-mails", tickets: "Tickets", crs: "Change requests",
-      quality: "E-mail quality" };
-    return h("div", { class: "sx-tabs ax-tabs", role: "tablist" }, ["overview", ...MODULES, "quality"].map((k) => h("button", {
-      type: "button", role: "tab", class: "sx-tab", "aria-selected": String(state.tab === k),
+      sla: "SLA", quality: "E-mail quality" };
+    return h("div", { class: "sx-tabs ax-tabs", role: "tablist" }, ["overview", ...MODULES, "sla", "quality"].map((k) => h("button", {
+      type: "button", role: "tab", class: "sx-tab", id: `ax-tab-${k}`, "aria-selected": String(state.tab === k),
       onclick: () => { state.tab = k; writeUrl(); render(); } }, names[k])));
   }
 
@@ -345,15 +346,27 @@
       notes.length ? h("p", { class: "hint" }, notes.join(" ")) : null];
   }
 
+  // ------------------------------------------------------------------ SLA: the security requests' SLA (static/sla-analysis.js)
+  let slaPanel = null;
+  function slaView() {
+    if (!slaPanel) {                                   // mounted once: its own filters and live refresh survive tab changes
+      slaPanel = h("div", { class: "ax-sla", role: "tabpanel", "aria-labelledby": "ax-tab-sla" });
+      if (window.SLA_ANALYSIS) window.SLA_ANALYSIS.mount(slaPanel, { admin: (page.dataset || {}).role === "admin" });
+      else slaPanel.append(OPS.emptyState({ title: "The SLA analysis could not be loaded", icon: "alert", text: "Reload the page." }));
+    }
+    return [slaPanel];
+  }
+
   // ------------------------------------------------------------------ page
   function render() {
-    const d = state.data;
-    if (!d) return;
-    const title = h("div", { class: "op-titlebar" }, h("div", {}, h("h1", {}, "Analysis"),
-      h("p", { class: "hint" }, `${fmtDay(d.from)} – ${fmtDay(d.to)}${d.scope ? ` · ${d.scope}` : " · every team"} · compared with ${fmtDay(d.previous.from)} – ${fmtDay(d.previous.to)}`)));
-    const body = state.tab === "overview" ? overview(d)
+    const d = state.data, sla = state.tab === "sla";
+    if (!d && !sla) return;
+    const hint = sla ? "SLA of the security requests · from the portal's own status history («الحالة التاريخية للطلب»)"
+      : `${fmtDay(d.from)} – ${fmtDay(d.to)}${d.scope ? ` · ${d.scope}` : " · every team"} · compared with ${fmtDay(d.previous.from)} – ${fmtDay(d.previous.to)}`;
+    const title = h("div", { class: "op-titlebar" }, h("div", {}, h("h1", {}, "Analysis"), h("p", { class: "hint", dir: "auto" }, hint)));
+    const body = sla ? slaView() : state.tab === "overview" ? overview(d)
       : state.tab === "quality" ? qualityView(d.quality, d) : moduleView(state.tab, (d.modules || {})[state.tab], d);
-    page.replaceChildren(title, filterBar(d), tabs(), ...[].concat(body).filter(Boolean));
+    page.replaceChildren(...[title, sla ? null : filterBar(d), tabs(), ...[].concat(body)].filter(Boolean));
   }
 
   async function load() {
@@ -382,6 +395,7 @@
     const today = iso(new Date());
     [state.from, state.to] = presetRange(state.preset, today);
   }
+  if (state.tab === "sla") render();                   // the SLA tab does not wait for the other modules' numbers
   load();
   // live: a period that reaches today is brought up to date every minute (the server reuses one answer a minute)
   setInterval(() => { if (!document.hidden && state.data && state.data.to >= state.data.today) load(); }, 60 * 1000);

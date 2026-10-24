@@ -25,8 +25,8 @@ from conftest import Browser
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "calllog" / "static"
-OWN_SCRIPTS = ("ops-common.js", "hub.js", "system.js")
-PAGES = ("/hub", "/email", "/sla", "/itsm", "/system", "/my")
+OWN_SCRIPTS = ("ops-common.js", "hub.js", "system.js", "sla-analysis.js", "analysis.js")
+PAGES = ("/hub", "/email", "/sla", "/itsm", "/system", "/my", "/analysis")
 NOW = dt.datetime(2026, 10, 11, 9, 0, 0)                      # the conftest `clock`
 
 
@@ -229,7 +229,8 @@ def test_the_older_pages_keep_their_top_bar(admin, emp):
 
 
 @pytest.mark.parametrize("path,main,script", [("/hub", "hub-page", "hub.js"), ("/email", "email-page", "email.js"), ("/sla", "sla-page", "sla.js"),
-                                              ("/itsm", "itsm-page", "itsm.js"), ("/system", "system-page", "system.js")])
+                                              ("/itsm", "itsm-page", "itsm.js"), ("/system", "system-page", "system.js"),
+                                              ("/analysis", "analysis-page", "analysis.js")])
 def test_page_shells(admin, path, main, script):
     page, resp = shell(admin, path)
     assert main in page.ids and "toast" in page.ids
@@ -237,6 +238,22 @@ def test_page_shells(admin, path, main, script):
     assert all(srcs) and srcs[-1].endswith(f"/static/{script}") and any(s.endswith("/static/ops-common.js") for s in srcs)
     assert any(s.endswith("/static/common.js") for s in srcs) and any(l.endswith("/static/ops.css") for l in page.links)
     assert resp.headers["Cache-Control"] == "no-store"
+
+
+def test_the_sla_analysis_lives_in_insights_analysis_and_old_links_follow_it(admin):
+    """Ticketing keeps the live tickets; the SLA Analysis is the "SLA" tab of Insights › Analysis (sla-analysis.js,
+    loaded before analysis.js mounts it). An old link to the Ticketing tab goes there."""
+    analysis, _ = shell(admin, "/analysis")
+    names = [s["src"].rsplit("/", 1)[-1] for s in analysis.scripts]
+    assert names.index("sla-analysis.js") < names.index("analysis.js")
+    assert any(link.endswith("/static/ops-sla.css") for link in analysis.links)
+    ticketing, _ = shell(admin, "/sla")
+    assert "sla-analysis.js" not in [s["src"].rsplit("/", 1)[-1] for s in ticketing.scripts]
+    moved = admin.get("/sla?tab=analysis")
+    assert moved.status_code == 302 and moved.headers["Location"].endswith("/analysis?tab=sla")
+    sla_js = (STATIC / "sla.js").read_text(encoding="utf-8")
+    assert "/analysis?tab=sla" in sla_js and "renderAnalysis" not in sla_js     # #analysis is sent on by the page itself
+    assert "window.SLA_ANALYSIS = { mount }" in (STATIC / "sla-analysis.js").read_text(encoding="utf-8")
 
 
 def test_system_page_has_every_tab_and_home_has_every_section(admin):
@@ -273,7 +290,7 @@ def test_static_files_are_served(app, name, mime):
 def test_every_script_a_page_loads_exists_or_belongs_to_a_page_still_being_written(admin):
     """email.js and my.js are written by the page agents after the foundation; everything else must exist now."""
     later = {"email.js", "my.js"}
-    for path in ("/hub", "/email", "/sla", "/itsm", "/system", "/my?as=admin"):
+    for path in ("/hub", "/email", "/sla", "/itsm", "/system", "/my?as=admin", "/analysis"):
         for s in Shell(admin.get(path).get_data(as_text=True)).scripts:
             name = s["src"].rsplit("/", 1)[-1]
             assert (STATIC / name).is_file() or name in later, (path, name)
