@@ -392,8 +392,8 @@ def test_sla_links_from_home_open_the_linked_requests(tab, hub):
     mine = [r for r in hub["sla"]["requests"] if r["security_user"] == USERS[0]]
     page = t.open(f"/sla?user={USERS[0]}", ".sx-requests tbody tr")
     assert rows(page).count() == len(mine) and text(page, ".sx-count") == f"{len(mine)} of 31 requests"
-    page = t.open("/sla?tab=analysis", "#sx-tab-analysis")
-    expect(page.locator("#sx-tab-analysis")).to_have_attribute("aria-selected", "true")
+    page = t.open("/sla?tab=analysis", "#ax-tab-sla")                         # the SLA Analysis's new place
+    expect(page.locator("#ax-tab-sla")).to_have_attribute("aria-selected", "true")
     t.clean()
 
 
