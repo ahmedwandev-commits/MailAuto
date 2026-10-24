@@ -32,6 +32,7 @@
     filters: { team: "", system: "", assigned: "", carryover: false, escalated: false, q: "" },
     history: null, historyLoaded: false,
     waiting: null, sugSig: null, linkQuery: "",
+    quality: { person: "", reviewer: "" },
   };
   const el = {};
   const tables = {};
@@ -69,14 +70,15 @@
   const stats = () => (state.data && state.data.stats) || {};
   const rows = () => (state.data && state.data.rows) || [];
   const teams = () => (state.options && state.options.teams) || (state.data && state.data.teams) || [];
-  const peopleByTeam = () => {
-    const out = new Map();
+  const peopleByTeam = () => {                          // every team's people; the signed-in manager's own teams first
+    const groups = new Map();
     for (const p of (state.options && state.options.people) || []) {
       const key = p.team || "—";
-      if (!out.has(key)) out.set(key, []);
-      out.get(key).push(p);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p);
     }
-    return out;
+    const mine = (t) => (ROLE !== "admin" && canActOnTeam(t) ? 0 : 1);
+    return new Map([...groups.entries()].sort((a, b) => mine(a[0]) - mine(b[0]) || a[0].localeCompare(b[0])));
   };
 
   // ------------------------------------------------------------------ actions (confirm -> API -> toast -> refetch)
@@ -457,6 +459,22 @@
     }
   }
 
+  // another team's reply on a shared mail arrives without its person, text or rating (the server hides it)
+  function replierCell(r) {
+    if (r.reply_other_team) return h("span", { class: "hint", dir: "auto" }, bidi(`${r.reply_team || "Another"} team`));
+    return bidi(r.first_reply_by || "—");
+  }
+  function ratingCell(r) {
+    if (!r.quality_rating) return h("span", { class: "hint" }, "—");
+    return h("div", { class: "em-rating" },
+      OPS.chip(r.quality_rating, ratingTone(r.quality_rating)),
+      r.rating_withdrawn ? OPS.chip("Withdrawn", "na") : null,
+      r.quality_reviewed_by ? h("span", { class: "hint", dir: "auto" }, bidi(`by ${r.quality_reviewed_by}`)) : null);
+  }
+  /** The same rule as the server: a reply written by a team member (not a manager), of a team the viewer looks after. */
+  const canRate = (r) => r.status === "Replied" && !r.reply_by_manager && !r.reply_other_team
+    && [r.team, ...(r.all_teams || [])].some((t) => t && canActOnTeam(t));
+
   function repliedTable() {
     const now = state.meta && state.meta.server_time;
     const canReview = ROLE === "admin" || ROLE === "manager";
@@ -468,13 +486,14 @@
         { key: "subject", label: "Subject", render: (r) => bidi(r.subject || "(no subject)"), text: (r) => r.subject },
         { key: "customer_name", label: "Customer", render: (r) => bidi(r.customer_name || "—"), text: (r) => r.customer_name },
         { key: "team", label: "Team", render: (r) => bidi(r.team), text: (r) => r.team },
-        { key: "first_reply_by", label: "Replied by", render: (r) => bidi(r.first_reply_by || "—"), text: (r) => r.first_reply_by },
+        { key: "first_reply_by", label: "Replied by", render: replierCell, text: (r) => (r.reply_other_team ? `${r.reply_team} team` : r.first_reply_by) },
         { key: "response_minutes", label: "Response", num: true, sort: true, render: (r) => OPS.fmtDuration(r.response_minutes) },
         { key: "sla_status", label: "SLA", render: (r) => OPS.statusChip(r.sla_status), text: (r) => r.sla_status },
-        { key: "quality_rating", label: "Quality", render: (r) => (r.quality_rating ? OPS.chip(r.quality_rating, r.quality_rating === "Needs Improvement" ? "warn" : "ok") : h("span", { class: "hint" }, "—")), text: (r) => r.quality_rating },
+        { key: "quality_rating", label: "Quality", render: ratingCell,
+          text: (r) => [r.quality_rating, r.quality_reviewed_by].filter(Boolean).join(" by ") },
         { key: "actions", label: "", render: (r) => h("div", { class: "op-row-actions" },
           h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); openMail(r); } }, OPS.icon("mail"), "Open"),
-          (canReview && !r.reply_by_manager && canActOnTeam(r.team)
+          (canReview && canRate(r)
             ? h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); reviewDialog(r); } }, r.quality_rating ? "Re-review" : "Review")
             : null)) },
       ],
@@ -494,7 +513,7 @@
   }
 
   // ------------------------------------------------------------------ Quality tab
-  const ratingTone = (rt) => (rt === "Needs Improvement" ? "warn" : rt === "Excellent" ? "ok" : "info");
+  function ratingTone(rt) { return rt === "Needs Improvement" ? "warn" : rt === "Excellent" ? "ok" : "info"; }
 
   async function decideAppeal(row, decision) {
     const accept = decision === "Accepted";
@@ -513,8 +532,8 @@
   }
 
   /** The appeals card: every person who disagreed with a rating, the ones still waiting with Accept / Reject, then the decided ones. */
-  function appealsCard() {
-    const all = rows().filter((r) => r.quality_appeal);
+  function appealsCard(keep) {
+    const all = rows().filter((r) => r.quality_appeal && (!keep || keep(r)));
     if (!all.length) return null;
     const waiting = all.filter((r) => !r.appeal_decision);
     const decided = all.filter((r) => r.appeal_decision);
@@ -522,12 +541,13 @@
       h("div", { class: "em-appeal-head" },
         OPS.chip(r.quality_rating || "—", ratingTone(r.quality_rating)),
         h("strong", { class: "em-appeal-subj", dir: "auto" }, bidi(r.subject || "(no subject)")),
-        r.replied_by ? h("span", { class: "hint", dir: "auto" }, bidi(r.replied_by)) : null,
-        r.team ? h("span", { class: "hint" }, bidi(r.team)) : null),
+        r.first_reply_by ? h("span", { class: "hint", dir: "auto" }, bidi(r.first_reply_by)) : null,
+        r.team ? h("span", { class: "hint" }, bidi(r.team)) : null,
+        r.quality_reviewed_by ? h("span", { class: "hint", dir: "auto" }, bidi(`rated by ${r.quality_reviewed_by}`)) : null),
       r.quality_reasons ? h("p", { class: "em-appeal-reasons hint", dir: "auto" }, bidi(r.quality_reasons)) : null,
       h("p", { class: "em-appeal-text", dir: "auto" }, bidi(r.quality_appeal)),
       withActions
-        ? (canActOnTeam(r.team)
+        ? ([r.team, ...(r.all_teams || [])].some((t) => t && canActOnTeam(t))   // the same rule as the server
             ? h("div", { class: "op-row-actions" },
                 h("button", { type: "button", class: "btn btn-primary btn-sm", onclick: () => decideAppeal(r, "Accepted") }, OPS.icon("check"), "Accept"),
                 h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: () => decideAppeal(r, "Rejected") }, "Reject"))
@@ -543,17 +563,88 @@
     return OPS.card("Quality appeals", { hint: waiting.length ? `${fmtNum(waiting.length)} waiting for a decision` : "all decided" }, body);
   }
 
+  const personKey = (r) => String(r.first_reply_email || r.first_reply_by || "").toLowerCase();
+
+  /** Employee + reviewer pickers of the Quality tab: the people who replied (of the viewer's own teams - another team's
+      reply never reaches this page) and the managers who rated. */
+  function qualityFilters(replied, rated) {
+    const people = new Map();
+    for (const r of replied) if (personKey(r) && !people.has(personKey(r))) people.set(personKey(r), r.first_reply_by || r.first_reply_email);
+    const reviewers = [...new Set(rated.map((r) => r.quality_reviewed_by).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const qf = state.quality;
+    if (qf.person && !people.has(qf.person)) qf.person = "";
+    if (qf.reviewer && !reviewers.includes(qf.reviewer)) qf.reviewer = "";
+    const personSel = h("select", { "aria-label": "Employee", onchange: (e) => { qf.person = e.target.value; renderQuality(); } },
+      h("option", { value: "" }, "Every employee"),
+      [...people.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1])))
+        .map(([k, name]) => h("option", { value: k, selected: k === qf.person }, name)));
+    const reviewerSel = h("select", { "aria-label": "Rated by", onchange: (e) => { qf.reviewer = e.target.value; renderQuality(); } },
+      h("option", { value: "" }, "Every reviewer"),
+      reviewers.map((n) => h("option", { value: n, selected: n === qf.reviewer }, n)));
+    const clear = (qf.person || qf.reviewer)
+      ? h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: () => { qf.person = ""; qf.reviewer = ""; renderQuality(); } }, "Clear")
+      : null;
+    return h("div", { class: "em-qfilters" },
+      h("label", { class: "em-field em-inline" }, h("span", {}, "Employee"), personSel),
+      h("label", { class: "em-field em-inline" }, h("span", {}, "Rated by"), reviewerSel), clear);
+  }
+
+  function ratedTable(list) {
+    return OPS.table({
+      search: true, searchPlaceholder: "Search subject, employee, reviewer…", copy: true, caption: "Rated replies",
+      pageSize: 10, pageSizes: [10, 25, 50], rowKey, onRowClick: openMail,
+      sort: { key: "quality_reviewed_at", desc: true },
+      columns: [
+        { key: "subject", label: "Subject", render: (r) => bidi(r.subject || "(no subject)"), text: (r) => r.subject },
+        { key: "first_reply_by", label: "Replied by", render: replierCell, text: (r) => r.first_reply_by },
+        { key: "team", label: "Team", render: (r) => bidi(r.team), text: (r) => r.team },
+        { key: "quality_rating", label: "Rating", render: (r) => h("div", { class: "em-rating" },
+          OPS.chip(r.quality_rating, ratingTone(r.quality_rating)), r.rating_withdrawn ? OPS.chip("Withdrawn", "na") : null),
+          text: (r) => r.quality_rating },
+        { key: "quality_reasons", label: "Reasons", render: (r) => (r.quality_reasons ? h("span", { dir: "auto" }, bidi(r.quality_reasons)) : h("span", { class: "hint" }, "—")), text: (r) => r.quality_reasons },
+        { key: "quality_reviewed_at", label: "Rated by", render: (r) => h("div", {}, bidi(r.quality_reviewed_by || "—"),
+          r.quality_reviewed_at ? h("div", { class: "hint" }, OPS.fmtWhen(r.quality_reviewed_at, state.meta && state.meta.server_time)) : null),
+          text: (r) => r.quality_reviewed_by, sort: (r) => String(r.quality_reviewed_at || "") },
+        { key: "quality_appeal", label: "Appeal", render: (r) => (r.quality_appeal
+          ? OPS.chip(r.appeal_decision ? `Appeal ${r.appeal_decision.toLowerCase()}` : "Appeal waiting", r.appeal_decision === "Accepted" ? "ok" : "info")
+          : h("span", { class: "hint" }, "—")), text: (r) => (r.quality_appeal ? r.appeal_decision || "waiting" : "") },
+        { key: "actions", label: "", render: (r) => (canRate(r)
+          ? h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); reviewDialog(r); } }, "Re-review")
+          : null) },
+      ],
+      rows: list,
+      empty: (filtered) => ({ title: filtered ? "No rated reply matches" : "No rated replies", icon: "check",
+        text: filtered ? "Try clearing the search." : "Ratings given from the Replied tab show here, with who rated them." }),
+    }).el;
+  }
+
   function renderQuality() {
     const q = (state.data && state.data.quality) || {};
-    const sq = stats().quality || {};
+    const qf = state.quality;
+    const replied = rows().filter((r) => r.status === "Replied" && !r.reply_other_team && !r.reply_by_manager);
+    const ratedAll = rows().filter((r) => r.quality_rating && !r.reply_other_team);
+    const filters = qualityFilters(replied, ratedAll);
+    const keep = (r) => (!qf.person || personKey(r) === qf.person) && (!qf.reviewer || r.quality_reviewed_by === qf.reviewer);
+    const rated = ratedAll.filter(keep);
+    let sq = stats().quality || {};
+    if (qf.person || qf.reviewer) {                     // the KPIs of the chosen employee / reviewer, from the rows
+      const counted = rated.filter((r) => !r.rating_withdrawn);
+      const base = replied.filter((r) => !qf.person || personKey(r) === qf.person).length;
+      sq = { reviewed: counted.length, coverage_rate: base ? (100 * counted.length) / base : 0,
+        excellent: counted.filter((r) => r.quality_rating === "Excellent").length,
+        good: counted.filter((r) => r.quality_rating === "Good").length,
+        needs_improvement: counted.filter((r) => r.quality_rating === "Needs Improvement").length,
+        appeals: rated.filter((r) => r.quality_appeal).length };
+    }
     const kpis = h("div", { class: "em-kpis" },
       OPS.kpi({ label: "Reviewed", value: fmtNum(sq.reviewed || 0), sub: OPS.fmtPct(sq.coverage_rate) + " coverage", icon: "check" }),
       OPS.kpi({ label: "Excellent", value: fmtNum(sq.excellent || 0), tone: "ok", icon: "check" }),
       OPS.kpi({ label: "Good", value: fmtNum(sq.good || 0), icon: "check" }),
       OPS.kpi({ label: "Needs improvement", value: fmtNum(sq.needs_improvement || 0), tone: sq.needs_improvement ? "warn" : null, icon: "alert" }),
-      OPS.kpi({ label: "Appeals waiting", value: fmtNum(rows().filter((r) => r.quality_appeal && !r.appeal_decision).length),
+      OPS.kpi({ label: "Appeals waiting", value: fmtNum(rows().filter((r) => r.quality_appeal && !r.appeal_decision && keep(r)).length),
         sub: `${fmtNum(sq.appeals || 0)} in all`, icon: "info" }));        // the same "waiting" number as Home's attention list
-    const scorecard = Array.isArray(q.scorecard) ? q.scorecard : [];
+    const personName = qf.person ? (replied.find((r) => personKey(r) === qf.person) || {}).first_reply_by : "";
+    const scorecard = (Array.isArray(q.scorecard) ? q.scorecard : []).filter((e) => !qf.person || e.name === personName);
     let board;
     if (!scorecard.length) {
       board = OPS.emptyState({ title: "No quality reviews yet", icon: "activity",
@@ -573,8 +664,10 @@
         rows: scorecard,
       }).el;
     }
-    const appeals = appealsCard();
-    el.panels.quality.replaceChildren(...[kpis, appeals, OPS.card("Quality", { hint: "from the daily reviews" }, board)].filter(Boolean));
+    const appeals = appealsCard(keep);
+    const ratedCard = OPS.card("Rated replies", { hint: `${fmtNum(rated.length)} rated · who rated each one` }, ratedTable(rated));
+    el.panels.quality.replaceChildren(...[filters, kpis, appeals, ratedCard,
+      OPS.card("Quality scorecard", { hint: "per person, from the reviews" }, board)].filter(Boolean));
   }
 
   // ------------------------------------------------------------------ Trends tab
@@ -611,6 +704,8 @@
 
   // ------------------------------------------------------------------ Unclassified tab
   function unclassifiedRows() {
+    // a manager's own view holds only their teams; the server sends the Unclassified mails separately for them
+    if (state.answer && Array.isArray(state.answer.unclassified)) return state.answer.unclassified;
     return rows().filter((r) => normAr(r.team) === normAr("Unclassified"));
   }
   function renderUnclassified() {
@@ -628,6 +723,8 @@
         { key: "mailbox", label: "Sent to", render: (r) => bidi(r.mailbox || "—"), text: (r) => r.mailbox },
         { key: "actions", label: "", render: (r) => h("div", { class: "op-row-actions" },
           h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); changeTeamDialog(r); } }, "Assign team"),
+          r.status !== "Replied" ? h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); assignDialog(r); } }, "Assign person") : null,
+          r.status !== "Replied" ? h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); noActionDialog(r); } }, "No action") : null,
           h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); ruleDialog(systemsOf(r)[0] || ""); } }, "Create rule")) },
       ],
       rows: list,

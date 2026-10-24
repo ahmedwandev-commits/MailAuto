@@ -101,6 +101,32 @@ def profile_dir(leaf):
     return os.path.join(base or tempfile.gettempdir(), "NBE-Ops", leaf)
 
 
+def profile_in_use(profile):
+    """Is a browser still running on this job's profile? Chrome holds ``lockfile`` open while it runs (Windows): a
+    file that cannot be removed means yes. Anything unexpected counts as yes (then the old sweep runs)."""
+    if os.name != "nt":
+        return False
+    lock = os.path.join(str(profile), "lockfile")
+    try:
+        if not os.path.exists(lock):
+            return False
+        os.remove(lock)                          # a stale lock of a browser that is gone: removing it is harmless
+        return False
+    except OSError:
+        return True
+
+
+def kill_tree(pid):
+    """End one process and every process it started (Windows: taskkill /T), without PowerShell. Never raises."""
+    if os.name != "nt" or not pid:
+        return
+    try:
+        subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"], creationflags=CREATE_NO_WINDOW, timeout=15,
+                       capture_output=True)
+    except Exception:
+        pass
+
+
 def kill_profile_browsers(profile):
     """Close any Chrome / Edge started with this job's profile (never the user's normal browser). Windows only."""
     if os.name != "nt":
@@ -243,8 +269,8 @@ class CdpBrowser:
                            "sla.browser_executable in collector_config.json to the full path of msedge.exe / chrome.exe.")
         self.profile = str(cfg.get("profile_dir") or profile_dir(profile_leaf))
         os.makedirs(self.profile, exist_ok=True)
-        kill_profile_browsers(self.profile)
-        if os.name == "nt":
+        if profile_in_use(self.profile):         # a browser of an earlier run is still alive on this profile
+            kill_profile_browsers(self.profile)
             _sleep(1)
         self.log(f"browser: {os.path.basename(exe)} (headless={headless}) on port {self.port}")
         try:
@@ -360,7 +386,7 @@ class CdpBrowser:
                     return
             except Exception:
                 pass
-            _sleep(0.2)
+            _sleep(0.1)
 
     def wait_url(self, predicate, timeout=30):
         """Wait until ``predicate(current_url)`` is true. Returns the URL, or raises on timeout."""
@@ -390,9 +416,11 @@ class CdpBrowser:
             self.ws.close()
             self.ws = None
         if self.proc is not None:
+            kill_tree(self.proc.pid)             # the browser and its helper processes, at once
             self._stop(self.proc)
             self.proc = None
-        kill_profile_browsers(self.profile) if self.profile else None
+        if self.profile and profile_in_use(self.profile):
+            kill_profile_browsers(self.profile)  # something survived (a hand-over to another instance): the old sweep
 
     @staticmethod
     def _stop(proc):

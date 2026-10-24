@@ -71,11 +71,11 @@
   }
 
   // --------------------------------------------------------- one rule
-  function ruleEditor(rule, members, apps, onRemove) {
+  function ruleEditor(rule, members, apps, onRemove, kind) {
     rule.employees = rule.employees || [];
-    rule.applications = rule.applications || [];
+    rule.applications = kind === "email" ? [] : (rule.applications || []);   // e-mail: every pending mail of the team
     const emp = checkGroup(members.map((m) => ({ value: m.email, label: m.name })), rule.employees, "Employees");
-    const appCtrl = apps.length
+    const appCtrl = kind === "email" ? null : apps.length
       ? checkGroup(apps.map((a) => ({ value: a, label: a })), rule.applications, "Applications")
       : h("p", { class: "muted" }, "No applications set for this team — this rule covers every item.");
     const from = h("input", { type: "time", value: rule.from || "", "aria-label": "Active from" });
@@ -86,7 +86,8 @@
       h("div", { class: "aa-rule-head" }, h("strong", {}, "Rule"),
         h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: onRemove }, I("x"), "Remove")),
       h("div", { class: "aa-field" }, h("label", {}, "Send to"), emp),
-      h("div", { class: "aa-field" }, h("label", {}, "For applications"), appCtrl),
+      appCtrl ? h("div", { class: "aa-field" }, h("label", {}, "For applications"), appCtrl)
+        : h("p", { class: "hint" }, "Every pending e-mail of the team is shared between these members (the least loaded first)."),
       h("div", { class: "aa-field aa-times" }, h("label", {}, "Active window"), from, h("span", { class: "muted" }, "to"), to,
         h("span", { class: "hint" }, "leave empty for all day")));
   }
@@ -105,7 +106,7 @@
     const rulesWrap = h("div", { class: "aa-rules" });
     function drawRules() {
       rulesWrap.replaceChildren(...(block.rules.length
-        ? block.rules.map((r, i) => ruleEditor(r, members, apps, () => { block.rules.splice(i, 1); drawRules(); }))
+        ? block.rules.map((r, i) => ruleEditor(r, members, apps, () => { block.rules.splice(i, 1); drawRules(); }, kind))
         : [h("p", { class: "muted" }, "No rules yet — add one to start distributing.")]));
     }
     drawRules();

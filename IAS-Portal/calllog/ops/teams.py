@@ -64,6 +64,14 @@ class Resolver:
             self._cache[key] = team
         return self._cache[key]
 
+    def application_team(self, system):
+        """The team an APPLICATION belongs to, whoever holds the request: the administrator's application list, else the
+        classification keywords in its name ("" = none)."""
+        key = ("app", _key(system))
+        if key not in self._cache:
+            self._cache[key] = self._apps.get(key[1], "") or (self._keywords(system) if key[1] else "")
+        return self._cache[key]
+
     def itsm_team(self, role):
         """The team of one ITSM role ("" = no team found)."""
         key = ("itsm", _key(role))
@@ -79,6 +87,27 @@ class Resolver:
                 team = self._keywords(role)
             self._cache[key] = team
         return self._cache[key]
+
+
+def sla_exclusion(sla_settings, resolver):
+    """``excluded(system) -> bool`` for the SLA and the SLA Analysis: an application in ``sla.exclude_applications``, or
+    one whose team (``Resolver.application_team``) is in ``sla.exclude_teams`` (by default the Third Party team and its
+    applications). None when nothing is excluded."""
+    cfg = sla_settings or {}
+    teams_out = {_key(t).casefold() for t in cfg.get("exclude_teams") or [] if _key(t)}
+    apps_out = {_key(a).casefold() for a in cfg.get("exclude_applications") or [] if _key(a)}
+    if not teams_out and not apps_out:
+        return None
+
+    def excluded(system):
+        name = _key(system).casefold()
+        if not name:
+            return False
+        if name in apps_out:
+            return True
+        team = resolver.application_team(system)
+        return bool(team) and _key(team).casefold() in teams_out
+    return excluded
 
 
 def in_scope(scope, team):

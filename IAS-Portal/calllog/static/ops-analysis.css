@@ -1,0 +1,48 @@
+/* Analysis page (/analysis): calls, e-mails, tickets and change requests over time. Colours come from the ops.css
+   palette (--op-c0..c4), so light and dark themes both work. No inline styles (strict CSP). */
+.ax-c0 { --tone: var(--op-c0); }
+.ax-c1 { --tone: var(--op-c1); }
+.ax-c2 { --tone: var(--op-c2); }
+.ax-c3 { --tone: var(--op-c3); }
+.ax-c4 { --tone: var(--op-c4); }
+
+.ax-filter { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; margin: 4px 0 10px; }
+.ax-f { display: flex; flex-direction: column; gap: 3px; font-size: 0.82rem; color: var(--muted); }
+.ax-f input, .ax-f select { font-size: 0.9rem; }
+.ax-f-inline { max-width: 340px; margin-bottom: 10px; }
+.ax-quality-sum { margin-bottom: 14px; }
+.ax-presets button { white-space: nowrap; }
+.ax-tabs { margin-bottom: 12px; }
+
+.ax-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+@media (max-width: 1200px) { .ax-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .ax-grid { grid-template-columns: minmax(0, 1fr); } }
+.ax-mod { border-top: 3px solid var(--tone, var(--hair)); display: grid; gap: 8px; align-content: start; }
+.ax-mod-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.ax-big { font-size: 2rem; line-height: 1.1; color: var(--ink); }
+.ax-mod .op-spark { max-width: 100%; height: auto; }
+.ax-defs { margin: 0; }
+
+.ax-chart { width: 100%; }
+.ax-cols { width: 100%; height: 200px; display: block; }
+.ax-gridline { stroke: var(--hair); stroke-width: 1; }
+.ax-axis { fill: var(--muted); font-size: 11px; }
+.ax-bar { fill: color-mix(in srgb, var(--tone, var(--op-c0)) 70%, var(--surface)); }
+.ax-bar.ax-hot { fill: var(--tone, var(--op-c0)); }
+.ax-bar.ax-missing { fill: color-mix(in srgb, var(--muted) 18%, transparent); }
+.ax-bar:hover { fill: var(--tone, var(--op-c0)); }
+.ax-line { stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; opacity: 0.75; }
+
+.ax-heat-wrap { overflow-x: auto; }
+.ax-heat { border-collapse: separate; border-spacing: 2px; font-size: 0.75rem; }
+.ax-heat th { color: var(--muted); font-weight: 600; text-align: center; padding: 0 2px; }
+.ax-heat th[scope="row"] { text-align: right; padding-right: 6px; }
+.ax-cell { width: 22px; height: 18px; border-radius: 3px; padding: 0; }
+.ax-h0 { background: color-mix(in srgb, var(--muted) 10%, var(--surface)); }
+.ax-h1 { background: color-mix(in srgb, var(--op-c0) 20%, var(--surface)); }
+.ax-h2 { background: color-mix(in srgb, var(--op-c0) 40%, var(--surface)); }
+.ax-h3 { background: color-mix(in srgb, var(--op-c0) 60%, var(--surface)); }
+.ax-h4 { background: color-mix(in srgb, var(--op-c0) 80%, var(--surface)); }
+.ax-h5 { background: var(--op-c0); }
+.ax-legend { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
+.ax-key { display: inline-block; width: 14px; height: 12px; border-radius: 3px; }

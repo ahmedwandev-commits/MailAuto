@@ -169,7 +169,8 @@
     const [tone, label] = STATUS_CHIPS[status] || ["na", String(status || "—")];
     return chip(label, tone);
   }
-  const JOB_LABELS = { email: "E-mail scan", email_report: "E-mail daily report", sla: "Ticketing", itsm: "ITSM" };
+  const JOB_LABELS = { email: "E-mail scan", email_report: "E-mail daily report", sla: "Ticketing", itsm: "ITSM",
+    daily_summary: "Daily summary" };
   /** Chip for one collector job (an entry of `collectors` in /api/ops/overview or `jobs` in /api/ops/jobs). */
   function jobChip(job) {
     if (!job || !job.present) return chip("Not started", "na", "dash");
@@ -748,7 +749,21 @@
           h("ul", {}, m.attachments.map((at) => h("li", {}, CL.bidi(at.name || "file"), h("span", { class: "hint" }, " " + fmtBytes(at.size)))))) : null;
       // The employee's reply next to the original, so the manager can review it (m.reply is absent until someone replies).
       const r = m.reply;
-      const replyBlock = r ? h("div", { class: "op-mv-reply" },
+      const q = m.quality;
+      const qualityBlock = q && q.rating ? h("div", { class: "op-mv-quality" },
+        h("div", { class: "op-mv-reply-h" }, icon("check"), h("span", {}, "Quality review"),
+          chip(q.rating, q.rating === "Needs Improvement" ? "warn" : q.rating === "Excellent" ? "ok" : "info"),
+          q.withdrawn ? chip("Withdrawn", "na") : null),
+        h("div", { class: "op-mv-reply-sub", dir: "auto" },
+          CL.bidi(["Rated by " + (q.reviewed_by || "a manager"), q.reviewed_at ? fmtWhen(q.reviewed_at, null) : ""].filter(Boolean).join(" · "))),
+        q.reasons ? h("p", { class: "hint", dir: "auto" }, CL.bidi(q.reasons)) : null,
+        q.note ? h("p", { dir: "auto" }, CL.bidi(q.note)) : null,
+        q.appeal ? h("p", { class: "hint", dir: "auto" }, CL.bidi(`Appeal${q.appeal_decision ? ` (${q.appeal_decision.toLowerCase()})` : " (waiting)"}: ${q.appeal}`)) : null) : null;
+      const replyBlock = r && r.hidden ? h("div", { class: "op-mv-reply" },
+        h("div", { class: "op-mv-reply-h" }, icon("reply"), h("span", {}, "Reply")),
+        h("p", { class: "hint", dir: "auto" }, CL.bidi(`Answered by ${r.team ? `the ${r.team} team` : "another team"}`
+          + (r.at ? ` · ${fmtWhen(r.at, null)}` : "") + ". Another team's reply is not shown.")))
+        : r ? h("div", { class: "op-mv-reply" },
         h("div", { class: "op-mv-reply-h" }, icon("reply"), h("span", {}, "Employee's reply"),
           r.by_manager ? chip("Manager reply", "na", "user") : null),
         (() => {
@@ -763,7 +778,7 @@
       const origHead = r ? h("div", { class: "op-mv-reply-h op-mv-orig-h" }, icon("mail"), h("span", {}, "Original e-mail")) : null;
       bodyEl.replaceChildren(...[h("div", { class: "op-mv-chips-wrap" }, chips), meta, note, origHead,
         h("div", { class: "op-mv-text", dir: "auto" }, m.body_text || "(no message text)"),
-        m.truncated ? h("p", { class: "hint" }, "The text is shortened - download the .msg for the full message.") : null, atts, replyBlock].filter(Boolean));
+        m.truncated ? h("p", { class: "hint" }, "The text is shortened - download the .msg for the full message.") : null, atts, replyBlock, qualityBlock].filter(Boolean));
       const can = m.can || {}, btns = [];
       if (can.download) btns.push(h("a", { class: "btn btn-primary", href: `/api/ops/email/message/download?message_id=${enc}`, download: "" }, icon("download"), "Download .msg"));
       if (can.prepare) btns.push(h("button", { type: "button", class: "btn btn-ghost", onclick: () => withHost(async () => { await api("POST", "/api/ops/email/message/prepare", { message_id: messageId }); toast("Asked the collector to prepare the copy."); }) }, icon("refresh"), "Prepare now"));

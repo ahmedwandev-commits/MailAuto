@@ -39,7 +39,7 @@ Admin and employee pages share one **Team status** strip (counts only: calls tod
    }
    ```
 
-   Anything written here wins over the same setting saved from the web page. Only the collector reads this file (never the web server); it is not part of the ZIP and not in git.
+   Anything written here wins over the same setting saved from the web page. Only the collector reads this file (never the web server); it is never in git, and a ZIP only ever carries it with the user names filled in and the **passwords empty** for you to type.
    Prefer not to keep a password in a file? Leave it out and run `python collector.py --set-password sla` (and `itsm`): it goes to Windows Credential Manager.
 3. `python collector.py --check` tells you what is configured and what is missing (it never prints a password).
 4. Bring your old settings over once: `python manage.py import-legacy --email <old e-mail script> --sla <old SLA script> --itsm <old ITSM script>`
@@ -48,6 +48,20 @@ Admin and employee pages share one **Team status** strip (counts only: calls tod
    `python collector.py --start` runs it in the background, `--install-autostart` starts it at every Windows log-in, `--status` / `--stop` manage it,
    `--service` is a small supervisor that restarts it if it ever stops.
 6. Sign in as `admin` -> **System**: Collectors (online? last scan, next run, *Run now*), Settings (teams, recipients, schedule, SLA and ITSM options, **Classification**), Logs, Reports, Health.
+
+## The SLA (Ticketing)
+
+* **Every SLA number comes from the SSO portal only** - the Re-Assign queue (live tickets) and, for the SLA Analysis,
+  «الاستفسار عن الطلبات» with each request's «الحالة التاريخية للطلب» (who did each step, when). Nothing is read from
+  the FlexCube database and nothing is uploaded. The collector drives the PC's Edge / Chrome over the DevTools protocol
+  (`calllog/ops/engines/cdp.py`) - no Selenium, no Playwright.
+* The SLA = the first assignment («اسناد لمستخدم السرية») -> the reviewer's confirmation («تم التعزيز»); each stage of a
+  request (branch approval, region / sector approval, waiting to be assigned, security user, reviewer, whole request) is
+  timed against its own target (System › Settings › Ticketing › SLA recording).
+* Speed: a request's details are opened with the portal's own `__doPostBack` (one post-back per request, no clicks, no
+  closing, no fixed waits); the history read stops at `sla.history_seconds` (default 180 s, always inside the scan's own
+  time limit) and keeps everything it read; a request whose details cannot be read is tried twice, then left until its
+  status changes. Each scan logs its timing (seconds per request, the slowest one, why it stopped).
 
 ## The Unclassified e-mails
 

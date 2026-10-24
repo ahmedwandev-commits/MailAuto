@@ -280,6 +280,58 @@ class OpsStore:
         return self._update_json(self.sla_records_path, "sla_records", lambda: {"config": {}, "records": {}}, change,
                                  compact=True)
 
+    # ------------------------------------------------- SLA history (the portal's status history, kept for good)
+    # ops/sla_history/state.json        {"open": {request no: record}, "index": {grid key: {id, status, day}},
+    #                                    "grid": {grid key: current row}, "last_history", "history_stats", "history_error"}
+    # ops/sla_history/closed/<day>.json {request no: record} - the requests the reviewer confirmed that day
+    # One file per day keeps every write small and lets a period read only its own days, however long the history.
+    @property
+    def sla_history_dir(self):
+        return self.root / "sla_history"
+
+    def _sla_closed_path(self, day):
+        if not schemas.is_iso_day(day):
+            raise ValueError(f"bad day {day!r}")
+        return self.sla_history_dir / "closed" / f"{day}.json"
+
+    def read_sla_history_state(self):
+        return self.read_json(self.sla_history_dir / "state.json", None) or {"open": {}, "index": {}, "grid": {}}
+
+    def update_sla_history_state(self, change):
+        return self._update_json(self.sla_history_dir / "state.json", "sla_history",
+                                 lambda: {"open": {}, "index": {}, "grid": {}}, change, compact=True)
+
+    def read_sla_closed_day(self, day):
+        return self.read_json(self._sla_closed_path(day), None, watch=False) or {}
+
+    def update_sla_closed_day(self, day, change):
+        return self._update_json(self._sla_closed_path(day), "sla_history_day", lambda: {}, change, compact=True)
+
+    def sla_closed_days(self):
+        """The days that have closed requests, oldest first."""
+        folder = self.sla_history_dir / "closed"
+        if not folder.is_dir():
+            return []
+        return sorted(p.stem for p in folder.glob("*.json") if schemas.is_iso_day(p.stem))
+
+    def drop_sla_closed_day(self, day):
+        with contextlib.suppress(FileNotFoundError):
+            self._sla_closed_path(day).unlink()
+        with self._cache_lock:
+            self._cache.pop(str(self._sla_closed_path(day)), None)
+
+    # ------------------------------------------------- analysis: long-term counters (ops/analytics/<name>.json)
+    def _analytics_path(self, name):
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,39}", str(name or "")):
+            raise ValueError(f"bad analytics name {name!r}")
+        return self.root / "analytics" / f"{name}.json"
+
+    def read_analytics(self, name):
+        return self.read_json(self._analytics_path(name), None) or {}
+
+    def update_analytics(self, name, change):
+        return self._update_json(self._analytics_path(name), f"analytics-{name}", lambda: {}, change, compact=True)
+
     def read_itsm_records(self):
         """The LIVE ITSM change-request recording: ``{"last_generated": iso, "records": {co_number: lifecycle}}``."""
         return self.read_json(self.itsm_records_path, None) or {"last_generated": "", "records": {}}

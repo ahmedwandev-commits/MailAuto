@@ -46,7 +46,7 @@ from .common import OUTLOOK_LOCK, JobResult, fmt_minutes
 from .email_rules import (
     UNCLASSIFIED, Directory, build_quality_leaderboard, build_quality_scorecard, build_rules,
     build_speed_quality_matrix, build_team_quality_index, candidate_words, clean_subject, format_duration,
-    get_effective_body_text, norm_email, norm_set, safe_percent, strip_signature_block, to_int)
+    get_effective_body_text, norm_email, norm_set, safe_percent, strip_signatures_per_message, to_int)
 
 PR_SMTP_ADDRESS = "http://schemas.microsoft.com/mapi/proptag/0x39FE001E"
 PR_INTERNET_MESSAGE_ID = "http://schemas.microsoft.com/mapi/proptag/0x1035001E"
@@ -478,7 +478,7 @@ def _read_item(item, cfg, root, folder, received, seen_ids, keep_mail_items, sto
         "clean_subject": clean_subject(subject),
         "body": effective[:BODY_KEEP_CHARS],
         # the quoted history too: detection falls back to it when the newest text names no system
-        "full_thread_body": strip_signature_block(raw_body).strip()[:THREAD_KEEP_CHARS],
+        "full_thread_body": strip_signatures_per_message(raw_body).strip()[:THREAD_KEEP_CHARS],
         "sender_name": str(item.SenderName or ""),
         "sender_email": sender_email,
         "received_time": received,

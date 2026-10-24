@@ -17,8 +17,7 @@ _ALLOWED_WHEN_PASSWORD_DUE = {"pages.password", "pages.logout", "static"}
 
 DEFAULT_UPLOAD_LIMIT = 2 * 1024 * 1024
 # The IP phone directory export (~42,000 rows) is bigger than the 2 MB every other request may carry: this route only.
-LARGE_UPLOADS = {("POST", "/api/admin/ip-phones/import"): 20 * 1024 * 1024,
-                 ("POST", "/api/ops/sla-feed/upload"): 60 * 1024 * 1024}     # the portal's whole-year ALL_*.csv
+LARGE_UPLOADS = {("POST", "/api/admin/ip-phones/import"): 20 * 1024 * 1024}
 
 
 class AppRequest(Request):
@@ -82,7 +81,6 @@ def start_refresher(app, interval=1.0):
                 ops_api.email_view(email, None, ovr, False, rev)                 # the administrators' view of the mails
                 ops_api.apply_email_auto_assign()                                # distribute pending team mail by the rules
             ops_api.calls_totals(app.config["CLOCK"]().date().isoformat())
-            ops_api.apply_sla_feed()                                         # fold any configured SLA export feed into the recording
             try:
                 ops_api.apply_sla_scan()                                     # fold the live SLA scan so the analysis is live
             except Exception:                                                # never let recording break warm-up
@@ -91,6 +89,7 @@ def start_refresher(app, interval=1.0):
                 ops_api.apply_itsm_scan()                                    # fold the latest ITSM scan into the CR recording
             except Exception:                                                # never let recording break warm-up
                 app.logger.exception("ITSM recording during warm-up failed")
+            ops_api.apply_email_intake()                                     # the Analysis page's e-mail intake (never raises)
 
     try:
         warm()
@@ -176,6 +175,8 @@ def create_app(overrides=None):
             "script-src 'self'; frame-ancestors 'none'; form-action 'self'")
         if request.endpoint != "static":
             resp.headers["Cache-Control"] = "no-store"
+        else:       # re-validate every time (an unchanged file is a tiny 304), so an update reaches every browser at once
+            resp.headers["Cache-Control"] = "no-cache"
         return resp
 
     app.register_error_handler(ApiError, api_error_response)

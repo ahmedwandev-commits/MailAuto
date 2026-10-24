@@ -27,7 +27,7 @@ from .. import auth, overview as calls_overview, stats as call_stats
 from ..api import public_user
 from ..queries import ApiError, decorate, json_body, parse_day, reasons_by_key
 from ..storage import STATUSES, StorageError, norm_uid
-from . import auto_assign, health, itsm_records, mailbox, notifications, overlay, schemas, sla_records, teams
+from . import analytics, auto_assign, health, itsm_records, mailbox, notifications, overlay, schemas, sla_history, sla_records, teams
 from . import settings as hub_settings
 from .engines import common
 from .engines.common import norm_arabic
@@ -246,8 +246,9 @@ def email_view(snap, scope_team=None, ovr=None, hide_unclassified=False, rev=Non
     hit = cache.get(key)
     if hit is not None and hit[0] is snap:
         return hit[1]
-    view = overlay.view_email_data(snap.get("data") or {}, ovr, scope, now,
-                                   rows=overlaid_rows(snap, ovr, rev), hide_unclassified=hide_unclassified)
+    view = overlay.view_email_data(snap.get("data") or {}, ovr, scope, now, rows=overlaid_rows(snap, ovr, rev),
+                                   hide_unclassified=hide_unclassified,
+                                   person_teams=person_teams() if scope is not None else None)
     _remember(cache, key, snap, view)
     return view
 
@@ -270,7 +271,8 @@ def team_mail(snap, scope, ovr=None, rev=None):
     hit = cache.get(key)
     if hit is not None and hit[0] is snap:
         return hit[1]
-    value = overlay.team_mail(overlaid_rows(snap, ovr, rev), scope)
+    value = overlay.team_mail(overlaid_rows(snap, ovr, rev), scope,
+                              person_teams=person_teams() if scope is not None else None)
     _remember(cache, key, snap, value)
     return value
 
@@ -579,8 +581,19 @@ def my_email(user, viewer=None):
     ordered = [r for group in (open_rows, done_rows, other_rows) for r in sorted(group, key=newest, reverse=True)]
     times = [m for m in (overlay.response_minutes(r) for r in mine_replied) if m is not None]
     mine_replied.sort(key=lambda r: str(r.get("first_reply_time") or ""), reverse=True)
+    own = viewer is None and email == overlay.normalize_email(user.get("email"))   # acting needs the person's own page
+    marks = ovr.get("no_action") or {}
+
+    def item(r):
+        one = _my_email_row(r)
+        pending = r.get("status") == schemas.EMAIL_PENDING and not r.get("assignment_done")
+        one["no_action_reason"] = r.get("no_action_reason", "") if r.get("status") == schemas.EMAIL_NO_ACTION else ""
+        one["can"] = {"no_action": own and pending, "reassign": own and pending,
+                      "undo_no_action": own and r.get("status") == schemas.EMAIL_NO_ACTION
+                      and str((marks.get(r.get("message_id")) or {}).get("marked_by_id") or "") == str(user.get("user_id"))}
+        return one
     out["assigned"] = {"pending": len(open_rows), "done": len(done_rows), "other": len(other_rows),
-                       "items": [_my_email_row(r) for r in ordered[:_MAX_ASSIGNED]]}
+                       "items": [item(r) for r in ordered[:_MAX_ASSIGNED]]}
     out["replied"] = {"count": len(mine_replied),
                       "average_first_reply_minutes": round(sum(times) / len(times), 1) if times else None,
                       "sla_met": sum(1 for r in mine_replied if r.get("sla_status") == "Met"),
@@ -651,13 +664,72 @@ def my_sla(user):
                          for r in mine[:_MAX_LIST]]}
 
 
+MY_SLA_DAYS = 7
+
+
+def my_sla_history(user, day):
+    """The person's own SLA from the portal's status history, linked by THEIR employee number («رقم المستخدم» = the
+    account's portal ID, else its user ID; else their security name): today's executions and confirmations with the
+    exact clocks, the last ``MY_SLA_DAYS`` days, and the requests they hold right now. Third Party is left out."""
+    numbers = {str(user.get(k) or "").strip() for k in ("portal_id", "user_id")} - {""}
+    name = sla_history._norm(user.get("security_name"))
+    store = ops()
+    state = store.read_sla_history_state() or {}
+    if not state.get("last_history") and not store.sla_closed_days():
+        return {"available": False}
+    # every employee's page polls every 30 s: one answer per person and minute (and per recorded scan)
+    memo = current_app.extensions.setdefault("ops_my_sla_history", {})
+    key = (user.get("user_id"), tuple(sorted(numbers)), name, day, state.get("last_history") or "",
+           int(time.monotonic() // 60))
+    if key in memo:
+        return memo[key]
+    if len(memo) > 400:
+        memo.clear()
+    memo[key] = value = _my_sla_history(user, day, numbers, name, store, state)
+    return value
+
+
+def _my_sla_history(user, day, numbers, name, store, state):
+    cfg = sla_records.clean_config((store.read_sla_records() or {}).get("config"))
+    excluded = teams.sla_exclusion(hub_cfg().get("sla") or {}, team_resolver()) or (lambda system: False)
+    start = (date.fromisoformat(day) - timedelta(days=MY_SLA_DAYS - 1)).isoformat()
+    records = dict(state.get("open") or {})
+    for d in store.sla_closed_days():
+        if start <= d <= day:
+            records.update(store.read_sla_closed_day(d))
+    records = {k: r for k, r in records.items() if not excluded(r.get("system"))}
+    is_me = lambda no, who: (no and str(no).strip() in numbers) or (name and sla_history._norm(who) == name)  # noqa: E731
+    executed = {k: r for k, r in records.items() if is_me(r.get("executor_no"), r.get("executor"))}
+    confirmed = {k: r for k, r in records.items() if is_me(r.get("checker_no"), r.get("checker"))}
+    names = {sla_history._norm(r.get("executor")) for r in executed.values() if r.get("executor")} | ({name} - {""})
+    today = {k: r for k, r in executed.items() if str(r.get("executed_at") or "")[:10] == day}
+    a = sla_history.analyze(today, cfg)
+    per_day = []
+    for i in range(MY_SLA_DAYS):
+        d = (date.fromisoformat(start) + timedelta(days=i)).isoformat()
+        one = sla_history.analyze({k: r for k, r in executed.items() if str(r.get("executed_at") or "")[:10] == d}, cfg)
+        per_day.append({"date": d, "executed": one["employee_clock"]["executed"],
+                        "not_executed": one["employee_clock"]["not_executed"],
+                        "median_minutes": one["employee_clock"]["median_minutes"]})
+    now = auth.now().isoformat(timespec="seconds")
+    held = sla_history.right_now(state.get("grid") or {}, state.get("open") or {}, state.get("index") or {}, cfg, now,
+                                 lambda g: sla_history._norm(g.get("holder")) in names and not excluded(g.get("system")))
+    return {"available": True, "numbers": sorted(numbers), "sla_minutes": cfg["sla_minutes"],
+            "today": {"executed": a["employee_clock"]["executed"], "not_executed": a["employee_clock"]["not_executed"],
+                      "median_minutes": a["employee_clock"]["median_minutes"],
+                      "average_minutes": a["employee_clock"]["average_minutes"],
+                      "confirmed_by_me": sum(1 for r in confirmed.values() if str(r.get("confirmed_at") or "")[:10] == day)},
+            "days": per_day, "now": held["now"], "open_now": held["open_now"][:_MAX_LIST]}
+
+
 def build_my(user, viewer=None):
     day = auth.today()
     return {"user": public_user(user), "read_only": viewer is not None, "viewer": viewer["user_id"] if viewer else None,
             "date": day, "server_time": auth.now().isoformat(timespec="seconds"),
             "all_teams": [t for t in hub_cfg()["email"]["teams"] if t.casefold() != "unclassified"],
             "calls": my_calls(user["user_id"], day), "email": my_email(user, viewer), "quality": my_quality(user, viewer),
-            "sla": my_sla(user), "shared": build_shared(user, viewer)}
+            "sla": my_sla(user), "sla_history": my_sla_history(user, day), "shared": build_shared(user, viewer),
+            "no_action_reasons": list(NO_ACTION_REASONS)}
 
 
 @bp.get("/my")
@@ -816,23 +888,42 @@ def overview():
                       "changes": {"new": len(changes.get("new") or []), "closed": len(changes.get("closed") or [])},
                       "updated_at": snaps["itsm"][0]["generated_at"]}
     yesterday_calls = calls_totals(yesterday, scope)
+    attention = build_attention(email_stats, email_rows or [], sla_data, itsm_data, metas)
+    if scope is not None and snaps["email"][0]:            # a manager also files the Unclassified mails: tell them
+        waiting = sum(1 for r in overlaid_rows(snaps["email"][0], ovr, rev)
+                      if overlay.is_unclassified(r) and r.get("status") == schemas.EMAIL_PENDING)
+        email_block["unclassified"] = waiting
+        if waiting:
+            attention.append(_attention("info", "email", f"{_plural(waiting, 'e-mail')} not classified to a team",
+                                        "/email#unclassified"))
     return jsonify(
         server_time=auth.now().isoformat(timespec="seconds"), date=day, scope=scope_text,
         scope_teams=None if scope is None else list(scope), shared=build_shared(),
         calls={"today": _public_calls(today_calls), "yesterday": _public_calls(yesterday_calls),
                "per_hour_today": today_calls["_hours"]},
-        email=email_block, sla=sla_block, itsm=itsm_block,
-        attention=build_attention(email_stats, email_rows or [], sla_data, itsm_data, metas),
+        email=email_block, sla=sla_block, itsm=itsm_block, attention=attention,
         collectors=(job_states() if viewer_is_admin() else {}))
 
 
 # ----------------------------------------------------------------------------- module answers
 def people_directory(scope_team=None):
-    """[{email, name, team}] of the people an e-mail can be assigned to (settings team members). ``scope_team`` = None
-    (everybody) or the team names of a manager."""
+    """[{email, name, team}] of the people an e-mail can be assigned to: every active account with a mailbox (named and
+    teamed from the account, linked to them by their employee account), then the Settings team-member addresses that
+    have no account. ``scope_team`` = None (everybody) or the team names to keep."""
     scope = overlay.as_scope(scope_team)
     email_cfg = hub_cfg()["email"]
     seen, out = set(), []
+    users = auth.store().users()
+    for u in (users.values() if isinstance(users, dict) else users or []):
+        addr = overlay.normalize_email(u.get("email"))
+        if not addr or addr in seen or not u.get("active", True) or u.get("role") not in ("user", "manager"):
+            continue
+        mine = [t for t in overlay.user_teams(u) if t != schemas.ALL_TEAMS_MARK and not overlay.is_unclassified({"team": t})]
+        if scope is not None and not any(overlay.team_in(scope, t) for t in mine):
+            continue
+        seen.add(addr)
+        out.append({"email": addr, "name": u.get("name") or overlay.display_name_from_email(addr),
+                    "team": mine[0] if mine else "", "user_id": u.get("user_id", "")})
     pairs = [(team, addr) for team, addrs in (email_cfg.get("team_members_by_team") or {}).items() for addr in addrs]
     pairs += [("", addr) for addr in email_cfg.get("team_members") or []]
     for team, addr in pairs:
@@ -847,6 +938,29 @@ def people_directory(scope_team=None):
     return out
 
 
+def person_teams():
+    """{mailbox address: [team, ...]} of every active account and every Settings team-member address - whose team a
+    reply belongs to (overlay.reply_in_scope). Built once per request."""
+    cached = g.get("_person_teams")
+    if cached is not None:
+        return cached
+    out = {}
+    users = auth.store().users()
+    for u in (users.values() if isinstance(users, dict) else users or []):
+        addr = overlay.normalize_email(u.get("email"))
+        if addr and u.get("active", True):
+            for t in overlay.user_teams(u):
+                if t != schemas.ALL_TEAMS_MARK and not overlay.is_unclassified({"team": t}) and t not in out.get(addr, []):
+                    out.setdefault(addr, []).append(t)
+    for team, addrs in (hub_cfg()["email"].get("team_members_by_team") or {}).items():
+        for addr in addrs or []:
+            addr = overlay.normalize_email(addr)
+            if addr and team and team not in out.get(addr, []):
+                out.setdefault(addr, []).append(team)
+    g._person_teams = out
+    return out
+
+
 def email_options(scope_team=None):
     """Lists for the e-mail page. ``scope`` = the teams text of a manager ('Flex Cube' or 'Flex Cube, Card Management'),
     None for every team; ``scope_teams`` = the same as a list (None for every team)."""
@@ -854,8 +968,9 @@ def email_options(scope_team=None):
     email_cfg = hub_cfg()["email"]
     cls = email_cfg["classification"]
     rules = {k: v for k, v in cls["system_team_map"].items() if overlay.team_in(scope, v)}
+    # a manager may hand a mail to a member of ANY team (their own team listed first by the page's grouping)
     return {"teams": list(email_cfg["teams"]), "quality_reasons": list(QUALITY_REASONS), "ratings": list(RATINGS),
-            "people": people_directory(scope), "unclassified_team": cls["unclassified_team"],
+            "people": people_directory(None), "unclassified_team": cls["unclassified_team"],
             "system_team_map": rules, "scope": overlay.scope_label(scope),
             "scope_teams": None if scope is None else list(scope)}
 
@@ -882,6 +997,9 @@ def module_answer(module):
     if is_email:
         out["data"] = email_view(snap, scope, ovr, rev=rev)
         out["options"] = options
+        if scope is not None:              # a manager also handles the Unclassified mails (their KPIs stay their own)
+            out["unclassified"] = overlay.hide_other_team_replies(
+                [r for r in overlaid_rows(snap, ovr, rev) if overlay.is_unclassified(r)], scope, person_teams())
     else:
         out["data"] = scoped_data(module, snap.get("data"), scope)
     out["meta"] = meta
@@ -929,43 +1047,337 @@ def sla_analysis_get():
     Ticketing page (admins + managers)."""
     now = auth.now().isoformat(timespec="seconds")
     try:
-        apply_sla_scan()                                    # fold the latest live scan first, so the view is current
+        apply_sla_scan()                                    # the Live tickets recording stays current too
     except Exception:                                       # recording must never break the page
         current_app.logger.exception("SLA scan recording failed")
-    doc = ops().read_sla_records()
-    resolver = team_resolver()                              # the same team rule as the live page, Home and the exports
-    people = sla_people()                                   # an older export line still named by its EmpNo
-
-    def named(r):
-        who = people.get(str(r.get("executor") or "").strip())
-        return {**r, "executor": who} if who else r
     scope = auth.team_scope()                               # a manager sees only their team(s); admin / all-teams -> everything
+    filt = sla_filter_args(request.args)
+    # 70 people at once: one answer per view, rebuilt when the collector records a scan or after SLA_VIEW_TTL seconds
+    state = ops().read_sla_history_state() or {}
+    memo_key = (overlay.scope_label(scope), tuple(sorted(filt.items())), state.get("last_history") or "",
+                json.dumps(hub_cfg().get("sla") or {}, sort_keys=True, default=str),
+                json.dumps((ops().read_sla_records() or {}).get("config") or {}, sort_keys=True, default=str))
+    memo = current_app.extensions.setdefault("ops_sla_view", {})
+    hit = memo.get(memo_key)
+    if hit and time.monotonic() - hit[0] < SLA_VIEW_TTL:
+        return jsonify(hit[1])
+    view = sla_history_view(scope, filt["date_from"], filt["date_to"])
+    if not view["records"] and not view["grid"]:            # nothing recorded yet: say why
+        return jsonify(available=False, server_time=now, scope=overlay.scope_label(scope), recorder=view["recorder"],
+                       scan_interval=health.module_interval(hub_cfg(), "sla"))
+    records, cfg = view["records"], view["cfg"]
+    options = sla_history.filter_options(records)           # the employees/checkers/teams/date-range the viewer may pick
+    period = sla_history.analyze(sla_history.filter_records(records, filt), cfg, now=now,
+                                 period=(filt["date_from"], filt["date_to"]))
+    # "right now" is never date-bounded: what the latest inquiry grid lists as open / awaiting, read or not
+    person = sla_history._norm(filt["executor"])
+    grid_text = {k: sla_history._norm(filt[k]) for k in ("team", "system", "request_type") if filt.get(k)}
 
-    def with_teams(r):
-        who = r.get("assignee") or r.get("executor")
-        found = [resolver.sla_team(sys_, who) for sys_ in (r.get("systems") or [r.get("system")])]
-        found = list(dict.fromkeys(t for t in found if t)) or [teams.NO_TEAM]
-        mine = [t for t in found if teams.in_scope(scope, t)]   # a manager's own team first, so their tables show it
-        return {**r, "team": (mine or found)[0], "teams": found}
-    records = {k: with_teams(named(r)) for k, r in (doc.get("records") or {}).items()}
-    if not records:                                         # nothing recorded at all yet
-        return jsonify(available=False, server_time=now, scope=overlay.scope_label(scope))
-    unmapped = sum(1 for r in records.values() if r["teams"] == [teams.NO_TEAM])
-    if scope is not None:                                   # (an empty view says why, instead of "nothing recorded")
-        records = {k: {**r, "teams": [t for t in r["teams"] if teams.in_scope(scope, t)]}
-                   for k, r in records.items() if any(teams.in_scope(scope, t) for t in r["teams"])}
-    cfg = {**sla_records.default_config(), **(doc.get("config") or {})}
-    options = sla_records.filter_options(records)            # the executors/checkers/teams/date-range the viewer may pick
-    filt = {"date_from": request.args.get("from", ""), "date_to": request.args.get("to", ""),
-            "executor": request.args.get("executor", ""), "checker": request.args.get("checker", ""),
-            "team": request.args.get("team", "")}
-    filtered = sla_records.filter_records(records, filt)
-    # the "right now" open strip must not be date-bounded (a request assigned earlier is still open today)
-    live = sla_records.filter_records(records, {**filt, "date_from": "", "date_to": ""})
-    return jsonify(available=True, server_time=now, scope=overlay.scope_label(scope), unmapped=unmapped,
-                   scan_interval=health.module_interval(hub_cfg(), "sla"),
-                   options=options, filter={k: (v or "") for k, v in filt.items()},
-                   **sla_records.analyze(filtered, cfg, now=now, live_records=live, **live_sla_view()))
+    def keep(g):
+        return ((not person or sla_history._norm(g.get("holder")) == person)
+                and all(sla_history._norm(g.get(k)) == v for k, v in grid_text.items()))
+    period.update(sla_history.right_now(view["grid"], view["open"], view["index"], cfg, now, keep))
+    answer = dict(available=True, server_time=now, scope=overlay.scope_label(scope), unmapped=view["unmapped"],
+                  scan_interval=health.module_interval(hub_cfg(), "sla"), recorder=view["recorder"],
+                  left_out=view["left_out"], options=options, filter={k: (v or "") for k, v in filt.items()}, **period)
+    if len(memo) > 64:
+        memo.clear()
+    memo[memo_key] = (time.monotonic(), answer)
+    return jsonify(answer)
+
+
+SLA_VIEW_TTL = 30.0               # seconds one SLA Analysis answer is reused (the "waiting" ages move by this at most)
+SLA_FILTER_KEYS = ("executor", "checker", "team", "system", "branch", "request_type", "outcome", "returned")
+
+
+def sla_filter_args(args):
+    """The SLA Analysis filter from the query string: the period (from / to) and the text filters (sla_history.
+    filter_records)."""
+    filt = {"date_from": parse_day(args.get("from")) if args.get("from") else "",
+            "date_to": parse_day(args.get("to")) if args.get("to") else ""}
+    for key in SLA_FILTER_KEYS:
+        filt[key] = str(args.get(key) or "").strip()[:150]
+    if filt["outcome"] and filt["outcome"] not in sla_history.OUTCOMES:
+        raise ApiError("Unknown outcome.")
+    return filt
+
+
+def sla_period(scope, filt):
+    """(view, the records of the filtered period) for one viewer - the SLA Analysis and its export read the same."""
+    view = sla_history_view(scope, filt["date_from"], filt["date_to"])
+    return view, sla_history.filter_records(view["records"], filt)
+
+
+@bp.get("/sla-analysis/request")
+@auth.ops_view_required
+def sla_analysis_request():
+    """One request of the SLA Analysis: its stamps, the time of each stage against its target and its whole timeline
+    («الحالة التاريخية للطلب»: who did what, when). Limited like the analysis (the viewer's teams, Third Party left out);
+    anything else is the same 404."""
+    rid = str(request.args.get("id") or "").strip()[:60]
+    if not rid:
+        raise ApiError("Which request?")
+    state = ops().read_sla_history_state() or {}
+    day = parse_day(request.args.get("day")) if request.args.get("day") else ""
+    if not day:
+        day = next((v.get("day") for v in (state.get("index") or {}).values() if v.get("id") == rid and v.get("day")), "")
+    view = sla_history_view(auth.team_scope(), day or "9999-12-31", day or "9999-12-31")
+    rec = view["records"].get(rid)
+    if rec is None:
+        raise ApiError("That request is not available.", 404)
+    cfg = view["cfg"]
+    targets = sla_history.stage_targets(cfg)
+    mins = sla_history.stage_minutes(rec)
+    stages = [{"key": k, "label": label, "minutes": round(mins[k], 1) if mins[k] is not None else None,
+               "target": targets.get(k), "rag": sla_history.rag(mins[k], targets.get(k))}
+              for k, label, *_ in sla_history.STAGES]
+    keep = ("id", "request_date", "branch", "requester", "requester_no", "system", "team", "request_type", "grid_status",
+            "registered_at", "branch_confirmed_at", "region_approved_at", "region_by", "pool_at", "first_assigned_at",
+            "assigned_at", "assigner", "executed_at", "executor", "exec_outcome", "confirmed_at", "checker",
+            "final_outcome", "rejected_at", "rejected_by", "returned", "reassigned", "transferred", "held_minutes",
+            "on_hold", "holder", "last_status", "last_seen")
+    trail = [{"at": t[0], "step": t[1], "status": t[2], "who": t[3], "number": t[4], "note": t[5]}
+             for t in rec.get("trail") or [] if isinstance(t, (list, tuple)) and len(t) >= 6]
+    return jsonify(request={k: rec.get(k) for k in keep}, stage=sla_history.stage_of(rec),
+                   outcome=sla_history.outcome_of(rec), stages=stages, trail=trail, sla_minutes=targets["sla"])
+
+
+# ----------------------------------------------------------------------------- Analysis: every module, over time
+ANALYTICS_TTL = 60.0              # one answer per view and minute: 70 people at once read the same numbers
+ANALYTICS_DEFAULT_DAYS = 30
+ANALYTICS_LABELS = {"calls": ("Calls", "Calls logged", None),
+                    "email": ("E-mails", "E-mails received", None),
+                    "tickets": ("Tickets", "Assigned to the security team", "Confirmed (closed)"),
+                    "crs": ("Change requests", "New on the ITSM board", "Completed")}
+
+
+def apply_email_intake():
+    """Fold the latest e-mail scan into the long-term intake counts (the collector does it after each scan; this is
+    the safety net for a scan written by an older collector). Never raises."""
+    try:
+        return analytics.fold_email_snapshot(ops(), auth.now())
+    except Exception:                                       # noqa: BLE001 - the analysis must never break a page
+        current_app.logger.exception("E-mail intake fold failed")
+        return 0
+
+
+def _analytics_users():
+    users = auth.store().users()
+    return users if isinstance(users, dict) else {u.get("user_id"): u for u in users or []}
+
+
+def _analytics_module_days(module, d_from, d_to):
+    """{day: DayDoc} of one module over [d_from, d_to], every team (the scope is applied by ``series``)."""
+    if module == "email":
+        apply_email_intake()
+        days = ops().read_analytics(analytics.EMAIL_STORE).get("days") or {}
+        return {d: v for d, v in days.items() if d_from <= d <= d_to}
+    if module == "calls":
+        users = _analytics_users()
+
+        def teams_of_user(uid):
+            u = users.get(str(uid or "")) or {}
+            return [t for t in overlay.user_teams(u) if teams._real_team(t)] or [analytics.NO_TEAM]
+        return analytics.calls_days(ops(), auth.store(), d_from, d_to, teams_of_user, auth.now())
+    if module == "tickets":
+        view = sla_history_view(None, d_from, "")           # every request closed from d_from on, and the open ones
+        recs = view["records"]
+        team_of = lambda r: [r.get("team") or analytics.NO_TEAM]          # noqa: E731
+        arrived = analytics.stamp_days(recs, "first_assigned_at", team_of, fallback="assigned_at")
+        closed = analytics.stamp_days(recs, "confirmed_at", team_of)
+        cut = lambda days: {d: v for d, v in days.items() if d_from <= d <= d_to}   # noqa: E731
+        return cut(arrived), cut(closed)
+    if module == "crs":
+        recs = (ops().read_itsm_records() or {}).get("records") or {}
+        resolver = team_resolver()
+        team_of = lambda r: [resolver.itsm_team(r.get("role")) or analytics.NO_TEAM]   # noqa: E731
+        new = analytics.stamp_days(recs, "first_seen", team_of)
+        done = analytics.stamp_days(recs, "completed_at", team_of, keep=lambda r: r.get("conclusion") == "completed")
+        cut = lambda days: {d: v for d, v in days.items() if d_from <= d <= d_to}   # noqa: E731
+        return cut(new), cut(done)
+    raise ApiError("Unknown module.", 404)
+
+
+@bp.get("/analytics")
+@auth.ops_view_required
+def analytics_get():
+    """The Analysis page: calls, e-mails, tickets and change requests over a period - the daily trend, the hour of the
+    day, the weekday x hour heat map, the peaks, by team, and the change against the previous period of the same
+    length. A manager sees only their own team(s); ``team`` narrows to one of them."""
+    today = auth.today()
+    d_to = parse_day(request.args.get("to"), today)
+    d_from = parse_day(request.args.get("from"),
+                       (date.fromisoformat(d_to) - timedelta(days=ANALYTICS_DEFAULT_DAYS - 1)).isoformat())
+    d_to = min(d_to, today)                                 # a browser a day ahead asks for "tomorrow": up to today
+    if d_from > d_to:
+        raise ApiError("'From' date is after 'To' date.")
+    if (date.fromisoformat(d_to) - date.fromisoformat(d_from)).days >= analytics.MAX_RANGE_DAYS:
+        raise ApiError("Choose at most two years.")
+    scope = auth.team_scope()
+    team = str(request.args.get("team") or "").strip()
+    if team and scope is not None and not overlay.team_in(scope, team):
+        raise ApiError("You can only look at your own team(s).", 403)
+    if team:
+        keep = (lambda t, team=team: overlay._key(t) == overlay._key(team))
+    elif scope is not None:
+        keep = (lambda t: teams.in_scope(scope, t))
+    else:
+        keep = None
+    stamps = (ops().read_analytics(analytics.EMAIL_STORE).get("last_folded") or "",
+              (ops().read_sla_history_state() or {}).get("last_history") or "",
+              (ops().read_itsm_records() or {}).get("last_generated") or "")
+    memo_key = (overlay.scope_label(scope), d_from, d_to, team, stamps, int(time.monotonic() // ANALYTICS_TTL))
+    memo = current_app.extensions.setdefault("ops_analytics_view", {})
+    if memo_key in memo:
+        answer = memo[memo_key]
+        return jsonify({**answer, "quality": _analytics_quality(d_from, d_to, keep, answer["modules"].get("email"))})
+    p_from, p_to = analytics.previous_range(d_from, d_to)
+    modules = {}
+    for module, (label, in_label, done_label) in ANALYTICS_LABELS.items():
+        try:
+            now_days = _analytics_module_days(module, d_from, d_to)
+            prev_days = _analytics_module_days(module, p_from, p_to)
+        except ApiError:
+            raise
+        except Exception:                                   # noqa: BLE001 - one module never hides the others
+            current_app.logger.exception("Analysis of %s failed", module)
+            modules[module] = {"label": label, "available": False}
+            continue
+        arrived, done = (now_days if isinstance(now_days, tuple) else (now_days, None))
+        p_arrived, p_done = (prev_days if isinstance(prev_days, tuple) else (prev_days, None))
+        current = analytics.series(arrived, d_from, d_to, keep)
+        before = analytics.series(p_arrived, p_from, p_to, keep)
+        entry = {"label": label, "in_label": in_label, "available": True, **current,
+                 "previous": {"from": p_from, "to": p_to, "total": before["total"], "avg_per_day": before["avg_per_day"]},
+                 "change_pct": analytics.change(current["total"], before["total"]),
+                 "avg_change_pct": analytics.change(current["avg_per_day"], before["avg_per_day"])}
+        if done is not None:
+            closed = analytics.series(done, d_from, d_to, keep)
+            entry["done"] = {"label": done_label, "total": closed["total"], "daily": closed["daily"],
+                             "hours": closed["hours"], "peak_hour": closed["peak_hour"],
+                             "previous_total": analytics.series(p_done, p_from, p_to, keep)["total"]}
+            # hour by hour, each team: what arrived and what was finished (the page's "arrived vs finished" table)
+            names = [t["team"] for t in current["by_team"][:15]]
+            names += [t["team"] for t in closed["by_team"] if t["team"] not in names][:max(0, 15 - len(names))]
+            entry["hours_by_team"] = [
+                {"team": name,
+                 "arrived": analytics.series(arrived, d_from, d_to, lambda t, n=name: t == n)["hours"],
+                 "done": analytics.series(done, d_from, d_to, lambda t, n=name: t == n)["hours"]} for name in names]
+        modules[module] = entry
+    real = [t for t in hub_cfg()["email"]["teams"] if teams._real_team(t)]
+    answer = {"from": d_from, "to": d_to, "today": today, "team": team, "scope": overlay.scope_label(scope),
+              "server_time": auth.now().isoformat(timespec="seconds"),
+              "previous": {"from": p_from, "to": p_to},
+              "options": {"teams": [t for t in real if scope is None or overlay.team_in(scope, t)]},
+              "modules": modules}
+    if len(memo) > 64:
+        memo.clear()
+    memo[memo_key] = answer
+    return jsonify({**answer, "quality": _analytics_quality(d_from, d_to, keep, modules.get("email"))})
+
+
+def _analytics_quality(d_from, d_to, keep, email_entry):
+    """The quality-review statistics of the period (analytics.quality_stats): every reviewer (manager / administrator)
+    with how many replies they rated, and per team the e-mails received against the ones rated. Read fresh on every
+    call (one pass over the reviews), so a rating shows at once."""
+    try:
+        email_entry = email_entry if (email_entry or {}).get("available") else {}
+        # per team: the real teams only (days of the older history know only the day's total - "(no team)")
+        by_team = {x["team"]: x["n"] for x in email_entry.get("by_team") or []
+                   if x["team"] != analytics.NO_TEAM and teams._real_team(x["team"])}
+        roles = {str(uid): u.get("role", "") for uid, u in _analytics_users().items()}
+        received = int(email_entry.get("total") or 0) if email_entry else None     # every mail of the scope, once
+        return {"available": True, **analytics.quality_stats(ops().overrides("quality"), d_from, d_to, keep, by_team,
+                                                              roles, received_total=received)}
+    except Exception:                                       # noqa: BLE001 - one block never hides the page
+        current_app.logger.exception("Quality statistics failed")
+        return {"available": False}
+
+
+def sla_history_people():
+    """The accounts by the number the portal shows in its status history («رقم المستخدم»: the account's portal ID,
+    else its user ID) and by its security name - so every step of a request is linked to the person who did it."""
+    if "sla_history_people" not in g:
+        users = auth.store().users()
+        users = list(users.values()) if isinstance(users, dict) else list(users or [])
+        by_no, by_name = {}, {}
+        for field in ("portal_id", "user_id"):              # the portal ID wins over the user ID
+            for u in users:
+                ident = str(u.get(field) or "").strip()
+                if ident:
+                    by_no.setdefault(ident, u)
+        for u in users:
+            name = sla_history._norm(u.get("security_name"))
+            if name:
+                by_name.setdefault(name, u)
+        g.sla_history_people = (by_no, by_name)
+    return g.sla_history_people
+
+
+def sla_history_account(number="", name=""):
+    """The account of one person of the status history: by their number first, else by their security name."""
+    by_no, by_name = sla_history_people()
+    return by_no.get(str(number or "").strip()) or by_name.get(sla_history._norm(name))
+
+
+def sla_history_view(scope, date_from="", date_to=""):
+    """The SLA history a viewer may see: {records (closed in the period's days + every open one), open, index, grid,
+    cfg, recorder, left_out, unmapped}. Every record gets its team from the PERSON who executed it (or holds it) - their
+    account, found by the employee number of the status history - else from the application; Third Party (Settings ›
+    Ticketing › Left out of the SLA) is removed; a manager keeps only their own team(s)."""
+    store = ops()
+    state = store.read_sla_history_state() or {}
+    cfg = sla_records.clean_config((store.read_sla_records() or {}).get("config"))
+    sla_cfg = hub_cfg().get("sla") or {}
+    resolver = team_resolver()
+    excluded = teams.sla_exclusion(sla_cfg, resolver) or (lambda system: False)
+
+    def team_of(system, number="", name=""):
+        acct = sla_history_account(number, name) if (number or name) else None
+        mine = [t for t in overlay.user_teams(acct or {}) if teams._real_team(t)]
+        return (mine[0] if mine else "") or resolver.sla_team(system, name) or teams.NO_TEAM
+
+    def link(r):
+        person_no = r.get("executor_no") if r.get("executor_no") or r.get("executor") else ""
+        team = team_of(r.get("system"), person_no, r.get("executor") or r.get("holder"))
+        acct = sla_history_account(r.get("executor_no"), r.get("executor"))
+        return {**r, "team": team, "teams": [team], "executor_uid": (acct or {}).get("user_id", "")}
+
+    days = store.sla_closed_days()
+    if date_from:
+        days = [d for d in days if d >= date_from]
+    if date_to:
+        days = [d for d in days if d <= date_to]
+    records = {}
+    for day in days:
+        records.update(store.read_sla_closed_day(day))
+    open_recs = state.get("open") or {}
+    records.update(open_recs)
+    records = {k: link(r) for k, r in records.items() if not excluded(r.get("system"))}
+    unmapped = sum(1 for r in records.values() if r["team"] == teams.NO_TEAM)
+    # the grid names the security user holding a request but not their number: the number they act under in the
+    # history (any request they executed or confirmed) links them, else their account's security name does
+    number_of = {}
+    for r in records.values():
+        for name, no in ((r.get("executor"), r.get("executor_no")), (r.get("checker"), r.get("checker_no"))):
+            if name and no:
+                number_of.setdefault(sla_history._norm(name), no)
+    grid = {}
+    for key, row in (state.get("grid") or {}).items():
+        if excluded(row.get("system")):
+            continue
+        holder = row.get("holder") or ""
+        grid[key] = {**row, "team": team_of(row.get("system"), number_of.get(sla_history._norm(holder), ""), holder)}
+    if scope is not None:
+        records = {k: r for k, r in records.items() if teams.in_scope(scope, r["team"])}
+        grid = {k: r for k, r in grid.items() if teams.in_scope(scope, r["team"])}
+    return {"records": records, "open": {k: r for k, r in open_recs.items() if k in records},
+            "index": state.get("index") or {}, "grid": grid, "cfg": cfg, "unmapped": unmapped,
+            "recorder": {"enabled": bool(sla_cfg.get("history_enabled", True)), "last_read": state.get("last_history") or "",
+                         "stats": state.get("history_stats") or {}, "error": state.get("history_error") or {},
+                         "days": int(sla_cfg.get("history_days") or 3), "first_day": (store.sla_closed_days() or [""])[0]},
+            "left_out": {"teams": list(sla_cfg.get("exclude_teams") or []),
+                         "applications": list(sla_cfg.get("exclude_applications") or [])}}
 
 
 def live_sla_view():
@@ -1014,97 +1426,12 @@ def _sla_system_team():
     return sla_records.system_team_map(_aa_config())
 
 
-def _fold_sla_export(rows, stamp):
-    """Fold export rows into the live SLA recording atomically (under the store lock, on the freshest copy). Returns
-    sla_records.apply_export's counts."""
-    system_team, people = _sla_system_team(), sla_people()
-    result = {}
-
-    def change(d):
-        cfg = {**sla_records.default_config(), **(d.get("config") or {})}
-        records = d.setdefault("records", {})
-        result.update(sla_records.apply_export(records, rows, cfg, stamp, system_team, people))
-        sla_records.housekeep(records, cfg, stamp)          # keep the JSON store bounded (cap + retention)
-    ops().update_sla_records(change)
-    return result
-
-
-def apply_sla_feed(now=None, force=False, strict=False):
-    """Fold the configured export feed (the portal's ALL_*.csv, or a requests_*.csv in the Settings column names) into
-    the live SLA recording: the CLOSED requests with their outcome and full assignment -> confirmation clock. Throttled
-    to ~5 minutes unless forced; a missing path or read error is a quiet no-op for the background refresher, and an
-    ApiError saying what is wrong when ``strict`` (the administrator pressed Import feed). Returns the number of NEW
-    requests."""
-    doc = ops().read_sla_records()
-    cfg = {**sla_records.default_config(), **(doc.get("config") or {})}
-    path = (cfg.get("feed_path") or "").strip()
-    if not path:
-        if strict:
-            raise ApiError("No export feed is set. Set its path in System > Settings > Ticketing, or use Upload export.")
-        return 0
-    if not os.path.exists(path):
-        if strict:
-            raise ApiError(f"The server cannot see the export feed {path}. Check the path, and that the account the "
-                           "server runs as can read that folder.")
-        return 0
-    memo = current_app.extensions.setdefault("ops_sla_feed", {"at": 0.0})
-    if not force and (time.monotonic() - memo.get("at", 0.0)) < 300:
-        return 0
-    memo["at"] = time.monotonic()
-    try:
-        rows = sla_records.read_feed_rows(path)
-    except Exception as exc:                                # a bad/locked file must never break the refresher
-        current_app.logger.exception("SLA feed import failed for %s", path)
-        if strict:
-            raise ApiError(f"The export feed could not be read: {type(exc).__name__}: {exc}") from exc
-        return 0
-    return _fold_sla_export(rows, (now or auth.now()).isoformat(timespec="seconds")).get("added", 0)
-
-
 def apply_sla_scan(now=None, force=False):
     """Fold the latest LIVE SLA scan into the live SLA recording (sla_records.fold_latest_scan). The collector does this
     as it writes each scan; the web pages call it too, as a safety net for scans written by an older collector. Returns
-    how many requests are open in the folded scan (0 when it was folded already)."""
+    how many requests are open in the folded scan (0 when it was folded already). (The SLA Analysis itself reads the
+    portal's status history, recorded by the collector: nothing is uploaded or imported.)"""
     return sla_records.fold_latest_scan(ops(), _sla_system_team(), force=force)
-
-
-@bp.post("/sla-feed/import")
-@auth.admin_required
-def sla_feed_import():
-    """Import the configured SLA export feed now (administrators)."""
-    added = apply_sla_feed(force=True, strict=True)
-    scanned = apply_sla_scan(force=True)                       # also fold the latest live scan
-    return jsonify(ok=True, added=added, open_now=scanned,
-                   recorded=len(ops().read_sla_records().get("records") or {}))
-
-
-SLA_UPLOAD_LIMIT = 60 * 1024 * 1024                          # the portal's ALL_*.csv covers the whole year
-
-
-@bp.post("/sla-feed/upload")
-@auth.admin_required
-def sla_feed_upload():
-    """Upload the portal's closed-request export (ALL_*.csv) - or a CSV in the Settings column names - and fold it
-    into the live SLA recording (administrators). The closed requests then show in the SLA Analysis with their outcome
-    and full assignment -> confirmation clock."""
-    upload = request.files.get("file")
-    if not upload or not upload.filename:
-        raise ApiError("Choose the export file (ALL_*.csv) to upload.")
-    if not upload.filename.lower().endswith((".csv", ".txt")):
-        raise ApiError("Upload the export as a .csv file (in Excel: Save As › CSV UTF-8).")
-    rows = sla_records.decode_csv(upload.read())
-    if not rows:
-        raise ApiError("The file has no rows.")
-    cfg = {**sla_records.default_config(), **(ops().read_sla_records().get("config") or {})}
-    portal_export = sla_records.is_portal_export(rows)
-    if not portal_export and not (cfg.get("fields") or {}).get("id") in rows[0]:
-        raise ApiError("This file is neither the portal's ALL_*.csv export (ReqID2, DateF, DateT1, SStatusID ...) "
-                       "nor in the column names set in System › Settings › Ticketing › SLA recording.")
-    result = _fold_sla_export(rows, auth.now().isoformat(timespec="seconds"))
-    auth.audit("ops_sla_upload", target=upload.filename[:120],
-               details={"rows": result.get("rows"), "added": result.get("added"), "export": portal_export})
-    return jsonify(ok=True, portal_export=portal_export, **result,
-                   recorded=len(ops().read_sla_records().get("records") or {}))
 
 
 # ----------------------------------------------------------------- live ITSM change-request recording (exec + conclusion)
@@ -1233,10 +1560,16 @@ def current_rows(message_id):
     rows = mail_rows(message_id)
     if not rows:
         raise ApiError("That e-mail is not in the latest scan. Reload the page.", 404)
-    scope = auth.team_scope()
+    scope = act_scope()                      # a manager also acts on the Unclassified mails
     if scope is not None and not any(overlay.row_in_scope(r, scope) for r in rows):
         raise ApiError("That e-mail belongs to another team.", 403)
     return rows
+
+
+def act_scope():
+    """The e-mails the signed-in person may open and act on (overlay.email_act_scope): a manager's teams plus the
+    Unclassified mails, which they may read, file under a team, assign or mark as needing no action."""
+    return overlay.email_act_scope(g.user)
 
 
 def _stamp():
@@ -1265,17 +1598,17 @@ _KEPT_WHEN_SAME_PERSON = ("done_at", "done_by", "done_by_id", "done_note", "repl
 def _row_team(rows, entry=None):
     """The team the assignment is filed under: the mail's team (for a mail sent to several teams, the first one the signed-in
     manager looks after, so they can still handle it when it has left the scan)."""
-    scope = auth.team_scope()
+    scope = act_scope()
     row = next((r for r in rows if overlay.row_in_scope(r, scope)), rows[0] if rows else {})
     return str(overlay.team_in_scope(row, scope) or row.get("team") or (entry or {}).get("team") or "")[:80]
 
 
-def _notify(kind, entry, rows, message_id, old_entry=None):
+def _notify(kind, entry, rows, message_id, old_entry=None, detail=""):
     """In-app notifications of one event (docs/FEATURES-V2.md B4). A failure here is logged and never undoes the action."""
     try:
         subject = _subject(rows) or str((entry or {}).get("subject") or "")[:200]
         return notifications.notify(ops(), auth.store().users(), kind, g.user, entry, rows, subject, message_id,
-                                    auth.now(), old_entry)
+                                    auth.now(), old_entry, detail=detail)
     except Exception as exc:                                    # noqa: BLE001
         current_app.logger.warning("notification %s failed: %s: %s", kind, type(exc).__name__, exc)
         return []
@@ -1319,7 +1652,7 @@ def manager_rows(message_id, entry):
     """The rows of a mail for a manager / administrator action: 404 when nothing is known about it, 403 when it belongs to
     another team. A mail that has left the latest scan can still be handled while its assignment remembers its team."""
     rows = mail_rows(message_id)
-    scope = auth.team_scope()
+    scope = act_scope()
     if rows:
         if scope is not None and not any(overlay.row_in_scope(r, scope) for r in rows):
             raise ApiError("That e-mail belongs to another team.", 403)
@@ -1372,7 +1705,7 @@ def email_no_action_undo():
     message_id = clean_message_id(body.get("message_id") or request.args.get("message_id"))
     if not ops().overrides("no_action").get(message_id):
         raise ApiError("That e-mail is not marked as needing no action.", 404)
-    scope = auth.team_scope()
+    scope = act_scope()
     raw = raw_rows(message_id)       # the overlay hides marked carry-over mails, so look at the snapshot itself
     if scope is not None and not any(overlay.row_in_scope(r, scope) for r in raw):
         raise ApiError("That e-mail belongs to another team.", 403)
@@ -1441,12 +1774,16 @@ def email_quality():
     replier = overlay.normalize_email(row.get("first_reply_email"))
     if replier and replier == overlay.normalize_email(g.user.get("email")):
         raise ApiError("You cannot rate your own reply.", 403)
+    if not overlay.reply_in_scope(row, overlay.scope_for_user(g.user), person_teams()):
+        raise ApiError("That reply was written by another team - only its own managers rate it.", 403)
+    reply_team = (overlay.reply_teams(row, person_teams()) or [""])[0]
 
     def change(old):
         old = old or {}
         return {"rating": rating, "note": note, "reasons": reasons, "replied_by": row.get("first_reply_by", ""),
                 "replied_by_email": replier, "reviewed_by": _who(), "reviewed_by_id": g.user["user_id"],
                 "reviewed_at": _stamp(), "subject": _subject(rows), "team": _row_team([row]),
+                "reply_team": reply_team, "received": str(row.get("received_time") or "")[:19],
                 "feedback_sent": False,
                 # an appeal is kept as history; a new rating has not been decided on yet
                 "appeal": old.get("appeal", ""), "appeal_by": old.get("appeal_by", ""), "appeal_at": old.get("appeal_at", ""),
@@ -1496,8 +1833,14 @@ def email_quality_decision():
         raise ApiError("There is no appeal to decide.", 409)
     team = review.get("team") or next((r.get("team") for r in raw_rows(message_id)), "")
     scope = auth.team_scope()
-    if not auth.may_act_on_team(team) and not any(overlay.row_in_scope(r, scope) for r in mail_rows(message_id)):
+    rows = mail_rows(message_id)
+    if not auth.may_act_on_team(team) and not any(overlay.row_in_scope(r, scope) for r in rows):
         raise ApiError("That e-mail belongs to another team.", 403)
+    # the appeal is about a reply: only the managers of the team that wrote it decide (as only they rated it)
+    replied = next((r for r in rows if r.get("status") == schemas.EMAIL_REPLIED), None)
+    reply_team = review.get("reply_team") or ((overlay.reply_teams(replied, person_teams()) or [""])[0] if replied else "")
+    if reply_team and scope is not None and not overlay.team_in(scope, reply_team):
+        raise ApiError("That reply was written by another team - only its own managers decide the appeal.", 403)
 
     def change(old):
         return {**old, "appeal_decision": decision, "decided_by": _who(), "decided_at": _stamp(),
@@ -1527,7 +1870,7 @@ def may_open_mail(user, message_id, entry, rows):
         return True
     if (user or {}).get("role") not in auth.OPS_ROLES:
         return False                                            # an employee: only what is assigned to them
-    scope = overlay.scope_for_user(user)
+    scope = overlay.email_act_scope(user)                       # a manager: their teams and the Unclassified mails
     if rows:
         return scope is None or any(overlay.row_in_scope(r, scope) for r in rows)
     if entry:                                                   # the mail left the scan: the assignment remembers its team
@@ -1614,14 +1957,34 @@ def email_message():
                    saved_at=None, msg_bytes=0)
     acting = not read_only_view()
     handler = is_assignee(g.user, entry) or g.user["role"] in auth.OPS_ROLES
-    out.update(mail=_mail_block(rows), assignment=view, can={
+    # The team member's reply, read from the scan (not the saved .msg, which is the customer's original). The manager
+    # reads the original e-mail and this reply side by side to do the quality review - but only a reply of their own
+    # team(s): another team's reply shows which team answered, never the person, the text or its rating.
+    reply_row = next((r for r in rows if r.get("first_reply_time") or r.get("reply_count")), row)
+    mine = overlay.normalize_email(g.user.get("email"))
+    own_reply = bool(mine) and overlay.normalize_email(reply_row.get("first_reply_email")) == mine
+    hidden = (g.user["role"] in auth.OPS_ROLES and not own_reply and not is_assignee(g.user, entry)
+              and not overlay.reply_in_scope(reply_row, overlay.scope_for_user(g.user), person_teams()))
+    block = _mail_block(rows)
+    if hidden and block:
+        block["first_reply_by"] = ""
+    out.update(mail=block, assignment=view, can={
         "download": state == schemas.MAIL_STATE_READY, "prepare": state == schemas.MAIL_STATE_PREPARING,
         "done": bool(entry) and acting and handler and not (view or {}).get("done"),
         "reopen": bool(entry) and acting and handler and bool(entry.get("done_at"))})
-    # The team member's reply, read from the scan (not the saved .msg, which is the customer's original). The manager
-    # reads the original e-mail and this reply side by side to do the quality review.
-    reply_row = next((r for r in rows if r.get("first_reply_time") or r.get("reply_count")), row)
-    if reply_row.get("first_reply_time") or reply_row.get("reply_count"):
+    if hidden:
+        out["reply"] = {"hidden": True, "team": (overlay.reply_teams(reply_row, person_teams()) or [""])[0],
+                        "at": reply_row.get("first_reply_time"), "count": reply_row.get("reply_count", 0) or 0,
+                        "response_minutes": reply_row.get("response_minutes")}
+    elif reply_row.get("first_reply_time") or reply_row.get("reply_count"):
+        if reply_row.get("quality_rating") and (g.user["role"] in auth.OPS_ROLES or own_reply):
+            out["quality"] = {"rating": reply_row.get("quality_rating", ""), "reasons": reply_row.get("quality_reasons", ""),
+                              "note": reply_row.get("quality_note", ""),
+                              "reviewed_by": reply_row.get("quality_reviewed_by", ""),
+                              "reviewed_at": reply_row.get("quality_reviewed_at", ""),
+                              "appeal": reply_row.get("quality_appeal", ""),
+                              "appeal_decision": reply_row.get("appeal_decision", ""),
+                              "withdrawn": bool(reply_row.get("rating_withdrawn"))}
         out["reply"] = {
             "by": reply_row.get("first_reply_by", ""),
             "email": reply_row.get("first_reply_email", ""),
@@ -1748,6 +2111,123 @@ def email_reopen():
         _notify(schemas.NOTIFY_REOPENED, updated, rows, message_id)
     return jsonify(ok=True, already=bool(state.get("already")), assignment=assignment_view(updated),
                    rev=overrides_rev(read_overrides()))
+
+
+# ----------------------------------------------------------------- the employee's own actions on a mail assigned to them
+NO_ACTION_REASONS = ["For information only", "Duplicate of another e-mail", "Already handled another way",
+                     "Automatic reply / out of office", "Sent to us by mistake", "Other"]
+
+
+def assignee_target(message_id, route):
+    """(entry, rows) when the signed-in person is the ASSIGNEE of the mail, on their own page; the single 'not
+    available' 404 otherwise (a manager uses the /email/* actions instead)."""
+    if read_only_view():
+        raise ApiError("This is somebody else's page - it is read-only.", 403)
+    entry, rows = mail_access(message_id, route)
+    if not is_assignee(g.user, entry):
+        raise not_available()
+    return entry, rows
+
+
+def _mail_is_open(rows, entry):
+    return any(r.get("status") == schemas.EMAIL_PENDING for r in rows or []) and not (entry or {}).get("done_at")
+
+
+def teammates_for_mail(rows, entry):
+    """The active employees of the mail's team(s) - or, for an Unclassified mail, of the employee's own teams."""
+    teams = overlay.mail_teams(rows, entry) or [t for t in overlay.user_teams(g.user) if t != schemas.ALL_TEAMS_MARK]
+    return overlay.teammates(auth.store().users(), teams, g.user.get("email"))
+
+
+@bp.get("/my/email/teammates")
+@auth.login_required
+def my_email_teammates():
+    """Who the assignee may hand the mail on to: active employees of its team (names only, never addresses)."""
+    message_id = clean_message_id(request.args.get("message_id"))
+    entry, rows = assignee_target(message_id, "teammates")
+    return jsonify(teammates=[{"user_id": p["user_id"], "name": p["name"], "teams": p["teams"]}
+                              for p in teammates_for_mail(rows, entry)])
+
+
+@bp.post("/my/email/reassign")
+@auth.login_required
+def my_email_reassign():
+    """The assignee hands an OPEN mail to a teammate; the assignment then follows the teammate (who is told), and the
+    assigner and the team's managers are told who has it now. The employee no longer holds it."""
+    body = json_body()
+    message_id = clean_message_id(body.get("message_id"))
+    to_uid = norm_uid(body.get("to_user_id"))
+    note = clean_text(body.get("note"), "Note", 300, multiline=True)
+    entry, rows = assignee_target(message_id, "reassign")
+    if not _mail_is_open(rows, entry):
+        raise ApiError("Only an open e-mail can be handed on (it was answered, closed or marked done).", 409)
+    target = next((p for p in teammates_for_mail(rows, entry) if p["user_id"] == to_uid), None)
+    if target is None:
+        raise ApiError("Choose a teammate from the list.")
+    state = {}
+
+    def change(old):
+        if not old or not is_assignee(g.user, old):
+            state["gone"] = True                       # somebody re-assigned it a moment ago
+            return old
+        state["old"] = dict(old)
+        hand = {"from": g.user.get("email", ""), "from_name": _who(), "to": target["email"], "at": _stamp()}
+        return {"assigned_to_email": target["email"], "assigned_to_name": target["name"], "note": note,
+                "marked_by": _who(), "marked_by_id": g.user["user_id"], "marked_at": _stamp(),
+                "subject": _subject(rows) or old.get("subject", ""), "team": old.get("team") or _row_team(rows),
+                "notified": False, "by": "assignee",
+                "handovers": (list(old.get("handovers") or []) + [hand])[-5:],
+                "first_marked_by": old.get("first_marked_by") or old.get("marked_by", ""),
+                "first_marked_by_id": old.get("first_marked_by_id") or old.get("marked_by_id", "")}
+    updated = ops().update_override("assignments", message_id, change)
+    if state.get("gone"):
+        raise not_available()
+    auth.audit("ops_reassign", target=message_id, details={"from": g.user.get("email", ""), "to": target["email"],
+                                                            "by": "assignee", "note": note[:80],
+                                                            "subject": _subject(rows)[:80]})
+    _notify(schemas.NOTIFY_ASSIGNED, updated, rows, message_id)
+    _notify(schemas.NOTIFY_REASSIGNED, updated, rows, message_id, state.get("old"), detail=f"to {target['name']}")
+    return jsonify(ok=True, to=target["name"], rev=overrides_rev(read_overrides()))
+
+
+@bp.post("/my/email/no-action")
+@auth.login_required
+def my_email_no_action():
+    """The assignee marks an OPEN mail as needing no reply, with a reason (and a note for "Other")."""
+    body = json_body()
+    message_id = clean_message_id(body.get("message_id"))
+    reason = str(body.get("reason") or "").strip()
+    if reason not in NO_ACTION_REASONS:
+        raise ApiError("Choose why no reply is needed.")
+    note = clean_text(body.get("note"), "Note", 300, multiline=True)
+    if reason == "Other" and len(note) < 3:
+        raise ApiError("Say in a few words why no reply is needed.")
+    entry, rows = assignee_target(message_id, "no_action")
+    if not _mail_is_open(rows, entry):
+        raise ApiError("Only an open e-mail can be marked as needing no reply.", 409)
+    mark = ops().set_override("no_action", message_id, {
+        "marked_by": _who(), "marked_by_id": g.user["user_id"], "marked_at": _stamp(), "subject": _subject(rows),
+        "reason": reason, "note": note, "by": "assignee", "team": (entry or {}).get("team") or _row_team(rows)})
+    auth.audit("ops_no_action", target=message_id, details={"by": "assignee", "reason": reason, "note": note[:80],
+                                                             "subject": _subject(rows)[:80]})
+    _notify(schemas.NOTIFY_NO_ACTION, entry, rows, message_id, detail=reason)
+    return jsonify(ok=True, mark=mark, rev=overrides_rev(read_overrides()))
+
+
+@bp.delete("/my/email/no-action")
+@auth.login_required
+def my_email_no_action_undo():
+    """The assignee takes back THEIR OWN "no reply needed" mark (never a manager's)."""
+    body = optional_body()
+    message_id = clean_message_id(body.get("message_id") or request.args.get("message_id"))
+    assignee_target(message_id, "no_action_undo")
+    mark = ops().overrides("no_action").get(message_id)
+    if not mark or str(mark.get("marked_by_id") or "") != g.user["user_id"]:
+        raise not_available()
+    ops().delete_override("no_action", message_id)
+    auth.audit("ops_no_action_undo", target=message_id,
+               details={"by": "assignee", "subject": str(mark.get("subject") or "")[:80]})
+    return jsonify(ok=True, rev=overrides_rev(read_overrides()))
 
 
 # ----------------------------------------------------------------------------- notifications (the bell)
@@ -2041,7 +2521,8 @@ def auto_assign_put_team():
     if kind not in auto_assign.TARGETS:
         raise ApiError("kind must be 'email' or 'ticketing'.")
     members = _aa_team_members(team)
-    apps = auto_assign.team_applications(_aa_config(), team)
+    # e-mail auto-assign has no application filter (every pending mail of the team goes to its members)
+    apps = auto_assign.team_applications(_aa_config(), team) if kind == "ticketing" else []
     block = auto_assign.clean_block({"enabled": body.get("enabled"), "interval_minutes": body.get("interval_minutes"),
                                      "rules": body.get("rules")}, apps, members)
 

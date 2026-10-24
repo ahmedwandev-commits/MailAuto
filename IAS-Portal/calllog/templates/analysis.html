@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Analysis · IAS Portal{% endblock %}
+{% block body %}
+{% include "_topbar.html" %}
+<link rel="stylesheet" href="{{ url_for('static', filename='ops-sla.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ops-analysis.css') }}">
+<main class="page op-page" id="analysis-page" data-role="{{ current_user.role }}">
+  <noscript><p class="form-error">This page needs JavaScript.</p></noscript>
+  <p class="empty" id="pageLoading">Loading the analysis…</p>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='common.js') }}"></script>
+<script src="{{ url_for('static', filename='ops-common.js') }}"></script>
+<script src="{{ url_for('static', filename='analysis.js') }}"></script>
+{% endblock %}

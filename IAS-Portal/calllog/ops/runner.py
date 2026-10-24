@@ -1,10 +1,12 @@
-"""The collector's scheduler: runs the four jobs (email, email_report, sla, itsm) and feeds the shared folder.
+"""The collector's scheduler: runs the jobs (email, email_report, sla, itsm, daily_summary) and feeds the shared folder.
 
 ``collector.py`` builds a :class:`Runner` and starts it (docs/HUB-DESIGN.md, sections 6, 10, 12 and 15). One worker thread per
 job, so a long Outlook scan never delays the SLA check. What the runner owns, so that the engines stay simple:
 
 * **when** a job runs: every ``interval_minutes`` while ``settings.is_active`` (work days, active hours, holidays); the report job
-  at its ``email.report.send_times`` (once per slot and day, with a 3 hour catch-up); "Run now" requests from the web app at once;
+  at its ``email.report.send_times`` (once per slot and day, with a 3 hour catch-up); the daily summary at its
+  ``summary.send_times`` (once per slot and day, only slots inside its active hours, ``summary.catch_up_minutes`` catch-up);
+  "Run now" requests from the web app at once;
 * **one run at a time** per job, even with two collector PCs (``store.try_lock("job-<job>")`` is held for the whole run), and one
   Outlook conversation at a time inside this process;
 * **settings** are re-read on every cycle (a change on the System page applies without a restart); ``collector_config.json`` is
@@ -40,7 +42,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
-from . import collector_config, events, itsm_records, mailbox, notifications, schemas, sla_records
+from . import analytics, collector_config, events, itsm_records, mailbox, notifications, schemas, sla_records
 from . import settings as hub_settings
 from .engines import common
 from .store import HISTORY_KEEP_DAYS, LOG_ROTATE_BYTES, OpsStore, now_iso
@@ -50,9 +52,11 @@ JOBS = {                       # job -> (module, function); a plain callable is 
     "email_report": ("calllog.ops.engines.email_report", "run_report"),
     "sla": ("calllog.ops.engines.sla_engine", "run"),
     "itsm": ("calllog.ops.engines.itsm_engine", "run"),
+    "daily_summary": ("calllog.ops.engines.daily_summary", "run"),
 }
+# the daily summary only sends one mail (like the sla / itsm mails), so a long e-mail scan must not delay a checkpoint
 OUTLOOK_JOBS = ("email", "email_report")
-DEFAULT_TIMEOUT_MINUTES = {"email": 20, "email_report": 30, "sla": 5, "itsm": 10}
+DEFAULT_TIMEOUT_MINUTES = {"email": 20, "email_report": 30, "sla": 5, "itsm": 10, "daily_summary": 5}
 MAX_TIMEOUT_MINUTES = 240
 
 POLL_SECONDS = 5               # how often a worker looks for work (and for "Run now" requests)
@@ -62,6 +66,13 @@ MIN_GAP = timedelta(minutes=1)
 BACKOFF_CAP_MINUTES = 30
 REPORT_RETRY_MINUTES = 10
 REPORT_STATE = "runner-email_report"
+SUMMARY_STATE = "runner-daily_summary"
+SUMMARY_CATCH_UP_MINUTES = 45  # default of summary.catch_up_minutes
+# jobs that run at fixed times of the day ("slots") instead of every interval_minutes
+SLOT_JOBS = {
+    "email_report": {"module": "email", "state": REPORT_STATE, "within_hours": False},
+    "daily_summary": {"module": "summary", "state": SUMMARY_STATE, "within_hours": True},
+}
 HOUSEKEEPING_STATE = "runner-housekeeping"
 ACCOUNT_KINDS = collector_config.ACCOUNT_KINDS
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -189,28 +200,73 @@ def report_enabled(settings):
     return bool(email_.get("enabled", True) and (email_.get("report") or {}).get("send", True))
 
 
+def summary_enabled(settings):
+    summary = settings.get("summary") or {}
+    return bool(summary.get("enabled") and summary.get("send_times"))
+
+
+def slot_enabled(job, settings):
+    return report_enabled(settings) if job == "email_report" else summary_enabled(settings)
+
+
+def slot_times(job, settings):
+    if job == "email_report":
+        return list((settings["email"].get("report") or {}).get("send_times") or [])
+    return list((settings.get("summary") or {}).get("send_times") or [])
+
+
+def slot_catch_up(job, settings):
+    """How long after its time a slot is still sent (3 h for the report; ``summary.catch_up_minutes`` for the summary)."""
+    if job == "email_report":
+        return CATCH_UP
+    try:
+        minutes = int((settings.get("summary") or {}).get("catch_up_minutes") or SUMMARY_CATCH_UP_MINUTES)
+    except (TypeError, ValueError):
+        minutes = SUMMARY_CATCH_UP_MINUTES
+    return timedelta(minutes=max(5, min(180, minutes)))
+
+
+def _slot_allowed(job, settings, moment):
+    """The summary sends only the times inside its active hours (the report keeps its old rule: any time of a work day)."""
+    spec = SLOT_JOBS[job]
+    return not spec["within_hours"] or hub_settings.is_active(settings, spec["module"], moment)
+
+
+def slots_due(job, settings, now, done):
+    """Slots (``HH:MM``) of a fixed-time job that should run now: passed, not done yet today, still inside the catch-up,
+    on a work day that is not a holiday (and, for the summary, inside its active hours)."""
+    module = SLOT_JOBS[job]["module"]
+    if not slot_enabled(job, settings) or not day_allowed(settings, module, now):
+        return []
+    catch = slot_catch_up(job, settings)
+    return [s for s in slot_times(job, settings) if s not in done and _slot_time(now, s) <= now < _slot_time(now, s) + catch
+            and _slot_allowed(job, settings, _slot_time(now, s))]
+
+
+def next_slot(job, settings, now, done):
+    """When a fixed-time job will next have something to do (None when it is off)."""
+    if not slot_enabled(job, settings):
+        return None
+    module = SLOT_JOBS[job]["module"]
+    for offset in range(9):
+        day = now + timedelta(days=offset)
+        if not day_allowed(settings, module, day):
+            continue
+        for slot in slot_times(job, settings):
+            moment = _slot_time(day, slot)
+            if moment > now and not (offset == 0 and slot in done) and _slot_allowed(job, settings, moment):
+                return moment
+    return None
+
+
 def report_slots_due(settings, now, done):
     """Report slots (``HH:MM``) that should be sent now: passed, not sent yet today, and passed less than 3 hours ago."""
-    if not report_enabled(settings) or not day_allowed(settings, "email", now):
-        return []
-    slots = (settings["email"].get("report") or {}).get("send_times") or []
-    return [s for s in slots if s not in done and _slot_time(now, s) <= now < _slot_time(now, s) + CATCH_UP]
+    return slots_due("email_report", settings, now, done)
 
 
 def next_report_slot(settings, now, done):
     """When the report job will next have something to do (None when reports are off)."""
-    if not report_enabled(settings):
-        return None
-    slots = (settings["email"].get("report") or {}).get("send_times") or []
-    for offset in range(9):
-        day = now + timedelta(days=offset)
-        if not day_allowed(settings, "email", day):
-            continue
-        for slot in slots:
-            moment = _slot_time(day, slot)
-            if moment > now and not (offset == 0 and slot in done):
-                return moment
-    return None
+    return next_slot("email_report", settings, now, done)
 
 
 # ------------------------------------------------------------------------------------------- running a job
@@ -230,19 +286,42 @@ def failed_result(message, **kw):
     return common.JobResult(ok=False, error=message, **kw)
 
 
+def outlook_available():
+    """Can this Python drive Outlook (pywin32)? Always yes off Windows (the tests' fakes stand in for Outlook there)."""
+    if os.name != "nt":
+        return True
+    try:
+        importlib.import_module("win32com.client")
+        return True
+    except Exception:                                   # missing, or installed without its DLLs
+        return False
+
+
+NO_OUTLOOK = ("Outlook cannot be opened: the Python package pywin32 is not installed on this PC. Install it once:  "
+              "python -m pip install pywin32  (internet or the bank proxy needed; add --proxy http://PROXY:PORT), then "
+              "restart the collector. The SLA and ITSM jobs keep running meanwhile.")
+
+
 def call_job(job, ctx, scrub, target=None):
     """Run the engine. Never raises: a crash becomes a failed JobResult and the traceback goes to the job log."""
+    entry = _entry(job, target)
     try:
         function = resolve_job(job, target)
     except ModuleNotFoundError as exc:
-        entry = _entry(job, target)
         wanted = "" if callable(entry) else entry[0]
         if exc.name and wanted and (wanted == exc.name or wanted.startswith(exc.name + ".")):
             return failed_result(f"The {job} engine ({wanted}) is not available on this PC.")
+        if str(exc.name or "").split(".")[0] in ("win32com", "pythoncom", "pywintypes", "win32api"):
+            ctx.log(NO_OUTLOOK)
+            return failed_result(NO_OUTLOOK)
         return failed_result(f"The {job} engine needs a Python package that is missing: {exc.name or exc}. "
                              "Run  python collector.py  once in a window to install the requirements.")
     except Exception as exc:
         return failed_result(f"Cannot load the {job} engine: {type(exc).__name__}: {scrub(exc)}")
+    if (job in OUTLOOK_JOBS and not callable(entry) and str(entry[0]).startswith("calllog.ops.engines.")
+            and not outlook_available()):
+        ctx.log(NO_OUTLOOK)
+        return failed_result(NO_OUTLOOK)
     try:
         result = function(ctx)
     except (Exception, SystemExit) as exc:
@@ -266,7 +345,8 @@ def make_context(job, settings, store, *, clock, log, options, scrub, cc=None, m
     return common.JobContext(
         job=job, settings=settings.get(schemas.JOB_MODULE[job]) or {}, general=settings.get("general") or {}, store=store,
         now=clock, log=log, mailer=mailer, debug=debug, dry_run=dry_run, no_email=no_email, host=host or socket.gethostname(),
-        data_dir=str(store.root.parent), headed=headed, options=dict(options or {}), credentials=credentials)
+        data_dir=str(store.root.parent), headed=headed, options=dict(options or {}), credentials=credentials,
+        hub=settings)
 
 
 def stopped_result():
@@ -358,13 +438,15 @@ class _JobState:
         self.running = False
         self.last_beat = 0.0
         self.noted = {}
+        self.startup = False            # run once as soon as the collector starts (whatever the schedule says)
 
 
 class Runner:
     def __init__(self, store, cc=None, jobs=None, clock=datetime.now, mailer_factory=None, isolate=False, dry_run=False,
                  no_email=False, debug=False, headed=False, console=None, poll_seconds=POLL_SECONDS,
-                 heartbeat_seconds=HEARTBEAT_SECONDS, timeouts=None, script=None):
+                 heartbeat_seconds=HEARTBEAT_SECONDS, timeouts=None, script=None, run_at_start=True):
         self.store = store
+        self.run_at_start = run_at_start                # every enabled job runs once when start() is called
         self.cc = cc or collector_config.CollectorConfig({}, None)
         self.jobs = tuple(j for j in (jobs or schemas.JOBS) if j in schemas.JOBS)
         self.clock = clock
@@ -538,12 +620,12 @@ class Runner:
         self._state(job).last_beat = time.monotonic()
 
     def _enabled(self, job, settings):
-        if job == "email_report":
-            return report_enabled(settings)
+        if job in SLOT_JOBS:
+            return slot_enabled(job, settings)
         return bool((settings.get(schemas.JOB_MODULE[job]) or {}).get("enabled", True))
 
     def _interval(self, job, settings):
-        if job == "email_report":
+        if job in SLOT_JOBS:
             return REPORT_RETRY_MINUTES
         return max(1, int((settings.get(schemas.JOB_MODULE[job]) or {}).get("interval_minutes") or 10))
 
@@ -560,11 +642,11 @@ class Runner:
         st = self._state(job)
         if not self._enabled(job, settings) or st.paused:
             return None
-        if job == "email_report":
-            done = self._slots_done(now)
-            if report_slots_due(settings, now, done):             # a slot is still open: the retry, not the next slot
+        if job in SLOT_JOBS:
+            done = self._slots_done(now, job)
+            if slots_due(job, settings, now, done):               # a slot is still open: the retry, not the next slot
                 return max(now, st.next_run or now)
-            moment = next_report_slot(settings, now, done)
+            moment = next_slot(job, settings, now, done)
             return max(moment, st.next_run) if moment and st.next_run else moment
         moment = max(st.next_run or now, now)
         return next_active_start(settings, schemas.JOB_MODULE[job], moment)
@@ -575,7 +657,7 @@ class Runner:
             return "disabled"
         if st.paused:
             return "paused_auth"
-        if job != "email_report" and not hub_settings.is_active(settings, schemas.JOB_MODULE[job], now):
+        if job not in SLOT_JOBS and not hub_settings.is_active(settings, schemas.JOB_MODULE[job], now):
             return "outside_hours"
         return "idle"
 
@@ -594,25 +676,25 @@ class Runner:
         return "login failed - fix the password, retries paused" if st.paused == "auth" else None
 
     # ------------------------------------------------------------------ decisions
-    def _slots_done(self, now):
-        dry = self._dry_slots.get(now.date().isoformat(), set())
+    def _slots_done(self, now, job="email_report"):
+        dry = self._dry_slots.get((job, now.date().isoformat()), set())
         try:
-            doc = self.store.read_state(REPORT_STATE)
+            doc = self.store.read_state(SLOT_JOBS[job]["state"])
         except Exception:
             return set(dry)
         return (set(doc.get("done") or []) if doc.get("day") == now.date().isoformat() else set()) | dry
 
-    def _mark_slots(self, now, slots):
+    def _mark_slots(self, now, slots, job="email_report"):
         if slots and self.dry_run:                     # remembered for this process only, so a slot runs once
-            self._dry_slots.setdefault(now.date().isoformat(), set()).update(slots)
+            self._dry_slots.setdefault((job, now.date().isoformat()), set()).update(slots)
             return
         if not slots:
             return
-        done = self._slots_done(now) | set(slots)
+        done = self._slots_done(now, job) | set(slots)
         try:
-            self.store.write_state(REPORT_STATE, {"day": now.date().isoformat(), "done": sorted(done)})
+            self.store.write_state(SLOT_JOBS[job]["state"], {"day": now.date().isoformat(), "done": sorted(done)})
         except Exception as exc:
-            self._note("email_report", "slots", f"could not remember the sent report slots: {exc}")
+            self._note(job, "slots", f"could not remember the sent slots: {exc}")
 
     def _initial_next_run(self, job, settings, now):
         try:
@@ -647,13 +729,30 @@ class Runner:
             self._say("The account details changed - scheduled runs resume.", job)
             st.paused, st.paused_since, st.paused_ts, st.cred_sig, st.fail_streak = None, None, None, None, 0
             st.paused_source = None
-        if job == "email_report":
+        if job in SLOT_JOBS:
             if st.next_run and now < st.next_run:
                 return False
-            return bool(report_slots_due(settings, now, self._slots_done(now)))
+            return bool(slots_due(job, settings, now, self._slots_done(now, job)))
         if st.next_run is None:
             st.next_run = self._initial_next_run(job, settings, now)
         return now >= st.next_run and hub_settings.is_active(settings, schemas.JOB_MODULE[job], now)
+
+    def _startup_due(self, job, settings, now):
+        """The start-up run of a job: every enabled job runs once as soon as the collector starts - also outside working
+        hours - so each one shows at once that it works. Not for a job whose login failed (that waits for new account
+        details, to protect the account from a lock-out). A report / summary checkpoint that is due right now is sent by
+        the normal schedule instead (its start-up run never e-mails)."""
+        st = self._state(job)
+        if not self._enabled(job, settings):
+            st.startup = False
+            return False
+        if st.paused == "auth" and not self._credentials_changed(job):
+            st.startup = False
+            return False
+        if job in SLOT_JOBS and slots_due(job, settings, now, self._slots_done(now, job)):
+            st.startup = False
+            return False
+        return True
 
     def step(self, job, now=None):
         """One look at one job: run it if it is due or somebody asked, otherwise keep the heartbeat alive.
@@ -666,8 +765,11 @@ class Runner:
         except Exception as exc:
             self._note(job, "requests", f"could not look for 'Run now' requests: {exc}")
             pending = []
+        st = self._state(job)
         if pending:
             trigger = "run-now"
+        elif st.startup and self._startup_due(job, settings, now):
+            trigger = "startup"
         elif self._enabled(job, settings) and self._due(job, settings, now):
             trigger = "schedule"
         else:
@@ -679,16 +781,24 @@ class Runner:
                 return "busy"
             options = {"trigger": trigger}
             slots = []
-            if trigger == "run-now":
+            if trigger == "startup":
+                st.startup = False
+                if job in SLOT_JOBS:                           # a check run: the report / summary is built, never mailed
+                    options["no_email"] = True
+            if trigger == "startup":
+                pass
+            elif trigger == "run-now":
                 taken = self.store.consume_run_requests(job)
                 if not taken:                                   # another collector took the request first
                     return "idle"
                 options.update(requested_by=next((r.get("requested_by") for r in taken if r.get("requested_by")), ""),
                                send_mail=any(bool(r.get("send_mail")) for r in taken), force=any(bool(r.get("force")) for r in taken))
-            elif job == "email_report":
-                slots = report_slots_due(settings, now, self._slots_done(now))
+            elif job in SLOT_JOBS:
+                slots = slots_due(job, settings, now, self._slots_done(now, job))
                 if not slots:
                     return "idle"
+                if job == "daily_summary":                     # one mail for the latest due checkpoint; all due are done
+                    options["slot"] = slots[-1]
             self._execute(job, settings, options, slots)
         return "ran"
 
@@ -749,8 +859,8 @@ class Runner:
         else:
             mailer = self.mailer_factory() if self.mailer_factory else common.OutlookMailer()
         ctx = make_context(job, settings, self.store, clock=self.clock, log=log, options=options, scrub=self.scrub, cc=self.cc,
-                           mailer=mailer, debug=self.debug, dry_run=self.dry_run, no_email=self.no_email, headed=self.headed,
-                           host=self.host)
+                           mailer=mailer, debug=self.debug, dry_run=self.dry_run,
+                           no_email=self.no_email or bool((options or {}).get("no_email")), headed=self.headed, host=self.host)
         return call_job(job, ctx, self.scrub)
 
     def _run_child(self, job, settings, options, log):
@@ -761,7 +871,7 @@ class Runner:
         spec_path, result_path, out_path = (os.path.join(work, n) for n in ("spec.json", "result.json", "output.txt"))
         spec = {"job": job, "target": target, "config_path": str(self.cc.path) if self.cc.path else "",
                 "data_dir": str(self.store.root.parent), "options": options, "debug": self.debug, "headed": self.headed,
-                "no_email": self.no_email, "dry_run": False, "host": self.host}
+                "no_email": self.no_email or bool((options or {}).get("no_email")), "dry_run": False, "host": self.host}
         with open(spec_path, "w", encoding="utf-8") as f:
             json.dump(spec, f)
         cmd = [sys.executable, str(self.script), "--run-job", job, "--job-spec", spec_path, "--job-result", result_path]
@@ -855,9 +965,9 @@ class Runner:
             self._job_event(job, ts, status == "ok", previous_ok, error)
             st.last_status = status
         if slots and (status in ("ok", "skipped") or result.emails_sent):
-            self._mark_slots(started, slots)            # the slots of the day they were due on, even if it ends after 00:00
+            self._mark_slots(started, slots, job)       # the slots of the day they were due on, even if it ends after 00:00
 
-        if job == "email_report" and status != "error":
+        if job in SLOT_JOBS and status != "error":
             st.next_run = None
         else:
             st.next_run = max(started + timedelta(minutes=self._retry_minutes(job, settings)), finished + MIN_GAP)
@@ -909,7 +1019,9 @@ class Runner:
     def _record(self, module):
         """Fold the scan just written into the SLA / ITSM recording (the SLA Analysis and Change requests tabs), here in
         the collector, so a request that comes and goes while no web page is open is still recorded."""
-        if module == "sla":
+        if module == "email":                       # the Analysis page's long-term e-mail intake (each mail once)
+            analytics.fold_email_snapshot(self.store, self.clock())
+        elif module == "sla":
             sla_records.fold_latest_scan(self.store, sla_records.system_team_map(self.store.read_auto_assign()))
         elif module == "itsm":
             itsm = (self._settings or {}).get("itsm") or {}
@@ -935,7 +1047,7 @@ class Runner:
             self.store.prune_history(module, keep)
 
     def _job_event(self, job, ts, ok, previous_ok, error):
-        if self.dry_run:
+        if self.dry_run or job == "daily_summary":      # a summary mail is not a module's scan: no timeline item
             return
         try:
             event = events.job_event(job, ts, ok, previous_ok, self.scrub(error) if error else error)
@@ -952,6 +1064,7 @@ class Runner:
         self._say(f"Collector started on {self.host} (pid {os.getpid()}), jobs: {', '.join(self.jobs)}"
                   f"{', each run in its own process' if self.isolate else ''}.")
         for job in self.jobs:
+            self._state(job).startup = bool(self.run_at_start)
             self._idle_beat(job, settings, now, force=True)
             thread = threading.Thread(target=self._worker, args=(job,), name=f"job-{job}", daemon=True)
             self._threads.append(thread)

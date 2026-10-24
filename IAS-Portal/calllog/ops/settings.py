@@ -74,9 +74,19 @@ DEFAULTS = {
         "mail": {"send": True, "to": [], "cc": [], "subject": "Security Requests SLA",
                  "display_only": False, "cc_security_users": False},
         "owner_emails": {},                     # security user name (as on the portal) -> e-mail
+        # left out of the SLA, its alerts and the SLA Analysis: these teams' applications, and these applications
+        "exclude_teams": ["Third Party"],
+        "exclude_applications": [],
         "base_url": "https://nbesrv.nbe.ahly.bank",
         "login_path": "/App_Security_Login/Login.aspx",
         "reassign_path": "/SecurityCodeRequest/Security_Assign_Maker/Request_ReAssign.aspx",
+        # SLA Analysis: each scan also reads «الاستفسار عن الطلبات» and the status history of the requests that moved
+        "history_enabled": True,
+        "inquiry_path": "/SecurityCodeRequest/Security_Assign_Maker/RequestDetails_Inquiry.aspx",
+        "history_days": 3,                      # read the requests of the last N days (open ones are followed till closed)
+        "history_max_details": 60,              # at most this many request details opened per scan; the rest next scan
+        "history_seconds": 180,                 # time budget of the history read per scan: what is read is always kept
+        "inquiry_date_format": "%d-%m-%Y",      # how the inquiry page's date pickers write a day (21-10-2026)
         "app_url_fragment": "securitycoderequest",
         "package_text": "موظف اسناد - مستخدم السرية",
         "package_link_text": "دخول",            # the real row's «دخــــــول» link (its a[id*=btnSubmit] is preferred)
@@ -111,6 +121,19 @@ DEFAULTS = {
         "cdp_port": 9222,
         "browser_executable": "",
         "mail": {"send": True, "send_times": ["08:30"], "to": [], "cc": [], "display_only": False},
+    },
+    # the daily summary e-mail: today's calls, e-mails, tickets and change requests as one dashboard, sent by the
+    # collector at each send time that falls inside its active hours on a work day (calllog/ops/engines/daily_summary.py)
+    "summary": {
+        "enabled": False,
+        "send_times": ["10:00", "13:00", "15:00"],
+        "schedule": {"work_days": None, "active_hours": None},
+        "catch_up_minutes": 45,                 # a checkpoint missed by less than this (collector restarting) is still sent
+        "to": [], "cc": [],
+        "subject_prefix": "Daily Operations Summary",
+        "modules": {"calls": True, "email": True, "tickets": True, "crs": True},
+        "per_team": True,
+        "display_only": False,
     },
     "assign": {                                 # ticketing auto-assign (the portal RPA) - see calllog/ops/engines/assign_engine.py
         "enabled": True,
@@ -417,7 +440,11 @@ FIELDS = {
         "warning_minutes": _int(1, 10080), "breach_minutes": _int(1, 10080), "repeat_minutes": _int(0, 10080),
         "mail": {**_MAIL_BASE, "subject": _str(150), "display_only": _bool, "cc_security_users": _bool},
         "owner_emails": _map(_email_one),
+        "exclude_teams": _strs(80), "exclude_applications": _strs(200),
         "base_url": _str(300, False), "login_path": _str(300), "reassign_path": _str(300), "app_url_fragment": _str(100),
+        "history_enabled": _bool, "inquiry_path": _str(300), "history_days": _int(1, 31),
+        "history_max_details": _int(10, 2000), "history_seconds": _int(30, 3600),
+        "inquiry_date_format": _choice("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y"),
         "package_text": _str(200), "package_link_text": _str(100), "login_button_text": _str(100),
         "search_button_text": _str(100), "sent_date_header": _str(100), "owner_header": _str(100),
         "detail_headers": _strs(100), "date_order": _choice("dmy", "mdy"), "selectors": _map(_str(300)),
@@ -430,6 +457,12 @@ FIELDS = {
         "complete_when_missing": _bool, "role_teams": _map(_str(80, allow_empty=False)),
         "headless": _bool, "cdp_port": _int(1024, 65535), "browser_executable": _str(400),
         "mail": {**_MAIL_BASE, "send_times": _times, "display_only": _bool},
+    },
+    "summary": {
+        "enabled": _bool, "send_times": _times, "schedule": _schedule, "catch_up_minutes": _int(5, 180),
+        "to": _emails, "cc": _emails, "subject_prefix": _str(120),
+        "modules": {"calls": _bool, "email": _bool, "tickets": _bool, "crs": _bool},
+        "per_team": _bool, "display_only": _bool,
     },
     "assign": {
         "enabled": _bool, "base_url": _str(300, False), "login_path": _str(300), "app_url_fragment": _str(100),
@@ -481,6 +514,9 @@ def validate(raw):
                 ctx.err(f"email.classification.{name}.{key}", f"'{team}' is not one of the teams")
     if cls["unclassified_team"] and cls["unclassified_team"] not in teams:
         ctx.err("email.classification.unclassified_team", f"'{cls['unclassified_team']}' is not one of the teams")
+    summary = clean.get("summary") or {}
+    if summary.get("enabled") and not summary.get("to"):
+        ctx.err("summary.to", "add at least one recipient, or switch the daily summary off")
     return clean, ctx.errors
 
 

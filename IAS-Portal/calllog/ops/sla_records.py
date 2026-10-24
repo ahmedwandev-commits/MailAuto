@@ -31,6 +31,11 @@ DEFAULT_MAX_RECORDS = 100000         # cap the JSON store; oldest CLOSED request
 DEFAULT_RETENTION_DAYS = 365         # drop CLOSED requests older than this (open/awaiting are always kept)
 _FMT = "%Y-%m-%dT%H:%M:%S"
 
+# The target of each stage of a request's life, in minutes (the SLA itself - first assignment -> confirmation - is
+# ``sla_minutes``). Defaults = the targets the bank's own lifecycle tool was set to.
+STAGE_TARGET_KEYS = ("branch", "region", "pickup", "work", "review", "lifetime")
+DEFAULT_STAGE_TARGETS = {"branch": 30, "region": 60, "pickup": 20, "work": 30, "review": 30, "lifetime": 1440}
+
 
 def default_config():
     """The SLA-recording config an administrator edits in Settings (status labels + which column holds what)."""
@@ -38,13 +43,25 @@ def default_config():
         "sla_minutes": DEFAULT_SLA_MINUTES,
         "max_records": DEFAULT_MAX_RECORDS,
         "retention_days": DEFAULT_RETENTION_DAYS,
+        "stage_targets": dict(DEFAULT_STAGE_TARGETS),
         "statuses": {
-            "assigned": ["اسناد لمستخدم السرية", "قيد الإجراء"],
+            "registered": ["تسجيل"],                                  # the branch registers the request
+            "branch_confirmed": ["تم التعزيز من قبل مشرف الفرع"],      # the branch supervisor confirms it
+            # approved above the branch (an exception request): the region, the financial sector, Platinum
+            "region_approved": ["تم التعزيز من قبل المنطقة", "تم التعزيز من قبل القطاع المالى", "تم التعزيز ال Platinum"],
+            "assigned": ["اسناد لمستخدم السرية"],                     # assigned to a security user: SLA clock starts
+            # assigned again to another security user (the portal writes «لمسخدم» - both spellings are listed)
+            "reassigned": ["اعادة اسناد لمستخدم السرية", "اعادة اسناد لمسخدم السرية"],
+            "in_progress": ["تحت التنفيذ", "قيد الإجراء"],             # current-status words only, never a step
+            "held": ["معلق"],                                         # put on hold by the security user
+            "returned": ["مطلوب تعديل"],                              # sent back to the branch to be corrected
             "executed": ["تم التنفيذ"],                               # employee ran it
             "not_executed": ["لم يتم التنفيذ"],                        # employee could not run it
             "confirmed_executed": ["تم التعزيز على التنفيذ", "تم تسليم الرد",
                                    "تم ارسال كلمة المرور عن طريق ال SMS", "تم اعادة ارسال كلمة المرور عن طريق ال SMS"],
             "confirmed_not": ["تم التعزيز على عدم التنفيذ"],            # manager confirmed it was not executed
+            "rejected": ["رفض", "مرفوض"],                             # rejected: the request ends without execution
+            "transferred": ["تم التحويل", "اجراءات التشغيل"],          # handed to another authority (kept in the timeline)
         },
         "fields": {"id": "ReqID", "status": "الحالة", "executor": "مستخدم السرية", "checker": "مراجع السرية",
                    "system": "النظام", "requester": "اسم الموظف",
@@ -76,6 +93,8 @@ def clean_config(raw):
            "max_records": _int(raw.get("max_records"), d["max_records"], 1000, 2000000),
            "retention_days": _int(raw.get("retention_days"), d["retention_days"], 0, 3650),
            "statuses": {}, "fields": {}, "feed_path": _clean(raw.get("feed_path"))[:500]}
+    rt = raw.get("stage_targets") if isinstance(raw.get("stage_targets"), dict) else {}
+    out["stage_targets"] = {k: _int(rt.get(k), d["stage_targets"][k], 1, 43200) for k in STAGE_TARGET_KEYS}
     rs = raw.get("statuses") if isinstance(raw.get("statuses"), dict) else {}
     for key, fallback in d["statuses"].items():
         vals = rs.get(key)

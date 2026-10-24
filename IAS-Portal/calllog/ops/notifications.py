@@ -238,6 +238,17 @@ def audience(kind, users, actor, entry, rows, old_entry=None):
         add_user(assignee)
     elif kind == schemas.NOTIFY_UNASSIGNED:
         add_user(by_email.get(overlay.normalize_email((old_entry or entry).get("assigned_to_email"))))
+    elif kind in (schemas.NOTIFY_REASSIGNED, schemas.NOTIFY_NO_ACTION):
+        # an employee handed their mail to a teammate / marked it as needing no reply: whoever had assigned it to them
+        # and the managers of its team are told (the new assignee gets "assigned" separately; never the actor)
+        before = old_entry or entry
+        assigner = (users or {}).get(str(before.get("marked_by_id") or ""))
+        if assigner and assigner.get("active", True):
+            add_user(assigner)
+        for manager in team_managers(users, rows, before.get("team", "") or entry.get("team", "")):
+            add_user(manager)
+        if kind == schemas.NOTIFY_REASSIGNED:
+            chosen[:] = [u for u in chosen if overlay.normalize_email(u.get("email")) != assignee_email]
     else:
         by_assignee = bool(me and assignee_email and overlay.normalize_email((actor or {}).get("email")) == assignee_email)
         if kind in (schemas.NOTIFY_DONE, schemas.NOTIFY_REOPENED) and not by_assignee:
@@ -257,10 +268,13 @@ _TITLES = {
     schemas.NOTIFY_DONE: "{actor} marked an e-mail as done",
     schemas.NOTIFY_REOPENED: "E-mail reopened",
     schemas.NOTIFY_REPLIED: "{actor} replied to an assigned e-mail",
+    schemas.NOTIFY_REASSIGNED: "{actor} handed an e-mail to a teammate",
+    schemas.NOTIFY_NO_ACTION: "{actor} marked an e-mail: no reply needed",
 }
 
 
-def notify(store, users, kind, actor, entry, rows, subject, message_id, now=None, old_entry=None, actor_name=""):
+def notify(store, users, kind, actor, entry, rows, subject, message_id, now=None, old_entry=None, actor_name="",
+           detail=""):
     """Create the notifications of one event (see ``audience``). Never raises into the caller's action; returns the ids of
     the people told. ``actor`` may be None for an event nobody triggered (a reply seen by the scan)."""
     if kind not in schemas.NOTIFICATION_TYPES:
@@ -276,6 +290,8 @@ def notify(store, users, kind, actor, entry, rows, subject, message_id, now=None
             text = _clip(f"{text} - {note}", TEXT_CHARS)
         elif kind in (schemas.NOTIFY_ASSIGNED, schemas.NOTIFY_UNASSIGNED, schemas.NOTIFY_REOPENED) and who:
             text = _clip(f"{text} - by {who}", TEXT_CHARS)
+        elif kind in (schemas.NOTIFY_REASSIGNED, schemas.NOTIFY_NO_ACTION) and detail:
+            text = _clip(f"{text} - {detail}", TEXT_CHARS)
         add(store, _uid(user), [make_item(kind, title, text, link_for(user, message_id), who, message_id, now)], now)
         told.append(_uid(user))
     return told

@@ -4,8 +4,9 @@ import re
 SCHEMA_VERSION = 1
 
 MODULES = ("email", "sla", "itsm")                  # things that have a snapshot
-JOBS = ("email", "email_report", "sla", "itsm")     # things the collector runs
-JOB_MODULE = {"email": "email", "email_report": "email", "sla": "sla", "itsm": "itsm"}
+JOBS = ("email", "email_report", "sla", "itsm", "daily_summary")     # things the collector runs
+# job -> settings section; "summary" has no snapshot of its own, so it is not one of MODULES
+JOB_MODULE = {"email": "email", "email_report": "email", "sla": "sla", "itsm": "itsm", "daily_summary": "summary"}
 OVERRIDES = ("no_action", "team", "assignments", "quality")
 
 # SLA request status codes (the portal script used English labels; the codes are stable, labels are for people)
@@ -30,7 +31,9 @@ DONE_NOTE_CHARS = 300
 # In-app notifications (ops/notifications/<user id>.json, docs/FEATURES-V2.md B4)
 NOTIFY_ASSIGNED, NOTIFY_UNASSIGNED, NOTIFY_DONE, NOTIFY_REOPENED, NOTIFY_REPLIED = (
     "assigned", "unassigned", "done", "reopened", "replied")
-NOTIFICATION_TYPES = (NOTIFY_ASSIGNED, NOTIFY_UNASSIGNED, NOTIFY_DONE, NOTIFY_REOPENED, NOTIFY_REPLIED)
+NOTIFY_REASSIGNED, NOTIFY_NO_ACTION = "reassigned", "no_action"      # an employee handed a mail on / needs no reply
+NOTIFICATION_TYPES = (NOTIFY_ASSIGNED, NOTIFY_UNASSIGNED, NOTIFY_DONE, NOTIFY_REOPENED, NOTIFY_REPLIED,
+                      NOTIFY_REASSIGNED, NOTIFY_NO_ACTION)
 NOTIFICATION_KEEP = 100         # items kept per person
 NOTIFICATION_PAGE = 30          # items one poll returns
 

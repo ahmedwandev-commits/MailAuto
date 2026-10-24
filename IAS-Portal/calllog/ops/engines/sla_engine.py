@@ -35,7 +35,7 @@ import sys
 import time
 from collections import Counter
 from contextlib import suppress
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
@@ -191,6 +191,17 @@ JS_READ_TABLES = "() => {" + r"""
     d.innerHTML = String(v).replace(/<br\s*\/?>/gi, " ");
     return (d.textContent || "").replace(/\s+/g, " ").trim();
   };
+  // the row's own «التفاصيل» post-back (an ASP.NET grid link: __doPostBack('grid', 'Select$N')), or null
+  const PB = /__doPostBack\(\s*['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]\s*\)/, PBO = /WebForm_PostBackOptions\(\s*["']([^"']*)["']\s*,\s*["']([^"']*)["']/;
+  const pbOf = tr => {
+    if (!tr || !tr.querySelectorAll) return null;
+    const ctls = [...tr.querySelectorAll('a[href*="PostBack"], [onclick*="PostBack"]')];
+    if (!ctls.length) return null;
+    const det = ctls.find(c => (c.textContent || c.value || '').includes('التفاصيل')) || ctls[ctls.length - 1];
+    const src = (det.getAttribute('href') || '') + ' ' + (det.getAttribute('onclick') || '');
+    const m = PB.exec(src) || PBO.exec(src);
+    return m ? {t: m[1], a: m[2]} : null;
+  };
   const out = [], seen = new Set();
   const DT = (window.jQuery && window.jQuery.fn && window.jQuery.fn.dataTable) || window.DataTable;
   if (DT && DT.tables && DT.Api) {
@@ -202,7 +213,9 @@ JS_READ_TABLES = "() => {" + r"""
         const n = api.cell(r, c).node();
         return n ? cellText(n) : strip(api.cell(r, c).data());
       }));
-      out.push({source: "datatables", headers, rows});
+      let pbs = [];
+      try { pbs = api.rows().nodes().toArray().map(pbOf); } catch (e) { pbs = rows.map(() => null); }
+      out.push({source: "datatables", headers, rows, pbs});
       seen.add(node);
     }
   }
@@ -215,7 +228,8 @@ JS_READ_TABLES = "() => {" + r"""
       head = [...t.rows[0].cells];
     // no <thead> (an ASP.NET GridView): the header row, and a <th> footer row, sit in the body; neither is a request
     const body = [...t.tBodies].flatMap(b => [...b.rows]).filter(tr => tr.cells.length > 1 && !allTh(tr));
-    out.push({source: "dom", headers: head.map(cellText), rows: body.map(tr => [...tr.cells].map(cellText))});
+    out.push({source: "dom", headers: head.map(cellText), rows: body.map(tr => [...tr.cells].map(cellText)),
+              pbs: body.map(pbOf)});
   }
   return out;
 }"""
@@ -424,7 +438,7 @@ def login(browser, cfg, username, password, wrong_text):
             if login_marker not in (browser.current_url() or "").lower() or browser.eval(landing):
                 browser.wait_ready(timeout_s)
                 return
-        _sleep_ms(300)
+        _sleep_ms(POLL_MS)
     raise LoginError(wrong_text)
 
 
@@ -443,9 +457,9 @@ def info_total(text):
     return int(digits) if digits.isdigit() else None
 
 
-def _wait_for_grid(browser, cfg):
+def _wait_for_grid(browser, cfg, seconds=None):
     """Read the requests table until it has rows or the portal's «no data» line (or the timeout). Returns the table."""
-    deadline = time.monotonic() + int(cfg["timeout_seconds"])
+    deadline = time.monotonic() + (int(cfg["timeout_seconds"]) if seconds is None else seconds)
     table = None
     while True:
         with suppress(Exception):
@@ -454,19 +468,18 @@ def _wait_for_grid(browser, cfg):
                 return table
         if time.monotonic() >= deadline:
             return table
-        _sleep_ms(400)
+        _sleep_ms(POLL_MS)
 
 
 def read_requests(browser, cfg, debug):
     """(headers, rows) of the requests table on the Re-Assign page."""
-    _sleep_ms(SETTLE_MS)
-    table = pick_table(browser.eval(READ_TABLES), cfg)
+    table = _wait_for_grid(browser, cfg, SETTLE_MS * 2 / 1000.0)     # a grid drawn by the page itself: seconds at most
     said_empty = (browser.eval(JS_GRID_STATE) or {}).get("empty")
     if table is None or not (table["rows"] or said_empty):
         # results not loaded yet -> press the search button, then wait for rows or the portal's «no data» line
+        mark_page(browser)
         if _click(browser, js_click_text(cfg["search_button_text"])):
-            _sleep_ms(SETTLE_MS)
-            browser.wait_ready(int(cfg["timeout_seconds"]))
+            wait_postback(browser, int(cfg["timeout_seconds"]))
         table = _wait_for_grid(browser, cfg)
     debug.snap(browser, "results")
     if table is None:
@@ -480,8 +493,8 @@ def read_requests(browser, cfg, debug):
         for _ in range(MAX_PAGES):
             if not _click(browser, js_next_page()):
                 break
-            _sleep_ms(PAGE_MS)
-            t = pick_table(browser.eval(READ_TABLES), cfg)
+            t = _poll(lambda: pick_table(browser.eval(READ_TABLES), cfg),
+                      lambda t: t is not None and any(r not in rows for r in t["rows"]), PAGE_MS * 4 / 1000.0)
             new = [r for r in (t["rows"] if t else []) if r not in rows]
             if not new:
                 break
@@ -504,8 +517,488 @@ def url_marker(path, default, keep_extension=False):
     return (name if keep_extension else os.path.splitext(name)[0]).lower() or default
 
 
-def scrape(ctx, username, password):
-    """Log in, open the package, open the Re-Assign page, read the table. Returns (headers, rows).
+# --------------------------------------------------------------------------- SLA Analysis: the live status history
+# «الاستفسار عن الطلبات» lists the requests of a period; each row's «التفاصيل» opens «تفاصيل الطلب» with the request
+# number and «الحالة التاريخية للطلب» (who did each step and when). Read in the same session as the Re-Assign page.
+INQUIRY_DATE_FORMAT = "%d-%m-%Y"           # how the portal's date picker writes «21-10-2026»
+DETAILS_WAIT_S = 12                        # one request's details: the portal's own time, checked every POLL_MS
+CLOSE_WAIT_S = 3                           # a details box that closes on the client
+POLL_MS = 150                              # how often a waiting step looks again (a local DevTools call: no portal load)
+QUIET_S = 1.0                              # an action that posts nothing back is known after this
+# The «تفاصيل الطلب» status-history grid of the bank's portal (the id its own lifecycle tool reads); found by its
+# headers when the id is not there
+DETAIL_GRID_ID = "ContentPlaceHolder1_UC_RequestDeatils_Inquiry1_UC_RequestDetails1_GridView_Req"
+
+
+def js_fill_inquiry(date_from, date_to):
+    """Set «تاريخ الطلب من / الى» and «مجموعة العمل» = All on the inquiry page. Returns {from, to, group, changed}:
+    each found, and whether the work group had to be changed (on the real page that posts back)."""
+    return ("(() => {" + JS_NORM
+            + "const wantFrom = norm('تاريخ الطلب من'), wantTo = norm('تاريخ الطلب الى'), wantGroup = norm('مجموعة العمل');"
+            + "const near = el => { let t = [el.getAttribute('placeholder'), el.getAttribute('aria-label'), el.id, el.name].join(' ');"
+            + "  if (el.id) { const l = document.querySelector('label[for=\"' + el.id + '\"]'); if (l) t += ' ' + l.textContent; }"
+            + "  let p = el.parentElement; for (let i = 0; i < 3 && p; i++, p = p.parentElement) {"
+            + "    const l = p.querySelector('label'); if (l) { t += ' ' + l.textContent; break; } }"
+            + "  return norm(t); };"
+            + "const set = (el, v) => { if (!el) return false; try { el.removeAttribute('readonly'); el.focus(); } catch (e) {}"
+            + "  el.value = v; for (const ev of ['input', 'change', 'blur']) el.dispatchEvent(new Event(ev, {bubbles: true}));"
+            + "  return true; };"
+            + "const ins = [...document.querySelectorAll('input')].filter(visible)"
+            + "  .filter(i => !/^(hidden|submit|button|checkbox|radio|image|password)$/i.test(i.type || ''));"
+            + "let f = ins.find(i => near(i).includes(wantFrom)), t = ins.find(i => near(i).includes(wantTo) && i !== f);"
+            + "if (!f) f = ins.find(i => /(fromdate|datefrom|from$|_from)/i.test((i.id || '') + ' ' + (i.name || '')));"
+            + "if (!t) t = ins.find(i => i !== f && /(todate|dateto|to$|_to)/i.test((i.id || '') + ' ' + (i.name || '')));"
+            + "const sels = [...document.querySelectorAll('select')].filter(visible);"
+            + "const allAt = s => [...s.options].findIndex(o => norm(o.text) === 'all' || norm(o.text) === norm('الكل'));"
+            + "const g = sels.find(s => near(s).includes(wantGroup) && allAt(s) >= 0) || sels.find(s => allAt(s) >= 0);"
+            + "let group = false, changed = false;"
+            + "if (g) { const i = allAt(g); if (g.selectedIndex !== i) { g.selectedIndex = i; changed = true;"
+            + "  g.dispatchEvent(new Event('change', {bubbles: true})); } group = true; }"
+            + "return {from: set(f, " + json.dumps(date_from) + "), to: set(t, " + json.dumps(date_to) + "), group, changed}; })()")
+
+
+JS_INQUIRY_FIELDS = ("(() => {" + JS_NORM
+                     + "const want = [norm('تاريخ الطلب من'), norm('تاريخ الطلب الى')];"
+                     + "const labels = [...document.querySelectorAll('label, span, td, th')].filter(e => !e.children.length)"
+                     + "  .map(e => norm(e.textContent)); return want.every(w => labels.some(l => l.includes(w))); })()")
+
+# DataTables shows 20 rows a page: show them all, so every row's «التفاصيل» is on the page (the click path only)
+JS_SHOW_ALL_ROWS = ("(() => { const DT = (window.jQuery && jQuery.fn && jQuery.fn.dataTable) || window.DataTable; let n = 0;"
+                    " if (DT && DT.tables && DT.Api) for (const t of DT.tables()) { try { const a = new DT.Api(t);"
+                    " if (a.page.len() !== -1) { a.page.len(-1).draw(false); n++; } } catch (e) {} } return n; })()")
+
+# Before an action that may post the page back: a mark on the window (gone when the page is replaced) and a flag set
+# the moment the browser starts leaving the page. ASP.NET's partial post-backs (UpdatePanel) are seen through Sys.
+JS_MARK = ("(() => { const m = {leaving: false}; window.__nbeMark = m;"
+           " addEventListener('beforeunload', () => { m.leaving = true; }, {once: true});"
+           " addEventListener('pagehide', () => { m.leaving = true; }, {once: true}); return true; })()")
+JS_MARK_STATE = ("(() => { const m = window.__nbeMark; let busy = false;"
+                 " try { busy = !!(window.Sys && Sys.WebForms && Sys.WebForms.PageRequestManager"
+                 "   && Sys.WebForms.PageRequestManager.getInstance().get_isInAsyncPostBack()); } catch (e) {}"
+                 " return {mark: !!m, leaving: !!(m && m.leaving), busy, ready: document.readyState}; })()")
+
+
+def mark_page(browser):
+    with suppress(Exception):
+        browser.eval(JS_MARK)
+
+
+def wait_postback(browser, timeout_s, quiet_s=QUIET_S):
+    """After an action that may post the page back (call ``mark_page`` first): wait until the new page is ready, or a
+    partial post-back has finished. Returns True when a post-back happened, False when nothing was posted within
+    ``quiet_s`` (or at the timeout). Replaces fixed sleeps: a fast portal costs only its own time."""
+    start, seen = time.monotonic(), False
+    while True:
+        try:
+            s = browser.eval(JS_MARK_STATE) or {}
+        except Exception:                                  # the old page is being replaced right now
+            s, seen = None, True
+        if s is not None:
+            if not s.get("mark") and s.get("ready") == "complete":
+                return True
+            if s.get("busy") or s.get("leaving") or not s.get("mark"):
+                seen = True
+            elif seen:
+                return True                                # a partial post-back finished (the page stayed)
+            elif time.monotonic() - start >= quiet_s:
+                return False                               # nothing was posted back
+        if time.monotonic() - start >= timeout_s:
+            return seen
+        _sleep_ms(POLL_MS)
+
+
+def js_details_point(target):
+    """Centre {x, y} of the «التفاصيل» control in the inquiry row whose cells match ``target`` ({header: text});
+    'notfound' when no row matches, 'nolink' when the row has no control."""
+    return ("(() => {" + JS_NORM
+            + "const R = el => { try{el.scrollIntoView({block:'center'});}catch(e){} const r = el.getBoundingClientRect();"
+            + "  return {x: r.left + r.width/2, y: r.top + r.height/2}; };"
+            + "const want = " + json.dumps(target, ensure_ascii=False) + ";"
+            + "const cell = n => n ? norm(n.innerText || n.textContent || '') : '';"
+            + "for (const t of document.querySelectorAll('table')) {"
+            + "  const hr = t.tHead ? t.tHead.rows[t.tHead.rows.length - 1] : t.rows[0]; if (!hr) continue;"
+            + "  const heads = [...hr.cells].map(c => cell(c)); const idx = {}; let ok = true;"
+            + "  for (const h of Object.keys(want)) { const nh = norm(h); let i = heads.indexOf(nh);"
+            + "    if (i < 0) i = heads.findIndex(x => x.includes(nh)); if (i < 0) { ok = false; break; } idx[h] = i; }"
+            + "  if (!ok) continue;"
+            + "  for (const tr of (t.tBodies[0] ? t.tBodies[0].rows : [])) {"
+            + "    if (!visible(tr)) continue;"
+            + "    if (Object.keys(want).every(h => cell(tr.cells[idx[h]]) === norm(want[h]))) {"
+            + "      const ctls = [...tr.querySelectorAll('a, button, input[type=button], input[type=submit], [onclick]')].filter(visible);"
+            + "      const ctl = ctls.find(c => textOf(c).includes(norm('التفاصيل'))) || ctls[ctls.length - 1];"
+            + "      return ctl ? R(ctl) : 'nolink'; } } }"
+            + "return 'notfound'; })()")
+
+
+def js_postback(target, argument):
+    """Open one row's «التفاصيل» the way its own link does - ``__doPostBack(target, argument)`` - with the page marked
+    first (see ``wait_postback``). False when the page has no __doPostBack."""
+    return ("(() => {" + "const m = {leaving: false}; window.__nbeMark = m;"
+            + " addEventListener('beforeunload', () => { m.leaving = true; }, {once: true});"
+            + " if (typeof window.__doPostBack !== 'function') return false;"
+            + " window.__doPostBack(" + json.dumps(str(target)) + ", " + json.dumps(str(argument)) + "); return true; })()")
+
+
+# The «الحالة التاريخية للطلب» table of the open details (by its id, else by its five headers), and its DataTables
+# wrapper: the portal shows it 5 rows a page, sorted by name - every page must be read (see read_history)
+JS_FIND_HISTORY = r"""
+  const want = ['رقم المستخدم', 'اسم المستخدم', 'نوع المستخدم', 'التاريخ', 'الحالة'].map(norm);
+  const strip = v => { if (v === null || v === undefined || typeof v === 'object') return '';
+    const d = document.createElement('div'); d.innerHTML = String(v).replace(/<br\s*\/?>/gi, ' ');
+    return (d.textContent || '').replace(/\s+/g, ' ').trim(); };
+  const txt = n => (n ? strip(n.innerHTML) : '');               // «21/10/2026<br>08:54:23» -> «21/10/2026 08:54:23»
+  const head = t => t.tHead ? t.tHead.rows[t.tHead.rows.length - 1] : t.rows[0];
+  const fits = t => { const hr = head(t); if (!hr) return false; const nh = [...hr.cells].map(c => norm(txt(c)));
+    return want.every(w => nh.some(h => h === w || h.includes(w))); };
+  let table = document.getElementById(""" + json.dumps(DETAIL_GRID_ID) + r""");
+  if (!(table && visible(table) && fits(table))) table = [...document.querySelectorAll('table')].find(t => visible(t) && fits(t));
+  const wrap = table ? (table.closest('.dataTables_wrapper') || table.parentElement) : null;
+  const DT = (window.jQuery && jQuery.fn && jQuery.fn.dataTable) || window.DataTable;
+  const isDT = !!(table && DT && DT.isDataTable && DT.isDataTable(table));
+"""
+
+# Show every row of the history table at once: the DataTables API, else its "Show N" list set to the largest choice
+JS_HISTORY_EXPAND = "(() => {" + JS_NORM + JS_FIND_HISTORY + r"""
+  if (!table) return '';
+  if (isDT) { try { const a = new DT.Api(table); if (a.page.len() !== -1) { a.page.len(-1).draw(false); return 'api'; } return ''; } catch (e) {} }
+  const sel = wrap && wrap.querySelector('.dataTables_length select, select[name$="_length"]');
+  if (sel && sel.options.length) {
+    const opts = [...sel.options];
+    const best = opts.find(o => o.value === '-1') || opts.reduce((a, b) => ((+b.value || 0) > (+a.value || 0) ? b : a), opts[0]);
+    if (best && sel.value !== best.value) { sel.value = best.value; sel.dispatchEvent(new Event('change', {bubbles: true})); return 'length'; }
+  }
+  return '';
+})()"""
+
+# Next page of the history table (its own pager only); false when there is none
+JS_HISTORY_NEXT = "(() => {" + JS_NORM + JS_FIND_HISTORY + r"""
+  if (!wrap) return false;
+  const next = wrap.querySelector('.paginate_button.next:not(.disabled), li.next:not(.disabled) > a, a.next:not(.disabled)');
+  if (!next || next.closest('.disabled')) return false;
+  next.click();
+  return true;
+})()"""
+
+
+def js_detail_snapshot(tokens=()):
+    """ONE cheap look at the details: {open, number (the «رقم الطلب» value), headers, rows, total (the «Showing 1 to 5
+    of 6 records» count of the history table; null when it shows none), in_page (no box of its own: the panel is filled
+    in place), verified (the box shows one of ``tokens`` - the row's employee / user number; null when it cannot tell),
+    mark/leaving/busy/ready (see ``wait_postback``)}. ``rows`` = every row the DataTables API holds, else the rows on
+    the page (read_history then expands / pages the table until ``total`` rows are read). The request number is looked
+    for in labels first and only then in cells, inside the details box - never by reading every element's text."""
+    return ("(() => {" + JS_NORM + JS_FIND_HISTORY + r"""
+  const m = window.__nbeMark; let busy = false;
+  try { busy = !!(window.Sys && Sys.WebForms && Sys.WebForms.PageRequestManager
+    && Sys.WebForms.PageRequestManager.getInstance().get_isInAsyncPostBack()); } catch (e) {}
+  const out = {open: false, number: '', headers: [], rows: [], total: null, in_page: false, verified: null,
+               mark: !!m, leaving: !!(m && m.leaving), busy, ready: document.readyState};
+  if (!table) return out;
+  let rows;
+  if (isDT) {
+    const api = new DT.Api(table), nodes = api.rows().nodes().toArray();
+    rows = nodes.every(Boolean) ? nodes.map(tr => [...tr.cells].map(txt))
+      : api.rows().data().toArray().map(d => (Array.isArray(d) ? d : Object.values(d)).map(strip));
+  } else {
+    rows = [...table.querySelectorAll('tr')].filter(tr => tr !== head(table) && tr.cells.length > 1)
+      .filter(tr => ![...tr.cells].every(c => c.tagName === 'TH')).filter(tr => !tr.querySelector('td.dataTables_empty'))
+      .map(tr => [...tr.cells].map(txt));
+  }
+  const info = wrap && wrap.querySelector('.dataTables_info, [id$="_info"]');
+  const mt = info ? /(?:of|من)\s+([\d,٠-٩]+)/.exec(info.textContent || '') : null;
+  if (mt) out.total = parseInt(mt[1].replace(/,/g, '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)), 10);
+  out.headers = [...head(table).cells].map(txt);
+  out.rows = rows;
+  out.open = rows.length > 0;
+  const box = table.closest('.modal, [role=dialog], .ui-dialog, .modal-content, fieldset, .panel');
+  out.in_page = !box;
+  let scope = box;
+  if (!scope) { scope = table.parentElement; for (let i = 0; i < 4 && scope && scope.parentElement; i++) scope = scope.parentElement; }
+  const num = norm('رقم الطلب');
+  const after = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const findNo = sel => { for (const el of scope.querySelectorAll(sel)) {
+      if (el.children.length || norm(el.textContent).replace(/[:：]/g, '').trim() !== num) continue;
+      let p = el.parentElement;
+      for (let i = 0; i < 3 && p; i++, p = p.parentElement) {
+        const inp = [...p.querySelectorAll('input, textarea')].find(x => after(el, x));
+        if (inp && (inp.value || '').trim()) return inp.value.trim();
+        const sp = [...p.querySelectorAll('span, td, div')].find(x => after(el, x) && !x.children.length && (x.textContent || '').trim());
+        if (sp && /\d/.test(sp.textContent)) return sp.textContent.trim();
+      }
+    } return ''; };
+  out.number = findNo('label, span, b, strong, th, legend') || findNo('td, div');
+  const tokens = """ + json.dumps([str(t) for t in tokens if str(t or "").strip()]) + r""";
+  if (box && tokens.length) {
+    const seen = (box.textContent || '') + ' ' + [...box.querySelectorAll('input, textarea')].map(i => i.value || '').join(' ');
+    out.verified = tokens.some(t => seen.includes(t));
+  }
+  return out;
+})()""")
+
+
+JS_GRID_PRESENT = ("(() => {" + JS_NORM
+                   + "const want = [norm('تاريخ الطلب'), norm('مستخدم السرية'), norm('الحالة')];"
+                   + "return [...document.querySelectorAll('table')].some(t => { const hr = t.tHead ? t.tHead.rows[t.tHead.rows.length - 1] : t.rows[0];"
+                   + " if (!hr) return false; const nh = [...hr.cells].map(c => norm(c.textContent));"
+                   + " return want.every(w => nh.some(h => h === w || h.includes(w))); }); })()")
+
+
+def _poll(read, ok, seconds, every_ms=None):
+    """Call ``read()`` until ``ok(value)`` or ``seconds`` pass; the last value (or None)."""
+    deadline = time.monotonic() + seconds
+    value = None
+    while True:
+        with suppress(Exception):
+            value = read()
+            if ok(value):
+                return value
+        if time.monotonic() >= deadline:
+            return value
+        _sleep_ms(POLL_MS if every_ms is None else every_ms)
+
+
+def pick_inquiry_table(tables):
+    """The inquiry results table: it has the request date, the security user and the status columns."""
+    from .. import sla_history
+    best = None
+    for t in tables or []:
+        h = t.get("headers") or []
+        if all(sla_history.find_col(h, sla_history.GRID_COLUMNS[k]) is not None for k in ("date", "executor", "status")):
+            key = (t.get("source") == "datatables", len(t.get("rows") or []))
+            if best is None or key > best[0]:
+                best = (key, t)
+    return best[1] if best else None
+
+
+def _close_details(browser):
+    """Close «تفاصيل الطلب» when it is a box of its own: its «اغلاق» button, else a modal close control, else Escape."""
+    if not _click(browser, js_click_text("اغلاق")):
+        if not _click(browser, js_click_selector(".modal .close, [data-dismiss=modal], .ui-dialog-titlebar-close")):
+            with suppress(Exception):
+                for kind in ("rawKeyDown", "keyUp"):
+                    browser.call("Input.dispatchKeyEvent", type=kind, key="Escape", code="Escape",
+                                 windowsVirtualKeyCode=27, nativeVirtualKeyCode=27)
+    _poll(lambda: browser.eval(js_detail_snapshot()) or {}, lambda s: not s.get("open"), CLOSE_WAIT_S)
+
+
+def _signature(snap):
+    return "\x1f".join("\x1e".join(map(str, r)) for r in (snap or {}).get("rows") or [])
+
+
+def _complete_history(browser, snap, tokens=()):
+    """``snap`` with EVERY row of «الحالة التاريخية للطلب», or None when they cannot all be read. The portal shows that
+    table 5 rows a page sorted by name: one page alone can miss the assignment or the registration and give a wrong age
+    or a request in the wrong stage - so a partial read is never recorded (the request is read again next scan).
+    The table's own «of N records» count is the yardstick: the DataTables rows, else every row shown at once
+    ("Show" set to the largest choice), else the pages one by one."""
+    total = snap.get("total")
+    if not total or len(snap.get("rows") or []) >= total:
+        return snap
+    read = lambda: browser.eval(js_detail_snapshot(tokens)) or {}          # noqa: E731
+    if browser.eval(JS_HISTORY_EXPAND):
+        s = _poll(read, lambda s: len(s.get("rows") or []) >= total, 3)
+        if s and len(s.get("rows") or []) >= total:
+            return {**snap, "rows": s["rows"]}
+    rows, pages = list(snap.get("rows") or []), {_signature(snap)}
+    for _ in range(40):
+        if len(rows) >= total or not browser.eval(JS_HISTORY_NEXT):
+            break
+        s = _poll(read, lambda s: _signature(s) not in pages and bool(s.get("rows")), 3) or {}
+        if _signature(s) in pages or not s.get("rows"):
+            break
+        pages.add(_signature(s))
+        rows += list(s["rows"])
+    return {**snap, "rows": rows} if len(rows) >= total else None
+
+
+def history_seconds(cfg, general=None):
+    """The history read's time budget (seconds): the setting, kept two minutes inside the scan's own time limit
+    (``general.job_timeout_minutes.sla``, 5 minutes by default) so a scan is never killed with its work unsaved."""
+    seconds = int(cfg.get("history_seconds") or DEFAULTS["sla"]["history_seconds"])
+    job_minutes = 5
+    with suppress(Exception):
+        job_minutes = int(((general or {}).get("job_timeout_minutes") or {}).get("sla") or 5)
+    return max(30, min(seconds, job_minutes * 60 - 120))
+
+
+def read_history(browser, cfg, debug, plan, log=lambda m: None):
+    """Read «الاستفسار عن الطلبات» for the plan's period, then the status history of the requests that are new or whose
+    status moved (``plan['index']``): at most ``history_max_details`` per scan and only within the plan's time budget
+    (``plan['seconds']``) - what was read is always returned, the rest follows at the next scan. Returns {"items",
+    "rows", "opened", "left", "failed", "timing"}: ``items`` = [{"grid", "id", "history"}] for
+    ``sla_history.fold_history`` (``failed`` marks a row whose details could not be read). Raises PortalError only when
+    the page itself cannot be used; one request that cannot be read is skipped.
+
+    Fast path (the bank's portal): a row's «التفاصيل» is a ``__doPostBack`` link, so each drill is ONE call of that
+    post-back and ONE cheap look per ``POLL_MS`` until a NEW status history with a fresh request number shows - no
+    mouse, no re-drawing the grid, no closing, no fixed sleep. Rows without such a link are clicked (and their box
+    closed) the old way."""
+    from .. import sla_history
+    started = time.monotonic()
+    deadline = started + float(plan.get("seconds") or history_seconds(cfg))
+    timeout_s = int(cfg["timeout_seconds"])
+    base = cfg["base_url"].rstrip("/")
+    path = cfg.get("inquiry_path") or DEFAULTS["sla"]["inquiry_path"]
+    marker = url_marker(path, "requestdetails_inquiry")
+    href = browser.eval(js_link_href(url_marker(path, "requestdetails_inquiry.aspx", keep_extension=True)))
+    browser.navigate(href if isinstance(href, str) and href.startswith("http") else base + path, timeout=timeout_s)
+    if marker not in (browser.current_url() or "").lower():
+        raise PortalError(f"Could not open the inquiry page «الاستفسار عن الطلبات» (ended on {browser.current_url()})")
+    _poll(lambda: browser.eval(JS_INQUIRY_FIELDS), bool, min(timeout_s, 15))
+    fmt = cfg.get("inquiry_date_format") or INQUIRY_DATE_FORMAT
+    dfrom, dto = plan["date_from"].strftime(fmt), plan["date_to"].strftime(fmt)
+
+    def search():
+        mark_page(browser)
+        filled = browser.eval(js_fill_inquiry(dfrom, dto)) or {}
+        if filled.get("changed") and wait_postback(browser, timeout_s):   # the work group posted back: dates again
+            filled = browser.eval(js_fill_inquiry(dfrom, dto)) or {}
+        if not (filled.get("from") and filled.get("to")):
+            raise PortalError("The inquiry page's date fields («تاريخ الطلب من / الى») were not found - the page may "
+                              "have changed. The SLA history was not read this scan.")
+        mark_page(browser)
+        if not _click(browser, js_click_text(cfg["search_button_text"])):
+            raise PortalError("The inquiry page's search button was not found.")
+        wait_postback(browser, timeout_s)
+        return _poll(lambda: pick_inquiry_table(browser.eval(READ_TABLES)),
+                     lambda t: t is not None and (t["rows"] or (browser.eval(JS_GRID_STATE) or {}).get("empty")),
+                     timeout_s)
+
+    t0 = time.monotonic()
+    table = search()
+    searches, search_s = 1, time.monotonic() - t0
+    grid_total = None
+    with suppress(Exception):                             # the grid's own «of N records» (for the log / the check)
+        grid_total = info_total((browser.eval(JS_GRID_STATE) or {}).get("info"))
+    debug.snap(browser, "inquiry")
+    if table is None:
+        raise PortalError("The inquiry results table did not appear after the search.")
+    rows, pbs = list(table["rows"]), list(table.get("pbs") or [None] * len(table["rows"]))
+    if table["source"] == "dom":                         # plain paging: walk the pages
+        for _ in range(MAX_PAGES):
+            if not _click(browser, js_next_page()):
+                break
+            t = _poll(lambda: pick_inquiry_table(browser.eval(READ_TABLES)),
+                      lambda t: t is not None and any(r not in rows for r in t["rows"]), 3)
+            new = [(r, p) for r, p in zip(t["rows"] if t else [], (t.get("pbs") if t else None) or []) if r not in rows]
+            if not new:
+                break
+            rows.extend(r for r, _ in new)
+            pbs.extend(p for _, p in new)
+    grid = sla_history.grid_rows(table["headers"], rows)
+    # the postback of each grid row, by its key (grid_rows drops footer lines: map them through the row cells)
+    pb_of = {}
+    for r, p in zip(rows, pbs):
+        if p:
+            keyed = sla_history.grid_rows(table["headers"], [r])
+            if keyed:
+                pb_of[keyed[0]["key"]] = p
+    index = plan.get("index") or {}
+    budget = int(cfg.get("history_max_details") or DEFAULTS["sla"]["history_max_details"])
+    # a request still with the branch (registered / confirmed by its supervisor) has no SLA step yet: opened once it moves
+    # and a request of an excluded application (the Third Party team's by default) is never opened at all
+    excluded = plan.get("excluded") or (lambda system: False)
+    todo = {it["key"] for it in grid if sla_history.needs_details(it, index)
+            and sla_history.detail_priority(it["status"], plan["cfg"]) is not None
+            and not excluded(it["system"])}
+    # when a scan cannot read them all, the CLOSED requests first (their history holds every stamp of the SLA), then
+    # the ones awaiting the reviewer, then the open ones; the oldest request first within each
+    ordered = sorted(grid, key=lambda it: (it["key"] not in todo, sla_history.detail_priority(it["status"], plan["cfg"]) or 0,
+                                           (sla_history.parse_time(it["date"]) or datetime.max)))
+    items, opened, failed, streak, unverified, partial = [], 0, 0, 0, 0, 0
+    read_numbers = {}                                     # request number -> grid key, this scan
+    prev_sig = ""
+    drill_s = []
+    stopped = ""
+    for it in ordered:
+        if it["key"] not in todo:
+            items.append({"grid": it, "id": "", "history": None})
+            continue
+        if opened + failed >= budget or streak >= 3 or time.monotonic() >= deadline or stopped:
+            if not stopped:
+                stopped = ("time budget" if time.monotonic() >= deadline else "3 failures in a row" if streak >= 3
+                           else "detail budget")
+            items.append({"grid": it, "id": "", "history": None})
+            continue
+        t1 = time.monotonic()
+        tokens = [it.get("employee_no"), it.get("user_no")]
+        fresh = lambda s: bool(s.get("open") and s.get("number") and s.get("ready") == "complete"   # noqa: E731
+                               and not s.get("busy") and not s.get("leaving") and _signature(s) != prev_sig
+                               and read_numbers.get(s["number"], it["key"]) == it["key"])
+        got, snap, in_page = None, None, False
+        try:
+            pb = pb_of.get(it["key"])
+            if pb and browser.eval(js_postback(pb["t"], pb["a"])):
+                snap = _poll(lambda: browser.eval(js_detail_snapshot(tokens)) or {}, fresh, DETAILS_WAIT_S)
+                in_page = True                            # never closed: the next post-back replaces it
+            else:
+                with suppress(Exception):
+                    browser.eval(JS_SHOW_ALL_ROWS)        # a post-back may have put the grid back to one page
+                target = {sla_history.GRID_COLUMNS[k]: it[k]
+                          for k in ("date", "employee_no", "user_no", "system", "request_type", "form", "branch") if it[k]}
+                point = browser.eval(js_details_point(target))
+                if isinstance(point, dict):
+                    mark_page(browser)
+                    browser.click_at(point["x"], point["y"])
+                    snap = _poll(lambda: browser.eval(js_detail_snapshot(tokens)) or {}, fresh, DETAILS_WAIT_S)
+                    in_page = bool((snap or {}).get("in_page"))
+            if snap and fresh(snap):
+                number = str(snap["number"]).strip()
+                prev_sig = _signature(snap)
+                whole = _complete_history(browser, snap, tokens)
+                if whole is None:
+                    partial += 1
+                    log(f"SLA history: request {number} - only {len(snap['rows'])} of its {snap.get('total')} history "
+                        "lines could be read; it is read again next scan (nothing partial is recorded)")
+                else:
+                    read_numbers[number] = it["key"]
+                    unverified += snap.get("verified") is False
+                    got = {"grid": it, "id": number,
+                           "history": sla_history.events_from_table(whole["headers"], whole["rows"], plan["cfg"])}
+            if snap and snap.get("open") and not in_page:
+                _close_details(browser)
+        except Exception as exc:                          # one request must not stop the others
+            log(f"SLA history: one request could not be read ({type(exc).__name__})")
+        drill_s.append(time.monotonic() - t1)
+        if got:
+            items.append(got)
+            opened += 1
+            streak = 0
+        else:
+            items.append({"grid": it, "id": "", "history": None, "failed": True})
+            failed += 1
+            streak += 1
+        try:                                              # a post-back that lost the grid: search again
+            if not browser.eval(JS_GRID_PRESENT):
+                prev_sig = ""
+                if time.monotonic() >= deadline:          # no time left for a new search: the rest is next scan's
+                    stopped = "time budget"
+                    continue
+                table = search()
+                searches += 1
+                if table is None:
+                    stopped = "the inquiry grid did not come back"
+        except Exception as exc:                          # keep what was read: the rest waits for the next scan
+            stopped = f"the inquiry page stopped answering ({type(exc).__name__})"
+    left = max(0, len(todo) - opened - failed)
+    total_s = time.monotonic() - started
+    timing = {"seconds": round(total_s, 1), "search_seconds": round(search_s, 1), "searches": searches,
+              "drills": len(drill_s), "drill_avg_seconds": round(sum(drill_s) / len(drill_s), 2) if drill_s else None,
+              "drill_max_seconds": round(max(drill_s), 2) if drill_s else None, "postback_rows": len(pb_of),
+              "stopped": stopped, "partial": partial, "grid_total": grid_total}
+    log(f"SLA history: {len(grid)} request(s) on the inquiry page, {opened} status histor(ies) read"
+        + (f", {failed} could not be read" if failed else "") + (f", {left} left for the next scan" if left else "")
+        + f" - {timing['seconds']} s (search {timing['search_seconds']} s"
+        + (f", {timing['drill_avg_seconds']} s a request, slowest {timing['drill_max_seconds']} s" if drill_s else "")
+        + ")" + (f"; stopped: {stopped}" if stopped and left else "")
+        + (f"; {unverified} detail(s) could not be matched to their row by number" if unverified else ""))
+    return {"items": items, "rows": len(grid), "opened": opened, "left": left, "failed": failed, "timing": timing}
+
+
+def scrape(ctx, username, password, history=None, history_sink=None):
+    """Log in, open the package, open the Re-Assign page, read the table. Returns (headers, rows). With a ``history``
+    plan (see ``history_plan``), the same session then reads «الاستفسار عن الطلبات» and the status history of the
+    requests that moved into ``history_sink`` - a failure there is logged and never costs the Re-Assign scan.
 
     Driven over the DevTools protocol (no Playwright): the PC's Edge / Chrome is launched with a debugging port and
     walked through the pages with small JavaScript snippets. The debug dumps hold no input value and no password."""
@@ -535,13 +1028,25 @@ def scrape(ctx, username, password):
         debug.snap(browser, "app_home")
 
         # 3) Re-Assign page: through the portal's own menu link (relative to the package's folder), else the path
-        _sleep_ms(SETTLE_MS)
-        href = browser.eval(js_link_href(url_marker(cfg["reassign_path"], "request_reassign.aspx", keep_extension=True)))
+        link = js_link_href(url_marker(cfg["reassign_path"], "request_reassign.aspx", keep_extension=True))
+        href = _poll(lambda: browser.eval(link), lambda h: isinstance(h, str) and h.startswith("http"),
+                     SETTLE_MS * 4 / 1000.0)
         browser.navigate(href if isinstance(href, str) and href.startswith("http") else base + cfg["reassign_path"],
                          timeout=timeout_s)
         if reassign_marker not in (browser.current_url() or "").lower():
             raise PortalError(f"Could not open the Re-Assign page (ended on {scrub(browser.current_url(), [password])})")
-        return read_requests(browser, cfg, debug)
+        result = read_requests(browser, cfg, debug)
+
+        # 4) SLA Analysis: the inquiry page and the status history of what moved (never costs the scan above)
+        if history is not None and history_sink is not None:
+            try:
+                history_sink.update(read_history(browser, cfg, debug, history, ctx.log))
+            except Exception as exc:
+                history_sink["error"] = clean_error(exc, [password])
+                ctx.log(f"SLA history not read this scan: {history_sink['error']}")
+                with suppress(Exception):
+                    debug.snap(browser, "history_error")
+        return result
     except Exception:
         try:
             debug.snap(browser, "error")
@@ -1035,6 +1540,115 @@ def _notify(ctx, cfg, requests, by_user, columns, now):
     return sent, note
 
 
+HISTORY_REACH_DAYS = 31        # how far back the inquiry is searched for a request that is still open
+
+
+def sla_excluder(ctx, cfg):
+    """``excluded(system)`` for this scan (the Third Party team's applications by default - Settings › Ticketing), or
+    None. Never fails the scan: a broken application list only means nothing is excluded by it."""
+    applications = []
+    with suppress(Exception):
+        applications = (ctx.store.read_auto_assign() or {}).get("applications") or []
+    return teams.sla_exclusion(cfg, teams.Resolver(ctx.hub or {}, None, applications))
+
+
+def history_plan(ctx, cfg, now):
+    """What the inquiry read covers this scan: {date_from, date_to, index, cfg}. The last ``history_days`` days, reaching
+    back to the oldest request of the recording that is still open (at most ``HISTORY_REACH_DAYS``), so a request is
+    followed until it closes. None when the SLA history is switched off."""
+    from .. import sla_history, sla_records
+    if not cfg.get("history_enabled", True):
+        return None
+    state = ctx.store.read_sla_history_state() or {}
+    today = now.date()
+    days = max(1, int(cfg.get("history_days") or DEFAULTS["sla"]["history_days"]))
+    date_from = today - timedelta(days=days - 1)
+    floor = today - timedelta(days=HISTORY_REACH_DAYS - 1)
+    still_open = [r.get("request_date") for r in (state.get("open") or {}).values()]
+    still_open += [g.get("request_date") for g in (state.get("grid") or {}).values()
+                   if g.get("stage") not in ("closed", "rejected", "pre")]   # a branch-only request has no SLA yet
+    for stamp in still_open:                              # follow every request that is not finished yet
+        day = sla_history.parse_time(stamp)
+        if day and floor <= day.date() < date_from:
+            date_from = day.date()
+    return {"date_from": date_from, "date_to": today, "index": dict(state.get("index") or {}),
+            "cfg": sla_records.clean_config((ctx.store.read_sla_records() or {}).get("config")),
+            "excluded": sla_excluder(ctx, cfg), "seconds": history_seconds(cfg, getattr(ctx, "general", None))}
+
+
+OPEN_STALE_DAYS = 45            # an open request not listed for this long (cancelled, deleted) leaves the open set
+
+
+def fold_history_result(store, sink, now_iso, system_team=None):
+    """Write one scan's inquiry read (``read_history``'s result) into the SLA history store (``OpsStore.sla_history``):
+    a request the reviewer has confirmed goes to the file of its confirmation day, the others stay in the open set; the
+    grid index and the latest grid (what is open / awaiting RIGHT NOW) are refreshed. The day files are written before
+    the state, so a crash in between only means those rows are read again at the next scan. A failed read only records
+    its error (the last good history stays). Closed days older than the recording's ``retention_days`` are dropped.
+    Returns fold_history's counts, or None when nothing was folded."""
+    from collections import defaultdict
+    from .. import sla_history, sla_records
+    cfg = sla_records.clean_config((store.read_sla_records() or {}).get("config"))
+    items = sink.get("items") or []
+    out = {}
+
+    def change(d):
+        for k in ("open", "index", "grid"):
+            d.setdefault(k, {})
+        if sink.get("error") and not items:
+            d["history_error"] = {"at": now_iso, "message": sink["error"]}
+            return
+        index, records, loaded_from, days = d["index"], dict(d["open"]), {}, {}
+        for it in items:                                  # a closed request read again: load it from its day file
+            rid, day = it.get("id"), ((index.get((it.get("grid") or {}).get("key")) or {}).get("day"))
+            if it.get("history") is not None and rid and day and rid not in records:
+                doc = days.setdefault(day, store.read_sla_closed_day(day))
+                if rid in doc:
+                    records[rid], loaded_from[rid] = dict(doc[rid]), day
+        out.update(sla_history.fold_history(records, index, items, cfg, now_iso, system_team))
+        new_open, per_day, removals = {}, defaultdict(dict), defaultdict(set)
+        for rid, r in records.items():
+            old = loaded_from.get(rid)
+            if sla_history.is_finished(r):                # confirmed (or rejected): filed under the day it finished
+                day = sla_history.closing_day(r)
+                per_day[day][rid] = r
+                if old and old != day:
+                    removals[old].add(rid)
+            else:
+                new_open[rid] = r
+                if old:
+                    removals[old].add(rid)
+        for day in sorted(set(per_day) | set(removals)):
+
+            def put(doc, day=day):
+                for rid in removals.get(day, ()):
+                    doc.pop(rid, None)
+                doc.update(per_day.get(day, {}))
+            store.update_sla_closed_day(day, put)
+        stale = (datetime.strptime(now_iso[:10], "%Y-%m-%d") - timedelta(days=OPEN_STALE_DAYS)).strftime("%Y-%m-%d")
+        d["open"] = {rid: r for rid, r in new_open.items() if (r.get("last_seen") or now_iso)[:10] >= stale}
+        oldest = (datetime.strptime(now_iso[:10], "%Y-%m-%d")
+                  - timedelta(days=HISTORY_REACH_DAYS + 2)).strftime("%Y-%m-%d")
+        d["index"] = {k: v for k, v in index.items()       # rows that can still be listed by the inquiry window
+                      if (v.get("day") and v["day"] >= oldest) or (not v.get("day") and v.get("id") in d["open"])
+                      or ((v.get("fail") or {}).get("at") or "") >= oldest}
+        if items:
+            d["grid"] = sla_history.grid_state([it["grid"] for it in items], d.get("grid"), now_iso, cfg)
+        d["last_history"] = now_iso
+        d["history_stats"] = {"at": now_iso, "rows": sink.get("rows", 0), "opened": sink.get("opened", 0),
+                              "left": sink.get("left", 0), "failed": sink.get("failed", 0),
+                              "timing": sink.get("timing") or {}, **out}
+        d.pop("history_error", None)
+    store.update_sla_history_state(change)
+    keep = int(cfg.get("retention_days") or 0)
+    if keep > 0:                                          # the recording's retention, by confirmation day
+        cutoff = (datetime.strptime(now_iso[:10], "%Y-%m-%d") - timedelta(days=keep)).strftime("%Y-%m-%d")
+        for day in store.sla_closed_days():
+            if day < cutoff:
+                store.drop_sla_closed_day(day)
+    return out or None
+
+
 def run(ctx, scraper=None):
     """One scan: read the portal, analyse, e-mail on escalation, return the snapshot data."""
     cfg = _config(ctx)
@@ -1052,16 +1666,36 @@ def run(ctx, scraper=None):
                           "variable, or run:  python collector.py --set-password sla", "auth")
     secrets = [password]
 
+    sink = {}
     try:
-        headers, rows = scraper(ctx) if scraper else scrape(ctx, username, password)
+        plan = None
+        if scraper is None:
+            with suppress(Exception):                     # a broken recording file must not stop the live scan
+                plan = history_plan(ctx, cfg, ctx.now())
+        headers, rows = scraper(ctx) if scraper else scrape(ctx, username, password, plan, sink if plan else None)
         now = ctx.now()
         columns, table = build_table(headers, rows)
         requests = analyze(columns, table, cfg, now)
+        excluded = sla_excluder(ctx, cfg)
+        if excluded:                                      # Third Party (by default): not in the SLA, its alerts or totals
+            kept = [r for r in requests if not excluded(teams.sla_system(r))]
+            if len(kept) != len(requests):
+                ctx.log(f"{len(requests) - len(kept)} request(s) of excluded applications left out of the SLA "
+                        "(Settings › Ticketing › Left out of the SLA)")
+            requests = kept
     except Exception as exc:
         if ctx.debug:
             import traceback
             ctx.log(scrub(traceback.format_exc(), secrets))
         return _fail(ctx, clean_error(exc, secrets), "auth" if isinstance(exc, LoginError) else None)
+
+    if sink and not ctx.dry_run:                          # the SLA Analysis history (exact, live): kept for good
+        try:
+            from .. import sla_records
+            fold_history_result(ctx.store, sink, now.strftime("%Y-%m-%dT%H:%M:%S"),
+                                sla_records.system_team_map(ctx.store.read_auto_assign()))
+        except Exception as exc:
+            ctx.log(f"SLA history could not be recorded: {type(exc).__name__}: {scrub(str(exc), secrets)}")
 
     by_user = summarize(requests)
     data = snapshot_data(requests, by_user, cfg)

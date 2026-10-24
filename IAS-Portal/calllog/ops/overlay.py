@@ -166,6 +166,16 @@ def row_in_scope(row, scope):
     return scope is None or any(row_in_team(row, t) for t in scope)
 
 
+def email_act_scope(user):
+    """The e-mails ``user`` may OPEN and ACT on: their normal scope, plus - for a manager of some teams - the
+    Unclassified mails, so the manager can read them, file them under a team (theirs or another), assign them or mark
+    them as needing no action. What they SEE counted (KPIs, team tables, Home) stays ``scope_for_user``."""
+    scope = scope_for_user(user)
+    if (user or {}).get("role") == "manager" and scope is not None and not team_in(scope, UNCLASSIFIED):
+        return tuple(scope) + (UNCLASSIFIED,)
+    return scope
+
+
 def may_view_person(viewer, person):
     """May ``viewer`` open ``person``'s My-work page (read only)? An administrator: anybody. A manager: only an
     employee of their own team(s) - the same people the Home picker offers (every employee for a manager of all teams).
@@ -314,10 +324,48 @@ def _collapse_no_action(rows, no_action):
     return out
 
 
+def no_action_text(mark):
+    """The reason line of a manual "No Action Needed" mark (the prefix stays first: the undo check relies on it)."""
+    mark = mark or {}
+    text = f'{NO_ACTION_PREFIX} {mark.get("marked_by") or "someone"} on {mark.get("marked_at", "")}'
+    reason, note = str(mark.get("reason") or "").strip(), " ".join(str(mark.get("note") or "").split())
+    if reason:
+        text += f" - {reason}" + (f": {note}" if note else "")
+    return text
+
+
+def mail_teams(rows, entry=None):
+    """The real teams of one mail (its rows' team and all_teams; else the assignment's team), never Unclassified."""
+    out = []
+    for r in rows or []:
+        for t in [r.get("team")] + list(r.get("all_teams") or []):
+            if t and t != schemas.ALL_TEAMS_MARK and _key(t) != UNCLASSIFIED.casefold() and not team_in(out, t):
+                out.append(t)
+    if not out and (entry or {}).get("team") and _key(entry["team"]) != UNCLASSIFIED.casefold():
+        out.append(entry["team"])
+    return out
+
+
+def teammates(users, teams, exclude_email=""):
+    """The active employees (role user, with a mailbox) who share one of ``teams``, without ``exclude_email``:
+    [{user_id, name, email, teams}] sorted by name - the people an employee may hand a mail on to."""
+    me = normalize_email(exclude_email)
+    out = []
+    for u in (users.values() if isinstance(users, dict) else users or []):
+        addr = normalize_email(u.get("email"))
+        if u.get("role") != "user" or not u.get("active", True) or not addr or addr == me:
+            continue
+        mine = [t for t in user_teams(u) if t != schemas.ALL_TEAMS_MARK]
+        if any(team_in(mine, t) for t in teams or []):
+            out.append({"user_id": u.get("user_id", ""), "name": u.get("name") or u.get("user_id", ""), "email": addr,
+                        "teams": mine})
+    out.sort(key=lambda p: (str(p["name"]).casefold(), p["user_id"]))
+    return out
+
+
 def _mark_no_action(row, mark):
-    who = mark.get("marked_by") or "someone"
     row["status"] = schemas.EMAIL_NO_ACTION
-    row["no_action_reason"] = f'{NO_ACTION_PREFIX} {who} on {mark.get("marked_at", "")}'
+    row["no_action_reason"] = no_action_text(mark)
     row["sla_status"] = "N/A"
     row["escalated"] = False
     row["teams_pending"] = []
@@ -541,6 +589,52 @@ def replied_rows(rows, email):
             and normalize_email(r.get("first_reply_email")) == email]
 
 
+def has_reply(row):
+    return bool(row.get("first_reply_time") or row.get("first_reply_email") or row.get("first_reply_by"))
+
+
+def reply_teams(row, person_teams=None):
+    """The team(s) the first reply of ``row`` came from: the replier's own teams (``person_teams`` = {address: [team]}
+    from the accounts and Settings), else the teams the scan credited with the reply, else the mail's team. [] when
+    nobody replied."""
+    if not has_reply(row):
+        return []
+    found = list((person_teams or {}).get(normalize_email(row.get("first_reply_email"))) or [])
+    if not found:
+        found = [t for t in row.get("teams_replied") or [] if t]
+    return found or ([row["team"]] if row.get("team") else [])
+
+
+def reply_in_scope(row, scope, person_teams=None):
+    """May somebody with ``scope`` see who replied to ``row``, the reply text and its quality rating? A manager sees
+    only the replies of their own team(s) - never another team's, even on a mail that concerns both."""
+    if scope is None:
+        return True
+    found = reply_teams(row, person_teams)
+    return not found or any(team_in(scope, t) for t in found)
+
+
+_REPLY_PRIVATE = {"first_reply_by": "", "first_reply_email": "", "last_reply_by": "", "last_reply_email": "",
+                  "reply_body_preview": "", "quality_rating": "", "quality_note": "", "quality_reasons": "",
+                  "quality_appeal": "", "appeal_decision": "", "rating_withdrawn": False, "quality_reviewed_by": "",
+                  "quality_reviewed_at": ""}
+
+
+def hide_reply(row, person_teams=None):
+    """A copy of ``row`` without the reply's person, text and rating: only which team answered it is left."""
+    out = dict(row)
+    out.update(_REPLY_PRIVATE, reply_other_team=True, reply_team=(reply_teams(row, person_teams) or [""])[0])
+    return out
+
+
+def hide_other_team_replies(rows, scope, person_teams=None):
+    """``rows`` as ``scope`` may see them: another team's reply is hidden (see ``reply_in_scope``). Shared rows are
+    never changed - a hidden one is a copy."""
+    if scope is None:
+        return list(rows)
+    return [r if reply_in_scope(r, scope, person_teams) else hide_reply(r, person_teams) for r in rows]
+
+
 def rows_for_email(rows, email):
     """Rows that are 'mine' for the mailbox ``email``: assigned to it, or first replied to by it (each row once)."""
     email = normalize_email(email)
@@ -571,11 +665,12 @@ def _scope_quality(quality, scope, hide_unclassified=False):
     return out
 
 
-def view_email_data(data, overrides, scope_team=None, now=None, rows=None, hide_unclassified=False):
+def view_email_data(data, overrides, scope_team=None, now=None, rows=None, hide_unclassified=False, person_teams=None):
     """The snapshot ``data`` with overrides applied, narrowed to a scope (None = every team; a team name or a list of
     names) and the numbers recomputed from what is left. A scoped view carries nothing about other teams' rows or
-    people. ``rows`` = the already overlaid rows (so many scopes can share one overlay); ``hide_unclassified`` also
-    drops the rows of the "Unclassified" bucket (what an employee gets)."""
+    people - nor another team's reply on a mail both teams share (``person_teams``, see ``reply_in_scope``). ``rows``
+    = the already overlaid rows (so many scopes can share one overlay); ``hide_unclassified`` also drops the rows of
+    the "Unclassified" bucket (what an employee gets)."""
     data = data if isinstance(data, dict) else {}
     if rows is None:
         rows = apply_overrides(data.get("rows") or [], overrides, now)
@@ -583,7 +678,7 @@ def view_email_data(data, overrides, scope_team=None, now=None, rows=None, hide_
     stats = data.get("stats") or {}
     scoped = scope is not None or hide_unclassified
     if scope is not None:
-        rows = rows_in_scope(rows, scope)
+        rows = hide_other_team_replies(rows_in_scope(rows, scope), scope, person_teams)
     if hide_unclassified:
         rows = [r for r in rows if not is_unclassified(r)]
     new_stats = recount(rows, stats)
@@ -653,11 +748,11 @@ def team_summary_numbers(rows):
             "escalated": escalated, "reply_rate": _percent(replied, business - no_action)}
 
 
-def team_mail(rows, scope, limit=TEAM_MAIL_LIMIT):
+def team_mail(rows, scope, limit=TEAM_MAIL_LIMIT, person_teams=None):
     """(items, summary) for the e-mails of ``scope`` (None = every team): pending first, oldest first, at most
-    ``limit``; mails that need no action are counted but not listed; "Unclassified" rows never appear.
-    ``rows`` must already have the overrides applied."""
-    mine = [r for r in rows_in_scope(rows, scope) if not is_unclassified(r)]
+    ``limit``; mails that need no action are counted but not listed; "Unclassified" rows never appear; another team's
+    reply shows no name. ``rows`` must already have the overrides applied."""
+    mine = hide_other_team_replies([r for r in rows_in_scope(rows, scope) if not is_unclassified(r)], scope, person_teams)
     listed = [r for r in mine if r.get("status") in (schemas.EMAIL_PENDING, schemas.EMAIL_REPLIED)]
     listed.sort(key=lambda r: (r.get("status") != schemas.EMAIL_PENDING, str(r.get("received_time") or ""),
                                str(r.get("row_id") or r.get("message_id") or "")))

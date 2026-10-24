@@ -717,6 +717,7 @@
   // ------------------------------------------------------------------ page
   // ------------------------------------------------------------------ SLA Analysis tab (closed-request history)
   const ANALYSIS_URL = "/api/ops/sla-analysis";
+  const ANALYSIS_REFRESH_MS = 60 * 1000;
   const pctChip = (pct) => OPS.chip(OPS.fmtPct(pct), pct >= 80 ? "ok" : pct >= 50 ? "warn" : "danger");
   const isSunday = (d) => { const t = new Date(String(d) + "T12:00:00"); return !Number.isNaN(t.getTime()) && t.getDay() === 0; };
 
@@ -742,11 +743,13 @@
 
   function rollupTable(rows, keyCol, label, caption, sort) {
     rows = rows || [];
+    const numbered = rows.some((r) => r.employee_no);     // a person: show the employee number of the status history
     return OPS.table({
       search: rows.length > 12, copy: true, pageSize: 12, pageSizes: [12, 25, 100], caption,
       sort: sort || { key: "n", desc: true },
       columns: [
         { key: keyCol, label, sort: true, render: (r) => h("span", { dir: "auto" }, String(r[keyCol])), text: (r) => String(r[keyCol]) },
+        ...(numbered ? [{ key: "employee_no", label: "Employee no.", sort: true, render: (r) => r.employee_no || "—", text: (r) => r.employee_no || "" }] : []),
         { key: "n", label: "Requests", num: true, sort: true, render: (r) => fmtNum(r.n) },
         { key: "executed", label: "Executed", num: true, sort: true, render: (r) => (r.executed + r.not_executed ? fmtNum(r.executed) : "—") },
         { key: "executed_pct", label: "Executed %", num: true, sort: true,
@@ -770,97 +773,361 @@
     sel.value = value || "";
     return sel;
   }
+  const OUTCOME_TEXT = { completed: "Completed", not_done: "Not executed", rejected: "Rejected", in_progress: "In progress" };
+  const OUTCOME_TONE = { completed: "ok", not_done: "warn", rejected: "danger", in_progress: "info" };
+  const EMPTY_FILTER = { date_from: "", date_to: "", executor: "", checker: "", team: "", system: "", branch: "",
+    request_type: "", outcome: "", returned: "" };
   function filterBar(d) {
     const f = state.slaFilter || {}, opt = d.options || {};
     const fromI = h("input", { type: "date", "aria-label": "From date", value: f.date_from || "" });
     const toI = h("input", { type: "date", "aria-label": "To date", value: f.date_to || "" });
     const execSel = slaSelect("Employee", f.executor, opt.executors);
     const checkSel = slaSelect("Checker", f.checker, opt.checkers);
-    const checkers = (opt.checkers || []).length > 0;       // only a feed with the مراجع السرية column names them
     const teamSel = slaSelect("Team", f.team, opt.teams);
+    const sysSel = slaSelect("Application", f.system, opt.systems);
+    const branchSel = slaSelect("Branch", f.branch, opt.branches);
+    const typeSel = slaSelect("Request type", f.request_type, opt.request_types);
+    const outSel = h("select", { "aria-label": "Outcome" }, h("option", { value: "" }, "Outcome: all"),
+      Object.entries(OUTCOME_TEXT).map(([k, v]) => h("option", { value: k, selected: k === f.outcome }, v)));
+    const backBox = h("input", { type: "checkbox", checked: !!f.returned, "aria-label": "Only requests sent back to the branch" });
     const apply = () => {
-      state.slaFilter = { date_from: fromI.value, date_to: toI.value, executor: execSel.value, checker: checkSel.value, team: teamSel.value };
+      state.slaFilter = { date_from: fromI.value, date_to: toI.value, executor: execSel.value, checker: checkSel.value,
+        team: teamSel.value, system: sysSel.value, branch: branchSel.value, request_type: typeSel.value,
+        outcome: outSel.value, returned: backBox.checked ? "1" : "" };
       loadAnalysis(true);
     };
-    [fromI, toI, execSel, checkSel, teamSel].forEach((c) => { c.onchange = apply; });
+    [fromI, toI, execSel, checkSel, teamSel, sysSel, branchSel, typeSel, outSel, backBox].forEach((c) => { c.onchange = apply; });
     const today = h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: () => { const t = slaToday(); state.slaFilter = { ...state.slaFilter, date_from: t, date_to: t }; loadAnalysis(true); } }, "Today");
-    const clear = h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: () => { state.slaFilter = { date_from: "", date_to: "", executor: "", checker: "", team: "" }; loadAnalysis(true); } }, "Clear");
+    const clear = h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: () => { state.slaFilter = { ...EMPTY_FILTER }; loadAnalysis(true); } }, "Clear");
+    const csv = h("a", { class: "btn btn-ghost btn-sm", href: `/export/ops/sla-analysis.csv${slaQuery()}`, download: "" }, glyph("download"), "CSV");
+    const xlsx = h("a", { class: "btn btn-ghost btn-sm", href: `/export/ops/sla-analysis.xlsx${slaQuery()}`, download: "" }, glyph("download"), "Excel");
     const fld = (lbl, ctrl) => h("label", { class: "sx-filter-f" }, h("span", {}, lbl), ctrl);
     return h("div", { class: "sx-filter" }, fld("From", fromI), fld("To", toI), fld("Employee", execSel),
-      checkers || f.checker ? fld("Checker", checkSel) : null, fld("Team", teamSel), h("span", { class: "grow" }), today, clear);
+      fld("Checker", checkSel), fld("Team", teamSel), fld("Application", sysSel), fld("Branch", branchSel),
+      fld("Request type", typeSel), fld("Outcome", outSel),
+      h("label", { class: "sx-filter-f sx-filter-check" }, backBox, h("span", {}, "Sent back only")),
+      h("span", { class: "grow" }), today, clear, csv, xlsx);
   }
 
-  function liveRollup(rows, keyCol, label, caption) {
+  // ---- the stages of a request's life, each against its own target (the bank's lifecycle tool's view) ----
+  const ragTone = (rag) => (rag === "ok" ? "ok" : rag === "warn" ? "warn" : rag === "bad" ? "danger" : null);
+  const ragChip = (minutes, rag) => (minutes == null ? h("span", { class: "hint" }, "—") : rag ? OPS.chip(fmtMin(minutes), ragTone(rag)) : fmtMin(minutes));
+  const ragOf = (v, target) => (v == null || !target ? "" : v <= target ? "ok" : v <= 1.5 * target ? "warn" : "bad");
+
+  function stageTable(stages) {
+    return OPS.table({
+      search: false, copy: true, caption: "Stages of a request", pageSize: 10,
+      columns: [
+        { key: "label", label: "Stage", render: (r) => r.label, text: (r) => r.label },
+        { key: "n", label: "Requests", num: true, render: (r) => fmtNum(r.n) },
+        { key: "average_minutes", label: "Average", num: true, render: (r) => ragChip(r.average_minutes, r.rag), text: (r) => fmtMin(r.average_minutes) },
+        { key: "p50_minutes", label: "Median", num: true, render: (r) => fmtMin(r.p50_minutes) },
+        { key: "p90_minutes", label: "90 % within", num: true, render: (r) => ragChip(r.p90_minutes, ragOf(r.p90_minutes, r.target)), text: (r) => fmtMin(r.p90_minutes) },
+        { key: "max_minutes", label: "Longest", num: true, render: (r) => fmtMin(r.max_minutes) },
+        { key: "target", label: "Target", num: true, render: (r) => fmtMin(r.target) },
+        { key: "within_pct", label: "On target", num: true, render: (r) => (r.n ? pctChip(r.within_pct) : h("span", { class: "hint" }, "—")), text: (r) => (r.n ? `${r.within_pct}%` : "") },
+        { key: "breached", label: "Over target", num: true, render: (r) => (r.breached ? OPS.chip(fmtNum(r.breached), "danger") : fmtNum(0)), text: (r) => String(r.breached) },
+      ], rows: stages || [],
+    }).el;
+  }
+
+  function waterfall(d) {
+    const w = d.waterfall || [];
+    if (!w.length) return h("p", { class: "hint" }, "No request in this view has its stages stamped yet.");
+    const tones = ["op-t-na", "op-t-info", "op-t-warn", "op-t-ok", "op-t-danger"];
+    const b = d.bottleneck;
+    return h("div", { class: "sx-stack" },
+      OPS.stackbar(w.map((s, i) => ({ label: `${s.label} · ${fmtMin(s.average_minutes)}`, value: s.average_minutes, cls: tones[i % tones.length] }))),
+      b ? h("p", { class: "hint", dir: "auto" }, `Bottleneck: ${b.label} — ${fmtMin(b.average_minutes)} on average, ${b.share_pct}% of a request's time.`) : null);
+  }
+
+  const FUNNEL_TEXT = { registered: "Registered by the branch", branch_confirmed: "Confirmed by the branch supervisor",
+    assigned: "Assigned to a security user", executed: "Executed / not executed", confirmed: "Confirmed by the reviewer" };
+  function outcomesCard(d) {
+    const o = d.outcomes || {}, total = (d.meta || {}).requests || 0;
+    const tiles = h("div", { class: "sx-kpis" },
+      ...Object.entries(OUTCOME_TEXT).map(([k, label]) => OPS.kpi({ label, value: fmtNum(o[k] || 0),
+        sub: total ? `${Math.round(100 * (o[k] || 0) / total)}% of ${fmtNum(total)}` : "", tone: (o[k] && k !== "completed" && k !== "in_progress") ? OUTCOME_TONE[k] : null,
+        icon: k === "completed" ? "check" : k === "in_progress" ? "clock" : "alert" })),
+      OPS.kpi({ label: "Sent back to the branch", value: fmtNum(o.returned || 0), sub: `${o.returned_pct || 0}% · «مطلوب تعديل»`, tone: (o.returned_pct || 0) >= 20 ? "danger" : o.returned ? "warn" : null, icon: "refresh" }),
+      OPS.kpi({ label: "Re-assigned", value: fmtNum(o.reassigned || 0), sub: "to another security user", icon: "user" }),
+      OPS.kpi({ label: "Exception path", value: fmtNum(o.exception || 0), sub: "approved by the region / sector", icon: "shield" }));
+    const funnel = h("ol", { class: "sx-funnel" }, ...(d.funnel || []).map((s) => h("li", {},
+      h("span", { class: "sx-funnel-label" }, FUNNEL_TEXT[s.key] || s.key),
+      h("span", { class: "sx-funnel-bar" }, h("i", { class: `sx-funnel-fill sx-w-${Math.max(0, Math.min(100, Math.round(s.pct / 5) * 5))}` })),
+      h("span", { class: "sx-funnel-n" }, `${fmtNum(s.n)} · ${Math.round(s.pct)}%`))));
+    return OPS.card("Outcomes and the path", { hint: "every request in this view" }, h("div", { class: "sx-stack" }, tiles,
+      h("h4", { class: "sx-sub" }, "How far the requests got"), funnel));
+  }
+
+  function attentionTable(d) {
+    const rows = d.attention || [];
+    if (!rows.length) return h("p", { class: "hint" }, "Nothing needs attention in this view: no SLA breach, rejection or request sent back.");
+    return OPS.table({
+      search: rows.length > 10, copy: true, pageSize: 10, pageSizes: [10, 25, 100], caption: "Requests that need attention",
+      onRowClick: (r) => openRequest(r),
+      columns: [
+        { key: "reasons", label: "Why", render: (r) => h("div", { class: "sx-chips" }, ...r.reasons.map((x) => OPS.chip(x, /breach|past|Rejected/i.test(x) ? "danger" : "warn"))), text: (r) => r.reasons.join(", ") },
+        { key: "id", label: "Request", render: (r) => String(r.id || "—"), text: (r) => String(r.id || "") },
+        { key: "requester", label: "Requester", render: (r) => h("span", { dir: "auto" }, r.requester || "—"), text: (r) => r.requester || "" },
+        { key: "branch", label: "Branch", render: (r) => h("span", { dir: "auto" }, r.branch || "—"), text: (r) => r.branch || "" },
+        { key: "system", label: "Application", render: (r) => h("span", { dir: "auto" }, r.system || "—"), text: (r) => r.system || "" },
+        { key: "executor", label: "Security user", render: (r) => h("span", { dir: "auto" }, r.executor || "—"), text: (r) => r.executor || "" },
+        { key: "sla", label: "SLA time", num: true, sort: (r) => (r.minutes || {}).sla || r.waiting_minutes || 0,
+          render: (r) => ((r.minutes || {}).sla != null ? ragChip(r.minutes.sla, ragOf(r.minutes.sla, (d.meta || {}).sla_minutes)) : r.waiting_minutes != null ? `${fmtMin(r.waiting_minutes)} so far` : "—") },
+      ], rows,
+    }).el;
+  }
+
+  function requestsTable(d) {
+    const rows = d.requests_list || [], T = (d.meta || {}).targets || {};
+    const stageCol = (key, label) => ({ key: `m_${key}`, label, num: true, sort: (r) => (r.minutes || {})[key] ?? -1,
+      render: (r) => ragChip((r.minutes || {})[key], ragOf((r.minutes || {})[key], T[key])), text: (r) => fmtMin((r.minutes || {})[key]) });
+    return OPS.table({
+      search: true, searchPlaceholder: "Search request, requester, branch, application…", copy: true,
+      pageSize: 25, pageSizes: [25, 50, 100], caption: "Requests in this view", onRowClick: (r) => openRequest(r),
+      sort: { key: "finished_at", desc: true },
+      columns: [
+        { key: "id", label: "Request", sort: true, render: (r) => String(r.id || "—"), text: (r) => String(r.id || "") },
+        { key: "request_date", label: "Date", sort: true, render: (r) => r.request_date || "—", text: (r) => r.request_date || "" },
+        { key: "requester", label: "Requester", sort: true, render: (r) => h("span", { dir: "auto" }, r.requester || "—"), text: (r) => `${r.requester} ${r.requester_no}` },
+        { key: "branch", label: "Branch", sort: true, render: (r) => h("span", { dir: "auto" }, r.branch || "—"), text: (r) => r.branch || "" },
+        { key: "system", label: "Application", sort: true, render: (r) => h("span", { dir: "auto" }, r.system || "—"), text: (r) => r.system || "" },
+        { key: "outcome", label: "Outcome", sort: true, render: (r) => h("div", { class: "sx-chips" }, OPS.chip(OUTCOME_TEXT[r.outcome] || r.outcome, OUTCOME_TONE[r.outcome]),
+          r.returned ? OPS.chip(`sent back ×${r.returned}`, "warn") : null, r.region ? OPS.chip("exception", "info") : null), text: (r) => OUTCOME_TEXT[r.outcome] || r.outcome },
+        stageCol("branch", "Branch"), stageCol("pickup", "To assign"), stageCol("work", "Security user"),
+        stageCol("review", "Reviewer"), stageCol("sla", "SLA"), stageCol("lifetime", "Whole"),
+        { key: "finished_at", label: "Finished", sort: (r) => r.finished_at || "9999", render: (r) => r.finished_at || (r.waiting_minutes != null ? `${fmtMin(r.waiting_minutes)} so far` : "—"), text: (r) => r.finished_at || "" },
+      ], rows,
+    }).el;
+  }
+
+  const STEP_TEXT = { registered: "Registered", branch_confirmed: "Confirmed by the branch supervisor",
+    region_approved: "Approved above the branch", assigned: "Assigned to a security user", held: "On hold",
+    returned: "Sent back to the branch", executed: "Executed", not_executed: "Not executed",
+    confirmed_executed: "Confirmed (executed)", confirmed_not: "Confirmed (not executed)", rejected: "Rejected",
+    transferred: "Transferred" };
+  async function openRequest(row) {
+    let d;
+    try {
+      const q = new URLSearchParams({ id: row.id || "" });
+      if (row.finished_at) q.set("day", row.finished_at);
+      d = await api("GET", `/api/ops/sla-analysis/request?${q.toString()}`);
+    } catch (e) { CL.toast(e.message, "error"); return; }
+    const r = d.request || {};
+    const facts = [["Request", r.id], ["Requester", [r.requester, r.requester_no].filter(Boolean).join(" · ")], ["Branch", r.branch],
+      ["Application", r.system], ["Team", r.team], ["Request type", r.request_type], ["Status now", r.grid_status || r.last_status],
+      ["Outcome", OUTCOME_TEXT[d.outcome] || d.outcome], ["Sent back", r.returned ? `${r.returned} time(s)` : ""],
+      ["Re-assigned", r.reassigned ? `${r.reassigned} time(s)` : ""], ["On hold", r.held_minutes ? fmtMin(r.held_minutes) : ""]]
+      .filter(([, v]) => v !== "" && v != null);
+    const body = h("div", { class: "sx-stack" },
+      h("dl", { class: "op-defs" }, ...facts.flatMap(([k, v]) => [h("dt", {}, k), h("dd", { dir: "auto" }, String(v))])),
+      h("h4", { class: "sx-sub" }, "Stages"),
+      OPS.table({ search: false, copy: true, caption: "Stages of this request", pageSize: 10,
+        columns: [
+          { key: "label", label: "Stage", render: (s) => s.label, text: (s) => s.label },
+          { key: "minutes", label: "Took", num: true, render: (s) => ragChip(s.minutes, s.rag), text: (s) => fmtMin(s.minutes) },
+          { key: "target", label: "Target", num: true, render: (s) => fmtMin(s.target) },
+        ], rows: d.stages || [] }).el,
+      h("h4", { class: "sx-sub" }, "Timeline — «الحالة التاريخية للطلب»"),
+      (d.trail || []).length ? h("ol", { class: "sx-trail" }, ...d.trail.map((t) => h("li", { class: `sx-trail-${t.step}` },
+        h("span", { class: "sx-trail-at" }, fmtStamp(t.at)),
+        h("strong", {}, STEP_TEXT[t.step] || t.step),
+        h("span", { class: "hint", dir: "auto" }, [t.status, [t.who, t.number].filter(Boolean).join(" · ")].filter(Boolean).join(" — ")),
+        t.note ? h("span", { class: "sx-trail-note", dir: "auto" }, t.note) : null)))
+        : h("p", { class: "hint" }, "The timeline of this request was read before timelines were kept: it shows at its next change."));
+    OPS.modal({ title: `Request ${r.id || ""}`, wide: true, body });
+  }
+
+  // ---- hour by hour: requests that reached the security team vs requests finished, every team and each team ----
+  const hh = (n) => `${String(n).padStart(2, "0")}:00`;
+  const pctTone = (p) => (p == null ? null : p >= 100 ? "ok" : p >= 70 ? "warn" : "danger");
+  const pctCell = (p) => (p == null ? h("span", { class: "hint" }, "—") : OPS.chip(`${Math.round(p)}%`, pctTone(p)));
+  function hourlyCard(d) {
+    const H = d.hourly || {}, hours = H.hours || [];
+    const active = hours.filter((x) => x.received || x.done);
+    const hint = "arrived = first assigned to a security user · finished = confirmed by the reviewer · live";
+    if (!active.length) return OPS.card("Hour by hour — arrived vs finished", { hint }, h("p", { class: "hint" }, "No request arrived or was finished in this view yet."));
+    const lo = Math.min(8, ...active.map((x) => x.hour)), hi = Math.max(16, ...active.map((x) => x.hour));
+    const span = hours.slice(lo, hi + 1);
+    const max = Math.max(1, ...span.map((x) => Math.max(x.received, x.done)));
+    const W = span.length * 4;
+    const svg = svgEl("svg", { class: "sx-hourly", viewBox: `0 0 ${W} 100`, preserveAspectRatio: "none", role: "img",
+      "aria-label": "Requests that arrived and requests finished, hour by hour" });
+    span.forEach((x, i) => {
+      [["received", "sx-hb-a", "arrived"], ["done", "sx-hb-c", "finished"]].forEach(([k, cls, lbl], j) => {
+        const bh = x[k] ? Math.max(1.5, (x[k] / max) * 88) : 0;
+        const rect = svgEl("rect", { x: i * 4 + 0.4 + j * 1.6, y: 100 - bh, width: 1.5, height: bh, class: `${cls} sx-grow` });
+        const t = svgEl("title", {});
+        t.textContent = `${hh(x.hour)} – ${lbl}: ${fmtNum(x[k])}${k === "done" && x.done_pct != null ? ` (${Math.round(x.done_pct)}% of the arrived)` : ""}`;
+        rect.append(t);
+        svg.append(rect);
+      });
+    });
+    const pts = span.map((x, i) => (x.done_pct == null ? null : `${(i * 4 + 2).toFixed(1)},${(100 - Math.min(x.done_pct, 200) / 200 * 88).toFixed(1)}`)).filter(Boolean);
+    if (pts.length > 1) svg.append(svgEl("polyline", { class: "sx-pct-line", points: pts.join(" "), fill: "none" }));
+    const axis = h("div", { class: "sx-hours-axis hint", "aria-hidden": "true" }, ...span.filter((_, i) => i % 2 === 0).map((x) => h("span", {}, hh(x.hour))));
+    const legend = h("div", { class: "sx-daily-legend hint" }, h("i", { class: "sx-key sx-hb-a" }), "Arrived",
+      h("i", { class: "sx-key sx-hb-c" }), "Finished", h("i", { class: "sx-key sx-key-line" }), "Finished ÷ arrived (line: 0–200 %)");
+    const head = h("tr", {}, h("th", { scope: "col" }, "All teams"), ...span.map((x) => h("th", { scope: "col", class: "num" }, hh(x.hour))),
+      h("th", { scope: "col", class: "num" }, "Total"));
+    const sum = (k) => span.reduce((a, x) => a + (x[k] || 0), 0);
+    const totR = sum("received"), totD = sum("done"), totS = sum("same_hour");
+    const line = (label, cells, total) => h("tr", {}, h("th", { scope: "row" }, label), ...cells, h("td", { class: "num" }, total));
+    const table = h("div", { class: "table-wrap" }, h("table", { class: "data sx-hour-table" },
+      h("caption", { class: "sr-only" }, "Arrived and finished requests per hour, all teams"), h("thead", {}, head), h("tbody", {},
+        line("Arrived", span.map((x) => h("td", { class: "num" }, fmtNum(x.received))), fmtNum(totR)),
+        line("Finished", span.map((x) => h("td", { class: "num" }, fmtNum(x.done))), fmtNum(totD)),
+        line("Finished ÷ arrived", span.map((x) => h("td", { class: "num" }, pctCell(x.done_pct))), pctCell(totR ? 100 * totD / totR : null)),
+        line("Finished the same hour", span.map((x) => h("td", { class: "num" }, x.received ? `${fmtNum(x.same_hour)} · ${Math.round(x.same_hour_pct)}%` : "—")),
+          totR ? `${fmtNum(totS)} · ${Math.round(100 * totS / totR)}%` : "—"))));
+    const teams = (H.teams || []).slice(0, 20);
+    const teamTable = teams.length > 1 ? h("div", { class: "table-wrap" }, h("table", { class: "data sx-hour-table" },
+      h("caption", { class: "sr-only" }, "Finished out of arrived per hour, by team"),
+      h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Team · finished / arrived"), ...span.map((x) => h("th", { scope: "col", class: "num" }, hh(x.hour))),
+        h("th", { scope: "col", class: "num" }, "Total"))),
+      h("tbody", {}, ...teams.map((t) => h("tr", {}, h("th", { scope: "row", dir: "auto" }, t.team),
+        ...span.map((x) => { const c = t.hours[x.hour] || {};
+          return h("td", { class: `num sx-hcell ${c.received || c.done ? "" : "sx-hcell-empty"}`, title: c.received ? `${hh(x.hour)}: ${c.done} finished, ${c.received} arrived, ${c.same_hour} the same hour` : "" },
+            c.received || c.done ? `${fmtNum(c.done)}/${fmtNum(c.received)}` : "·", c.received ? h("small", { class: `sx-hpct sx-hpct-${pctTone(c.done_pct)}` }, ` ${Math.round(c.done_pct)}%`) : null); }),
+        h("td", { class: "num" }, `${fmtNum(t.done)}/${fmtNum(t.received)}`, t.received ? h("small", { class: `sx-hpct sx-hpct-${pctTone(100 * t.done / t.received)}` }, ` ${Math.round(100 * t.done / t.received)}%`) : null)))))) : null;
+    return OPS.card("Hour by hour — arrived vs finished", { hint }, h("div", { class: "sx-stack" },
+      h("div", { class: "sx-daily-wrap" }, svg, axis, legend), table,
+      teamTable ? h("h4", { class: "sx-sub" }, "Each team — finished / arrived in the hour") : null, teamTable));
+  }
+
+  function slaRead(d) {
+    const o = d.overall || {}, m = d.meta || {}, b = d.bottleneck, oc = d.outcomes || {};
+    const bits = [];
+    if (o.measured) bits.push(`${OPS.fmtPct(o.sla_pct)} of the confirmed requests met the ${fmtMin(m.sla_minutes)} SLA (${fmtNum(o.breached || 0)} breached, 90 % within ${fmtMin(o.p90_minutes)}).`);
+    if (b) bits.push(`Most of a request's time is spent in “${b.label}” (${b.share_pct}%).`);
+    if (oc.returned) bits.push(`${oc.returned_pct}% were sent back to the branch at least once.`);
+    if (oc.rejected) bits.push(`${fmtNum(oc.rejected)} rejected.`);
+    return bits.length ? h("p", { class: "sx-read", dir: "auto" }, bits.join(" ")) : null;
+  }
+
+  // ---- the hour-of-day chart: when requests are assigned, executed and confirmed ----
+  const HOUR_SERIES = [["assigned", "Assigned", "sx-hb-a"], ["executed", "Executed", "sx-hb-e"], ["confirmed", "Confirmed", "sx-hb-c"]];
+  function hourChart(hours) {
+    hours = hours || [];
+    const max = Math.max(1, ...hours.map((x) => Math.max(x.assigned || 0, x.executed || 0, x.confirmed || 0)));
+    if (!hours.some((x) => x.assigned || x.executed || x.confirmed)) return h("p", { class: "hint" }, "No time stamps in this period yet.");
+    const svg = svgEl("svg", { class: "sx-hours", viewBox: "0 0 96 100", preserveAspectRatio: "none", role: "img",
+      "aria-label": "Assigned, executed and confirmed requests by hour of the day" });
+    hours.forEach((x, i) => HOUR_SERIES.forEach(([key, label, cls], j) => {
+      const bh = Math.max(x[key] ? 1.5 : 0, ((x[key] || 0) / max) * 100);
+      const rect = svgEl("rect", { x: i * 4 + j * 1.2 + 0.2, y: 100 - bh, width: 1.1, height: bh, class: cls });
+      const t = svgEl("title", {});
+      t.textContent = `${String(x.hour).padStart(2, "0")}:00 – ${label}: ${fmtNum(x[key] || 0)}`;
+      rect.append(t);
+      svg.append(rect);
+    }));
+    const peak = (key) => hours.reduce((a, b) => ((b[key] || 0) > (a[key] || 0) ? b : a), hours[0]);
+    const pa = peak("assigned"), pe = peak("executed");
+    return h("div", { class: "sx-daily-wrap" }, svg,
+      h("div", { class: "sx-hours-axis hint", "aria-hidden": "true" }, ...[0, 6, 12, 18, 23].map((n) => h("span", {}, `${String(n).padStart(2, "0")}:00`))),
+      h("div", { class: "sx-daily-legend hint" }, ...HOUR_SERIES.flatMap(([, label, cls]) => [h("i", { class: `sx-key ${cls}` }), label]),
+        h("span", { class: "grow" }),
+        pa.assigned ? `Peak assignment ${String(pa.hour).padStart(2, "0")}:00 (${fmtNum(pa.assigned)})` : "",
+        pe.executed ? ` · peak execution ${String(pe.hour).padStart(2, "0")}:00 (${fmtNum(pe.executed)})` : ""));
+  }
+
+  const fmtStamp = (s) => (s ? String(s).replace("T", " ").slice(0, 16) : "—");
+
+  function holderTable(rows) {
     rows = rows || [];
     return OPS.table({
-      search: rows.length > 12, copy: true, pageSize: 12, pageSizes: [12, 25, 100], caption,
-      sort: { key: "n", desc: true },
+      search: rows.length > 12, copy: true, pageSize: 12, pageSizes: [12, 25, 100], caption: "Open requests by security user",
+      sort: { key: "breached", desc: true },
       columns: [
-        { key: keyCol, label, sort: true, render: (r) => h("span", { dir: "auto" }, String(r[keyCol])), text: (r) => String(r[keyCol]) },
+        { key: "holder", label: "Security user", sort: true, render: (r) => h("span", { dir: "auto" }, String(r.holder)), text: (r) => String(r.holder) },
         { key: "n", label: "Open now", num: true, sort: true, render: (r) => fmtNum(r.n) },
-        { key: "breached", label: "Breached", num: true, sort: true,
-          render: (r) => (r.breached ? OPS.chip(fmtNum(r.breached), "danger") : fmtNum(0)) },
+        { key: "breached", label: "Past SLA", num: true, sort: true, render: (r) => (r.breached ? OPS.chip(fmtNum(r.breached), "danger") : fmtNum(0)) },
+        { key: "on_hold", label: "On hold", num: true, sort: true, render: (r) => fmtNum(r.on_hold || 0) },
         { key: "oldest_minutes", label: "Oldest", num: true, sort: true, render: (r) => fmtMin(r.oldest_minutes) },
       ], rows,
     }).el;
   }
 
-  function liveStrip(d) {
-    const L = d.live || {}, sla = L.breach_minutes || (d.meta || {}).sla_minutes || 120;
-    if (!L.open && !L.awaiting && !L.closed_today) {
-      return OPS.card("Right now", { hint: "live from the collector's scan" },
-        h("p", { class: "hint" }, "No request is open right now and none closed today — nothing is waiting with a security user."));
-    }
-    const kpis = h("div", { class: "sx-kpis" },
-      OPS.kpi({ key: "an-open", label: "Open now", value: fmtNum(L.open || 0), sub: "with the employee (live)", icon: "clock", hero: true }),
-      OPS.kpi({ key: "an-closed-today", label: "Closed today", value: fmtNum(L.closed_today || 0),
-        sub: d.scan_interval ? `seen leaving the queue (a scan every ${fmtNum(d.scan_interval)} min) or confirmed` : "left the queue or confirmed", tone: L.closed_today ? "ok" : null, icon: "check" }),
-      OPS.kpi({ key: "an-past", label: `Breached ≥ ${fmtMin(sla)}`, value: fmtNum(L.breached || 0), sub: "open - the same limit as Live tickets", tone: L.breached ? "danger" : null, icon: "shield" }),
-      OPS.kpi({ key: "an-oldest", label: "Oldest open", value: fmtMin(L.oldest_minutes), sub: "waiting the longest", tone: (L.oldest_minutes != null && L.oldest_minutes >= sla) ? "danger" : null, icon: "clock" }));
-    const parts = [kpis];
-    if (L.open) {
-      parts.push(h("div", { class: "sx-two" },
-        OPS.card("By security user (open)", { hint: "مستخدم السرية · who is holding open requests now" }, liveRollup(L.by_employee, "executor", "Security user", "Open requests by security user")),
-        OPS.card("By team (open)", {}, liveRollup(L.by_team, "team", "Team", "Open requests by team"))));
-    }
-    if ((L.closed_today_by_employee || []).length) {
-      parts.push(OPS.card("Closed today by security user", { hint: "مستخدم السرية · requests that left their queue (or were confirmed) today, with the time each took" },
-        rollupTable(L.closed_today_by_employee, "executor", "Security user", "Requests closed today by security user")));
-    }
-    return OPS.card("Right now", { hint: `live from the collector's scan${L.awaiting ? ` · ${fmtNum(L.awaiting)} awaiting the checker` : ""}` },
-      h("div", { class: "sx-stack" }, ...parts));
+  function openTable(rows, sla) {
+    rows = rows || [];
+    return OPS.table({
+      search: rows.length > 12, copy: true, pageSize: 12, pageSizes: [12, 25, 100], caption: "Open requests, longest waiting first",
+      sort: { key: "minutes", desc: true },
+      columns: [
+        { key: "id", label: "Request", sort: true, render: (r) => String(r.id), text: (r) => String(r.id) },
+        { key: "holder", label: "Security user", sort: true, render: (r) => h("span", { dir: "auto" }, r.holder || "—"), text: (r) => r.holder || "" },
+        { key: "system", label: "System", sort: true, render: (r) => h("span", { dir: "auto" }, r.system || "—"), text: (r) => r.system || "" },
+        { key: "requester", label: "Requester", sort: true, render: (r) => h("span", { dir: "auto" }, r.requester || "—"), text: (r) => r.requester || "" },
+        { key: "assigned_at", label: "Assigned", sort: true, render: (r) => fmtStamp(r.assigned_at), text: (r) => r.assigned_at || "" },
+        { key: "minutes", label: "Waiting", num: true, sort: true,
+          render: (r) => (r.minutes == null ? h("span", { class: "hint", title: "Its status history is read at the next scan" }, "not read yet")
+            : r.minutes > sla ? OPS.chip(fmtMin(r.minutes), "danger") : fmtMin(r.minutes)) },
+        { key: "on_hold", label: "", sort: false, render: (r) => (r.on_hold ? OPS.chip("on hold", "warn") : "") },
+      ], rows,
+    }).el;
   }
 
-  function slaTools() {
-    if (!state.admin) return null;
-    const input = h("input", { type: "file", accept: ".csv,.txt", hidden: true, "aria-label": "Portal export file (ALL_*.csv)" });
-    input.addEventListener("change", async () => {
-      const file = input.files && input.files[0];
-      if (!file) return;
-      const fd = new FormData();
-      fd.append("file", file);
-      try {
-        const r = await api("POST", "/api/ops/sla-feed/upload", fd);
-        const notes = [r.skipped ? `${fmtNum(r.skipped)} line(s) without a readable date were skipped` : "",
-          r.dropped ? `the ${fmtNum(r.dropped)} oldest closed request(s) were dropped (the store's limit)` : ""].filter(Boolean).join("; ");
-        toast((r.added ? `Imported ${fmtNum(r.added)} closed request(s) from ${file.name}.` : "Up to date — nothing new in that export.")
-          + (notes ? ` Note: ${notes}.` : ""), notes ? "error" : undefined);
-        state.analysis = null;
-        state.slaFilter = { ...(state.slaFilter || {}), date_from: "", date_to: "" };   // an export covers months: show it all
-        loadAnalysis(true);
-      } catch (e) { toast(e.message, "error"); }
-      input.value = "";
-    });
-    return h("span", { class: "sx-analysis-tools" }, input,
-      h("button", { class: "btn btn-ghost btn-sm", type: "button", title: "The portal's closed-request export (ALL_*.csv)", onclick: () => input.click() }, "Upload export"),
-      h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: importFeed }, "Import feed"));
+  function liveStrip(d) {
+    const N = d.now || {}, sla = (d.meta || {}).sla_minutes || 180;
+    if (!N.open && !N.awaiting) {
+      return OPS.card("Right now", { hint: "live from the portal's status history" },
+        h("p", { class: "hint" }, "No request is open with a security user and none is waiting for the reviewer."));
+    }
+    const kpis = h("div", { class: "sx-kpis" },
+      OPS.kpi({ key: "an-open", label: "Open now", value: fmtNum(N.open || 0), sub: N.unread ? `with the security user · ${fmtNum(N.unread)} read at the next scan` : "with the security user (مستخدم السرية)", icon: "clock", hero: true }),
+      OPS.kpi({ key: "an-await-now", label: "Awaiting the reviewer", value: fmtNum(N.awaiting || 0), sub: "executed · not confirmed yet (مراجع السرية)", tone: N.awaiting ? "warn" : null, icon: "alert" }),
+      OPS.kpi({ key: "an-past", label: `Past ${fmtMin(sla)}`, value: fmtNum(N.breached || 0), sub: "open longer than the SLA target", tone: N.breached ? "danger" : null, icon: "shield" }),
+      OPS.kpi({ key: "an-hold", label: "On hold", value: fmtNum(N.on_hold || 0), sub: "«معلق» right now", icon: "clock" }),
+      OPS.kpi({ key: "an-oldest", label: "Oldest open", value: fmtMin(N.oldest_minutes), sub: "waiting the longest", tone: (N.oldest_minutes != null && N.oldest_minutes > sla) ? "danger" : null, icon: "clock" }),
+      OPS.kpi({ key: "an-pre", label: "With the branch", value: fmtNum(N.pre || 0), sub: "registered · not assigned yet", icon: "user" }));
+    const parts = [kpis];
+    if (N.open) {
+      parts.push(h("div", { class: "sx-two" },
+        OPS.card("By security user (open)", { hint: "مستخدم السرية · who holds the open requests now" }, holderTable(N.by_holder)),
+        OPS.card("Open requests", { hint: "longest waiting first" }, openTable(d.open_now, sla))));
+    }
+    if ((d.awaiting_now || []).length) {
+      parts.push(OPS.card("Awaiting the reviewer", { hint: "مراجع السرية · executed, waiting for «تم التعزيز»" }, OPS.table({
+        search: d.awaiting_now.length > 12, copy: true, pageSize: 12, pageSizes: [12, 25, 100], caption: "Executed requests waiting for confirmation",
+        sort: { key: "minutes", desc: true },
+        columns: [
+          { key: "id", label: "Request", sort: true, render: (r) => String(r.id), text: (r) => String(r.id) },
+          { key: "executor", label: "Executed by", sort: true, render: (r) => h("span", { dir: "auto" }, r.executor || "—"), text: (r) => r.executor || "" },
+          { key: "system", label: "System", sort: true, render: (r) => h("span", { dir: "auto" }, r.system || "—"), text: (r) => r.system || "" },
+          { key: "executed_at", label: "Executed", sort: true, render: (r) => fmtStamp(r.executed_at), text: (r) => r.executed_at || "" },
+          { key: "outcome", label: "Outcome", sort: true, render: (r) => (r.outcome === "not_executed" ? OPS.chip("not executed", "warn") : r.outcome ? OPS.chip("executed", "ok") : "—"), text: (r) => r.outcome || "" },
+          { key: "minutes", label: "Waiting", num: true, sort: true, render: (r) => (r.minutes == null ? h("span", { class: "hint" }, "not read yet") : fmtMin(r.minutes)) },
+        ], rows: d.awaiting_now,
+      }).el));
+    }
+    return OPS.card("Right now", { hint: "live from the portal's status history · not limited by the dates below" }, h("div", { class: "sx-stack" }, ...parts));
+  }
+
+  // where the data comes from, and whether the last read worked
+  function recorderLine(d) {
+    const R = d.recorder || {}, st = R.stats || {}, err = R.error || {};
+    if (R.enabled === false) {
+      return h("div", { class: "sx-banner warn", role: "note" }, glyph("alert"), h("span", { class: "sx-banner-text" },
+        "Reading the status history is switched off (System › Settings › Ticketing › SLA history). The analysis below stops at the last read."));
+    }
+    if (err.message && (!R.last_read || String(err.at || "") > String(R.last_read))) {
+      return h("div", { class: "sx-banner warn", role: "alert" }, glyph("alert"), h("span", { class: "sx-banner-text", dir: "auto" },
+        `The last scan could not read the status history (${fmtStamp(err.at)}): ${err.message} The live tickets are not affected; the analysis shows the last good read.`));
+    }
+    const bits = [`Read live from «الاستفسار عن الطلبات» and each request's «الحالة التاريخية للطلب» at every scan`];
+    if (R.last_read) bits.push(`last read ${fmtStamp(R.last_read)}`);
+    if (st.rows != null) bits.push(`${fmtNum(st.rows)} request(s) on the page, ${fmtNum(st.opened || 0)} history(ies) read`);
+    if (st.left) bits.push(`${fmtNum(st.left)} more next scan`);
+    const out = [...((d.left_out || {}).teams || []), ...((d.left_out || {}).applications || [])];
+    if (out.length) bits.push(`left out of the SLA: ${out.join(", ")}`);
+    return h("p", { class: "hint sx-analysis-note", dir: "auto" }, bits.join(" · ") + ".");
   }
 
   function analysisHead(d) {
     const m = d.meta || {}, slaH = Math.round((m.sla_minutes || 180) / 60 * 10) / 10;
-    return h("div", { class: "sx-analysis-head" },
-      h("p", { class: "hint sx-analysis-note", dir: "auto" }, `${fmtNum(m.requests || 0)} request(s) in view. Employee (مستخدم السرية) does «تم التنفيذ / لم يتم التنفيذ»; checker/manager (مراجع السرية) does «تم التعزيز على التنفيذ / عدم التنفيذ». SLA target ${slaH} hours. Edit the recording settings in System › Settings › Ticketing.`),
-      slaTools());
+    return h("div", { class: "sx-stack" }, recorderLine(d),
+      h("p", { class: "hint sx-analysis-note", dir: "auto" }, `${fmtNum(m.requests || 0)} request(s) in this view. Security user (مستخدم السرية): «اسناد» → «تم التنفيذ / لم يتم التنفيذ»; reviewer (مراجع السرية): → «تم التعزيز». SLA target ${slaH} h, first assignment → confirmation. Settings: System › Settings › Ticketing.`));
   }
 
   function unmappedNote(d) {
@@ -871,17 +1138,32 @@
       : `${n} recorded ${what} no team yet, so ${d.unmapped === 1 ? "it is" : "they are"} not in your view. An administrator gives them a team in Auto Assign › Applications.`));
   }
 
+  function assignerTable(rows) {
+    rows = rows || [];
+    return OPS.table({
+      search: rows.length > 12, copy: true, pageSize: 12, pageSizes: [12, 25, 100], caption: "Requests by who assigned them",
+      sort: { key: "n", desc: true },
+      columns: [
+        { key: "assigner", label: "Assigned by", sort: true, render: (r) => h("span", { dir: "auto" }, String(r.assigner)), text: (r) => String(r.assigner) },
+        { key: "n", label: "Requests", num: true, sort: true, render: (r) => fmtNum(r.n) },
+      ], rows,
+    }).el;
+  }
+
   function renderAnalysis(d) {
     if (!d || !d.available) {
-      el.analysisPanel.replaceChildren(h("div", { class: "sx-stack" }, slaTools(), OPS.emptyState({ title: "No SLA data recorded yet", icon: "shield",
-        text: "The SLA analysis fills in as the collector scans: a request on the Re-Assign page is open, and once it leaves its security user's queue it is recorded as closed with the time it took. For the closed requests' outcome and the checker's confirmation, upload the portal's ALL_*.csv export (administrators) or set its path in System › Settings › Ticketing." })));
+      const R = (d && d.recorder) || {};
+      const why = R.enabled === false
+        ? "Reading the status history is switched off in System › Settings › Ticketing › SLA history."
+        : (R.error && R.error.message) ? `The last scan could not read it: ${R.error.message}`
+        : "Nothing is uploaded: at every scan the collector opens «الاستفسار عن الطلبات» on the portal and reads each request's «الحالة التاريخية للطلب» — who assigned, executed and confirmed it, and exactly when. The analysis appears after the next scan.";
+      el.analysisPanel.replaceChildren(OPS.emptyState({ title: "No SLA history recorded yet", icon: "shield", text: why }));
       return;
     }
     const stack = [analysisHead(d), liveStrip(d), unmappedNote(d), filterBar(d)];
     if (!d.meta || !d.meta.requests) {
-      stack.push(OPS.card("Closed-request analysis", { hint: "the period view below" },
-        OPS.emptyState({ title: "No closed requests match this filter", icon: "shield",
-          text: "The live strip above is always current. For the closed-request clocks, widen the date range or pick a different employee / checker / team — or press Clear. Closed-request history also fills in from the export feed set in System › Settings › Ticketing." })));
+      stack.push(OPS.card("This period", {}, OPS.emptyState({ title: "No request matches this filter", icon: "shield",
+        text: "“Right now” above is always current. Widen the dates, pick another employee / checker / team, or press Clear." })));
       el.analysisPanel.replaceChildren(h("div", { class: "sx-stack" }, ...stack.filter(Boolean)));
       return;
     }
@@ -890,39 +1172,47 @@
     const slaTone = !timed ? null : o.sla_pct >= 80 ? "ok" : o.sla_pct >= 50 ? "warn" : "danger";
     const slaH = Math.round(m.sla_minutes / 60 * 10) / 10;
     const kpis = h("div", { class: "sx-kpis" },
-      OPS.kpi({ key: "an-period-open", label: "Open", value: fmtNum(b.open || 0), sub: "still with the employee", icon: "clock" }),
-      OPS.kpi({ key: "an-awaiting", label: "Awaiting confirmation", value: fmtNum(b.awaiting || 0), sub: "with the checker/manager", tone: b.awaiting ? "warn" : null, icon: "alert" }),
-      OPS.kpi({ key: "an-closed", label: "Closed", value: fmtNum(b.closed || 0), sub: (o.executed + o.not_executed) ? OPS.fmtPct(o.executed_pct) + " executed" : "outcome comes from the export", icon: "check", hero: true }),
+      OPS.kpi({ key: "an-closed", label: "Closed", value: fmtNum(b.closed || 0), sub: "confirmed by the reviewer in this period", icon: "check", hero: true }),
       OPS.kpi({ key: "an-within", label: `Within ${slaH} h SLA`, value: timed ? OPS.fmtPct(o.sla_pct) : "—",
-        sub: timed ? `median ${fmtMin(o.median_minutes)}` : "no closed request yet", tone: slaTone, icon: "shield" }));
+        sub: timed ? `median ${fmtMin(o.median_minutes)} · assignment → confirmation` : "no closed request yet", tone: slaTone, icon: "shield" }),
+      OPS.kpi({ key: "an-exec", label: "Executed", value: fmtNum(o.executed || 0), sub: b.closed ? `${OPS.fmtPct(o.executed_pct)} of the closed` : "«تم التعزيز على التنفيذ»", tone: "ok", icon: "check" }),
+      OPS.kpi({ key: "an-notexec", label: "Not executed", value: fmtNum(o.not_executed || 0), sub: "«تم التعزيز على عدم التنفيذ»", tone: o.not_executed ? "warn" : null, icon: "alert" }),
+      OPS.kpi({ key: "an-held", label: "Put on hold", value: fmtNum((d.hold || {}).requests || 0), sub: (d.hold || {}).requests ? `${fmtMin((d.hold || {}).minutes)} on hold in all` : "«معلق»", icon: "clock" }),
+      OPS.kpi({ key: "an-awaiting", label: "Executed, not confirmed", value: fmtNum(b.awaiting || 0), sub: "in this period, waiting for the reviewer", tone: b.awaiting ? "warn" : null, icon: "alert" }));
+    const ec = d.employee_clock || {}, mc = d.manager_clock || {}, bw = d.branch_wait || {};
     const clocks = h("div", { class: "sx-kpis" },
-      OPS.kpi({ label: "Employee clock", value: fmtMin(d.employee_clock.median_minutes), sub: "median · assignment → execution (مستخدم السرية)", icon: "user" }),
-      d.manager_clock.median_minutes != null       // needs a confirmation after the request left the queue (export / feed)
-        ? OPS.kpi({ label: "Manager clock", value: fmtMin(d.manager_clock.median_minutes), sub: "median · execution → confirmation (مراجع السرية)", icon: "shield" }) : null,
-      OPS.kpi({ label: "Full clock", value: fmtMin(o.median_minutes), sub: "median · assignment → confirmation", icon: "clock" }));
-    if (!b.closed) {                                        // nothing closed in this period: one clear note, not six empty tables
-      stack.push(kpis, OPS.card("Closed requests", {}, OPS.emptyState({ title: "No request has closed in this period yet", icon: "clock",
-        text: "A request counts as closed when it leaves its security user's queue (the next scan sees it gone) or when the portal's "
-          + "export is imported (Upload export / Import feed). The clocks, the outcome and the tables by employee, checker, team, day "
-          + "and system fill in from the first closed request." })));
-      el.analysisPanel.replaceChildren(h("div", { class: "sx-stack" }, ...stack.filter(Boolean)));
-      return;
+      OPS.kpi({ label: "Security user clock", value: fmtMin(ec.median_minutes), sub: `median · assignment → execution${ec.n ? ` · ${fmtNum(ec.n)} req.` : ""}`, icon: "user" }),
+      OPS.kpi({ label: "Reviewer clock", value: fmtMin(mc.median_minutes), sub: `median · execution → confirmation${mc.n ? ` · ${fmtNum(mc.n)} req.` : ""}`, icon: "shield" }),
+      OPS.kpi({ label: "Full clock", value: fmtMin(o.median_minutes), sub: "median · first assignment → confirmation", icon: "clock" }),
+      OPS.kpi({ label: "Average full clock", value: fmtMin(o.average_minutes), sub: "mean of the closed requests", icon: "clock" }),
+      OPS.kpi({ label: "Before the security team", value: fmtMin(bw.median_minutes), sub: "median · branch confirmation → assignment", icon: "activity" }));
+    stack.push(slaRead(d), kpis, clocks, hourlyCard(d));
+    stack.push(OPS.card("Stages of a request", { hint: "each stage against its own target · green on target, amber up to 1.5×, red beyond" }, stageTable(d.stages)));
+    stack.push(h("div", { class: "sx-two" },
+      OPS.card("Where the time goes", { hint: "average of each hand-off" }, waterfall(d)),
+      OPS.card("Needs attention", { hint: d.attention_total > (d.attention || []).length ? `${fmtNum(d.attention_total)} in all · worst first` : "worst first · click for the timeline" }, attentionTable(d))));
+    stack.push(outcomesCard(d));
+    if (b.closed) {
+      stack.push(OPS.card("Outcome", { hint: "confirmed executed vs confirmed not executed" },
+        OPS.stackbar([{ label: "Executed", value: o.executed, cls: "op-t-ok" }, { label: "Not executed", value: o.not_executed, cls: "op-t-warn" }])));
     }
-    const outcome = OPS.stackbar([{ label: "Executed", value: o.executed, cls: "op-t-ok" },
-      { label: "Not executed", value: o.not_executed, cls: "op-t-warn" }]);
-    stack.push(kpis, clocks,
-      OPS.card("Outcome", { hint: "executed vs confirmed without execution" }, outcome),
-      m.date_from ? OPS.card("Confirmed requests per day", { hint: "Sundays highlighted" }, dailyChart(d.by_day)) : null,
-      (d.options && (d.options.checkers || []).length)       // only a feed with the مراجع السرية column names the checker
-        ? h("div", { class: "sx-two" },
-          OPS.card("By employee (executor)", { hint: "مستخدم السرية · who ran the request" }, rollupTable(d.by_employee, "executor", "Employee", "SLA by employee")),
-          OPS.card("By checker / manager", { hint: "مراجع السرية · who confirmed it" }, rollupTable(d.by_checker, "checker", "Checker", "SLA by checker")))
-        : OPS.card("By employee (executor)", { hint: "مستخدم السرية · who ran the request" }, rollupTable(d.by_employee, "executor", "Employee", "SLA by employee")),
-      OPS.card("Closed requests by security user", { hint: "مستخدم السرية · who handled each closed request, and how long it took" }, rollupTable(d.by_handler, "handler", "Security user", "Closed requests by security user")),
-      OPS.card("By team", {}, rollupTable(d.by_team, "team", "Team", "SLA by team")),
-      h("div", { class: "sx-two" },
-        OPS.card("By day", { hint: "newest first" }, rollupTable(d.by_day, "date", "Date", "SLA by day", { key: "date", desc: true })),
-        OPS.card("By system", { hint: "top 25" }, rollupTable(d.by_system, "system", "System", "SLA by system"))));
+    stack.push(h("div", { class: "sx-two" },
+      OPS.card("Confirmed requests per day", { hint: "Sundays highlighted" }, dailyChart(d.by_day)),
+      OPS.card("By hour of the day", { hint: "when requests are assigned, executed and confirmed" }, hourChart(d.by_hour))));
+    stack.push(h("div", { class: "sx-two" },
+      OPS.card("By security user (executor)", { hint: "مستخدم السرية · assignment → execution" }, rollupTable(d.by_employee, "executor", "Security user", "SLA by security user")),
+      OPS.card("By reviewer (checker)", { hint: "مراجع السرية · execution → confirmation" }, rollupTable(d.by_checker, "checker", "Reviewer", "SLA by reviewer"))));
+    stack.push(h("div", { class: "sx-two" },
+      OPS.card("By team", { hint: "full clock" }, rollupTable(d.by_team, "team", "Team", "SLA by team")),
+      OPS.card("By assigner", { hint: "موظف الاسناد · who assigned the requests" }, assignerTable(d.by_assigner))));
+    stack.push(h("div", { class: "sx-two" },
+      OPS.card("By day", { hint: "newest first" }, rollupTable(d.by_day, "date", "Date", "SLA by day", { key: "date", desc: true })),
+      OPS.card("By system", { hint: "top 25" }, rollupTable(d.by_system, "system", "System", "SLA by system"))));
+    stack.push(h("div", { class: "sx-two" },
+      OPS.card("By branch", { hint: "الفرع / الادارة · top 25" }, rollupTable(d.by_branch, "branch", "Branch", "SLA by branch")),
+      OPS.card("By request type", { hint: "نوع الطلب · top 25" }, rollupTable(d.by_request_type, "request_type", "Request type", "SLA by request type"))));
+    const more = d.requests_total > (d.requests_list || []).length;
+    stack.push(OPS.card("Requests", { hint: more ? `newest ${fmtNum(d.requests_list.length)} of ${fmtNum(d.requests_total)} · the CSV / Excel export holds every one` : "click a request for its timeline" }, requestsTable(d)));
     el.analysisPanel.replaceChildren(h("div", { class: "sx-stack" }, ...stack.filter(Boolean)));
   }
 
@@ -930,9 +1220,7 @@
     const f = state.slaFilter || {}, p = new URLSearchParams();
     if (f.date_from) p.set("from", f.date_from);
     if (f.date_to) p.set("to", f.date_to);
-    if (f.executor) p.set("executor", f.executor);
-    if (f.checker) p.set("checker", f.checker);
-    if (f.team) p.set("team", f.team);
+    for (const k of ["executor", "checker", "team", "system", "branch", "request_type", "outcome", "returned"]) if (f[k]) p.set(k, f[k]);
     const s = p.toString();
     return s ? "?" + s : "";
   }
@@ -945,7 +1233,7 @@
     }
     if (!state.slaFilter) {                                 // first open: default the date to today (current data)
       const t = slaToday();
-      state.slaFilter = { date_from: t, date_to: t, executor: "", checker: "", team: "" };
+      state.slaFilter = { ...EMPTY_FILTER, date_from: t, date_to: t };
     }
     const seq = ++analysisSeq;
     if (!quiet) el.analysisPanel.replaceChildren(h("p", { class: "empty" }, "Loading the SLA analysis…"));
@@ -959,15 +1247,6 @@
     state.analysis = answer;
     if (quiet) keepFocus(el.analysisPanel, () => renderAnalysis(answer));
     else renderAnalysis(answer);
-  }
-
-  async function importFeed() {
-    try {
-      const r = await api("POST", "/api/ops/sla-feed/import", {});
-      toast(r.added ? `Imported — ${fmtNum(r.added)} new request(s).` : "Up to date — nothing new in the feed.");
-      state.analysis = null;
-      loadAnalysis();
-    } catch (e) { toast(e.message, "error"); }
   }
 
   function syncTools() {
@@ -1097,6 +1376,11 @@
     build();
     refresh(true).catch((e) => { state.failure = { network: !!e.network, message: e.message }; renderBanner(); if (!e.network) toast(e.message, "error"); }).finally(() => schedule());
     setInterval(tick, TICK_MS);
+    // the SLA Analysis is live too: while it is open and its period reaches today, it refreshes itself every minute
+    setInterval(() => {
+      const f = state.slaFilter || {};
+      if (state.tab === "analysis" && !document.hidden && state.analysis && (!f.date_to || f.date_to >= slaToday())) loadAnalysis(true, true);
+    }, ANALYSIS_REFRESH_MS);
     document.addEventListener("visibilitychange", () => { if (!document.hidden) { tick(); schedule(0); } });
   }
 

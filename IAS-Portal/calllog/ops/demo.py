@@ -91,7 +91,8 @@ QUALITY_NOTES = {"Excellent": "Clear answer with the exact steps.", "Good": "Cor
 REPLY_TEXT = "Dear colleague, the request is done on our side. Please check and tell us if anything is missing."
 
 JOB_ERRORS = {"email": "Cannot connect to Outlook after 5 tries", "email_report": "Could not save the Excel file",
-              "sla": "The portal login page did not load within 60 s", "itsm": "Chrome could not be started"}
+              "sla": "The portal login page did not load within 60 s", "itsm": "Chrome could not be started",
+              "daily_summary": "Outlook did not send the summary"}
 
 
 def _iso(moment):
@@ -792,12 +793,12 @@ def _write_events(ops, now, events):
 def _heartbeats(ops, now, stale_job, failed_job, stats, paused_job=None):
     summaries = {"email": f"{stats['business_emails']} mails, {stats['pending']} pending",
                  "email_report": "Report sent: 2 e-mails, 3 attachments", "sla": "33 open, 5 breached",
-                 "itsm": "7 open requests"}
+                 "itsm": "7 open requests", "daily_summary": "summary sent (13:00): calls 41, mails 77, tickets 12, CRs 9"}
     report_time = now.replace(hour=16, minute=30, second=0)
     report_next = report_time if now < report_time else report_time + timedelta(days=1)
     for job in JOB_NAMES:
         module = schemas.JOB_MODULE[job]
-        interval = hub_settings.DEFAULTS[module]["interval_minutes"]
+        interval = hub_settings.DEFAULTS[module].get("interval_minutes", 10)
         beat_at = now - timedelta(seconds=40)
         last_run = now - timedelta(minutes=interval // 2 + 1)
         if job == stale_job:
@@ -838,6 +839,8 @@ def _logs(ops, now, failed_job, stats, paused_job=None):
         "email_report": ["Started: daily report", "Excel workbook written (12 sheets), 3 attachments", "Finished OK - Report sent: 2 e-mails, 3 attachments (88.0 s)"],
         "sla": ["Started: portal scan", "Signed in, 33 open requests read", "Finished OK - 33 open, 5 breached (12.4 s)"],
         "itsm": ["Started: scoreboard scan", "2 roles read", "Finished OK - 7 open requests (35.9 s)"],
+        "daily_summary": ["Started: daily summary (13:00)", "Calls, e-mails, tickets and change requests read",
+                          "Finished OK - summary sent (13:00): calls 41, mails 77, tickets 12, CRs 9 (3.2 s)"],
     }
     if failed_job:
         lines[failed_job][-1] = f"FAILED - {JOB_ERRORS[failed_job]} (9.1 s)"

@@ -183,6 +183,39 @@ def snapshot_export(module, fmt):
                      download_name=f"{name}.xlsx")
 
 
+SLA_ANALYSIS_HEAD = ["Request no.", "Request date", "Branch", "Requester", "Requester no.", "Application", "Team",
+                     "Request type", "Stage", "Outcome", "Security user", "Reviewer", "Assigned by", "Sent back",
+                     "Re-assigned", "Exception (region / sector)", "On hold (min)", "Branch approval (min)",
+                     "Region / sector approval (min)", "Waiting to be assigned (min)", "Security user (min)",
+                     "Reviewer (min)", "SLA (min)", "Whole request (min)", "SLA breached", "Finished on"]
+_OUTCOME_TEXT = {"completed": "Completed", "not_done": "Not executed", "rejected": "Rejected", "in_progress": "In progress"}
+
+
+@bp.get("/sla-analysis.<any(xlsx,csv):fmt>")
+@auth.ops_view_required
+def sla_analysis_export(fmt):
+    """Every request of one SLA Analysis view (the same filters as the page; a manager's own teams only) with the time
+    of each stage of its life, in minutes."""
+    from . import sla_history
+    from flask import request
+    filt = ops_api.sla_filter_args(request.args)
+    view, records = ops_api.sla_period(auth.team_scope(), filt)
+    now = auth.now().isoformat(timespec="seconds")
+    lines = sla_history.analyze(records, view["cfg"], now=now, list_limit=None)["requests_list"]
+    num = lambda v: "" if v is None else v                          # noqa: E731
+    rows = [[x["id"], x["request_date"], x["branch"], x["requester"], x["requester_no"], x["system"], x["team"],
+             x["request_type"], x["stage"], _OUTCOME_TEXT.get(x["outcome"], x["outcome"]), x["executor"], x["checker"],
+             x["assigner"], x["returned"], x["reassigned"], "Yes" if x["region"] else "", x["held_minutes"]]
+            + [num(x["minutes"].get(k)) for k in ("branch", "region", "pickup", "work", "review", "sla", "lifetime")]
+            + ["Yes" if x["sla_breached"] else "", x["finished_at"]] for x in lines]
+    auth.audit("ops_export", target=f"sla-analysis.{fmt}", details={"rows": len(rows)})
+    name = f"nbe-sla-analysis-{filt['date_from'] or 'start'}-to-{filt['date_to'] or auth.today()}"
+    if fmt == "csv":
+        return send_file(_csv(SLA_ANALYSIS_HEAD, rows), mimetype="text/csv", as_attachment=True, download_name=f"{name}.csv")
+    return send_file(_xlsx([("SLA requests", SLA_ANALYSIS_HEAD, rows)]), mimetype=XLSX_MIME, as_attachment=True,
+                     download_name=f"{name}.xlsx")
+
+
 @bp.get("/report/<module>/<name>")
 @auth.ops_view_required
 def report_file(module, name):

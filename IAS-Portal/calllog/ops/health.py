@@ -52,7 +52,9 @@ def module_interval(settings, module):
 
 
 def job_interval(settings, job):
-    return module_interval(settings, schemas.JOB_MODULE[job])
+    # a job of a section without an interval (the daily summary sends at fixed times): its idle heartbeat is still
+    # written every 30 seconds, so 10 minutes gives the usual "offline after 32 minutes" rule
+    return module_interval(settings, schemas.JOB_MODULE[job]) or 10
 
 
 # ------------------------------------------------------------------------------ data folder
@@ -141,7 +143,7 @@ def job_state(job, hb, settings, now):
             "last_ok_at": hb.get("last_ok_at"), "next_run_at": hb.get("next_run_at"),
             "last_duration_seconds": hb.get("last_duration_seconds"), "updated_at": hb.get("updated_at"),
             "age_minutes": _minutes_since(hb.get("updated_at"), now), "runs_ok": hb.get("runs_ok", 0),
-            "runs_failed": hb.get("runs_failed", 0), "version": hb.get("version", "")}
+            "runs_failed": hb.get("runs_failed", 0), "version": hb.get("version", ""), "state": hb.get("state") or ""}
 
 
 def job_states(ops, settings, now):

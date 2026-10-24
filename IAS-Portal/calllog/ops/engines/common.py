@@ -64,6 +64,7 @@ class JobContext:
     headed: bool = False              # show the browser (SLA / ITSM) for troubleshooting
     options: dict = field(default_factory=dict)   # per-run extras, e.g. {"send_mail": True} from "Run now", {"requested_by": "admin"}
     credentials: callable = None      # credentials(kind) -> password; default get_password
+    hub: dict = field(default_factory=dict)       # every section of the settings (read-only), e.g. the team rules
 
     def password(self, kind, username):
         fn = self.credentials or get_password

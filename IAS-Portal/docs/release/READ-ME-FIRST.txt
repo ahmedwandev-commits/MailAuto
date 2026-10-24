@@ -1,0 +1,62 @@
+IAS PORTAL - READ ME FIRST
+==========================
+
+WHAT IS IN THIS ZIP
+  program\           the application. Copy EVERYTHING inside this folder into the shared folder
+                     \\10.104.46.34\calllog   (so that  \\10.104.46.34\calllog\run.py  exists).
+  UPDATE-NOTES.txt   what is new in this version and how to update an existing installation.
+
+A NEW INSTALLATION
+  1. Copy the contents of the "program" folder into \\10.104.46.34\calllog
+  2. On the PC that runs the web app, install Python 3.9 or newer from python.org
+     (tick "Add python.exe to PATH").
+  3. Double-click run.py in the shared folder.  (The first start needs internet once.)
+  4. Write down the administrator password shown in the black window.  User ID: admin
+  5. Open the address shown in the window, sign in as admin and choose a new password.
+  6. Admin > Users: add the accounts (or import them from Excel / CSV).
+
+  To let other PCs open it, start with:   python \\10.104.46.34\calllog\run.py --share
+  To keep it running by itself (and up to date), use Windows Task Scheduler with  run.py --service
+
+THE COLLECTOR (Outlook, the SSO portal, ITSM) - on the PC that stays logged in to Outlook
+  1. Open collector_config.json (next to collector.py) in Notepad. The SSO-portal and ITSM user names
+     are already there; type the two passwords between the empty quotes and save.
+  2. Check it:       python collector.py --check        (it never prints a password)
+  3. Start it:       python collector.py --start        (--install-autostart = at every Windows log-in)
+  Prefer not to keep a password in the file? Leave it empty and run
+     python collector.py --set-password sla      and      python collector.py --set-password itsm
+  (it then lives in Windows Credential Manager).
+
+  Every SLA number is read from the SSO portal only, through the PC's own Edge / Chrome.
+
+--------------------------------------------------------------------------------
+
+IAS PORTAL - اقرأني أولاً
+==========================
+
+محتويات هذا الملف
+  program\           البرنامج نفسه. انسخ كل ما داخل هذا المجلد إلى المجلد المشترك
+                     \\10.104.46.34\calllog   (بحيث يظهر الملف  \\10.104.46.34\calllog\run.py).
+  UPDATE-NOTES.txt   الجديد في هذه النسخة وطريقة تحديث نسخة شغالة.
+
+تركيب جديد
+  1. انسخ محتويات مجلد program إلى \\10.104.46.34\calllog
+  2. على الجهاز الذي سيشغل البرنامج ثبّت Python 3.9 أو أحدث من python.org
+     (فعّل خيار Add python.exe to PATH).
+  3. اضغط مرتين على الملف run.py داخل المجلد المشترك. (أول تشغيل يحتاج إنترنت مرة واحدة.)
+  4. اكتب كلمة مرور المدير التي تظهر في النافذة السوداء.  اسم المستخدم: admin
+  5. افتح العنوان المكتوب في النافذة، سجّل الدخول كـ admin واختر كلمة مرور جديدة.
+  6. من Admin > Users أضف الحسابات (أو استوردها من Excel / CSV).
+
+  للسماح لأجهزة أخرى بالدخول شغّل:   python \\10.104.46.34\calllog\run.py --share
+  للتشغيل التلقائي استخدم Windows Task Scheduler مع  run.py --service
+
+الـ Collector (Outlook وبورتال الـ SSO و ITSM) - على الجهاز اللي فاتح Outlook
+  1. افتح collector_config.json (جنب collector.py) بالـ Notepad: أسماء المستخدمين موجودة، اكتب
+     الباسوردين بين علامات التنصيص الفاضية واحفظ.
+  2. اتأكد:     python collector.py --check        (عمره ما بيطبع باسورد)
+  3. شغّله:     python collector.py --start        (--install-autostart = يشتغل مع كل دخول ويندوز)
+  مش عايز الباسورد في الملف؟ سيبه فاضي وشغّل
+     python collector.py --set-password sla      و      python collector.py --set-password itsm
+
+  كل أرقام الـ SLA بتتقري من بورتال الـ SSO بس، من خلال Edge / Chrome اللي على الجهاز.

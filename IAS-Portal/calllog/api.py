@@ -236,7 +236,21 @@ def update_record(rid):
     view = lambda rec: {k: (branch_label(rec) if k == "branch" else rec.get(k)) for k in audit_keys}
     auth.audit("record_updated", target=rid, details={
         "owner": owner, "before": view(before), "after": view(after)})
+    _analysis_day_changed(before.get("date"), after.get("date"))
     return jsonify(record=decorate(after, auth.store().users(), reasons_by_key()))
+
+
+def _analysis_day_changed(*days):
+    """A logged call changed: the Analysis page counts its day(s) again (never fails the edit itself)."""
+    ops_store = current_app.extensions.get("ops")
+    if ops_store is None:
+        return
+    from .ops import analytics as ops_analytics
+    for day in dict.fromkeys(d for d in days if d):
+        try:
+            ops_analytics.mark_calls_dirty(ops_store, day)
+        except Exception:                                   # noqa: BLE001
+            current_app.logger.warning("Analysis: could not mark %s to be counted again", day)
 
 
 def _ip_changes(current, changes, body):
@@ -270,6 +284,7 @@ def delete_record(rid):
         "owner": owner, "branch": branch_label(removed), **{k: removed.get(k) for k in
                                                            ("date", "time", "ip_phone", "reason", "note")},
         **({"ip_unit": removed["ip_unit"]} if removed.get("ip_unit") else {})})
+    _analysis_day_changed(removed.get("date"))
     return jsonify(ok=True)
 
 

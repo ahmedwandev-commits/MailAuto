@@ -104,13 +104,16 @@ def plan_email(block, rows, now, members, load=None):
 
     ``block`` = a team's ``email`` config; ``rows`` = that team's overlaid e-mail rows; ``now`` = datetime;
     ``members`` = {email: name} of the team's active employees; ``load`` = {email: count} already carried (for balance).
-    Returns ``[{"message_id", "email", "name"}]`` - one per mail an active rule covers, balanced across that rule's
-    employees (fewest-loaded first, then alphabetical). A mail already assigned, or matched by no rule, is skipped.
+    E-mail auto-assign has NO application filter: every pending, unassigned mail of the team goes to the team members
+    of the rules active right now (all their employees together), the fewest-loaded first, then alphabetical.
+    Returns ``[{"message_id", "email", "name"}]``. A mail already assigned is skipped.
     """
     if not block.get("enabled"):
         return []
     rules = active_rules(block, now)
-    if not rules:
+    pool = sorted({e for r in rules for e in (overlay.normalize_email(x) for x in r.get("employees") or [])
+                   if e in members})
+    if not pool:
         return []
     carried = {overlay.normalize_email(k): v for k, v in (load or {}).items()}
     out, taken = [], set()
@@ -120,12 +123,6 @@ def plan_email(block, rows, now, members, load=None):
     for row in pending:
         mid = row.get("message_id")
         if mid in taken:
-            continue
-        rule = next((r for r in rules if _apps_match(r.get("applications"), row.get("detected_systems"))), None)
-        if rule is None:
-            continue
-        pool = [e for e in (overlay.normalize_email(x) for x in rule.get("employees") or []) if e in members]
-        if not pool:
             continue
         email = min(pool, key=lambda e: (carried.get(e, 0), e))
         carried[email] = carried.get(email, 0) + 1

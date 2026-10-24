@@ -1,7 +1,7 @@
 """NBE Operations Hub - the collector. Runs on the Windows PC that has Outlook and Chrome (or Edge) and feeds the shared folder.
 
     python collector.py                    run every enabled job in this window (Ctrl+C stops it)
-    python collector.py --jobs sla,itsm    only these jobs (email, email_report, sla, itsm)
+    python collector.py --jobs sla,itsm    only these jobs (email, email_report, sla, itsm, daily_summary)
     python collector.py --once sla         run one job now, print the result, exit (0 = good, 1 = failed)
                                            add --dry-run (write/send nothing) --no-email --debug --headed --force --send-mail
     python collector.py --check            what is configured, what is missing (never prints a password)
@@ -30,6 +30,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from datetime import datetime
@@ -39,7 +40,7 @@ HERE = bootstrap.HERE
 SCRIPT = Path(__file__).resolve()
 REQUIREMENTS = HERE / "requirements-collector.txt"
 OPTIONAL_PACKAGES = (("matplotlib", "matplotlib>=3.7"),)      # charts in the e-mail report; the report works without them
-JOB_NAMES = ("email", "email_report", "sla", "itsm")             # same as calllog.ops.schemas.JOBS (a test keeps them equal)
+JOB_NAMES = ("email", "email_report", "sla", "itsm", "daily_summary")    # same as calllog.ops.schemas.JOBS (a test keeps them equal)
 ACCOUNTS = {"sla": "SLA portal", "itsm": "ITSM"}
 PACKAGES = [("flask", "Flask"), ("openpyxl", "openpyxl"), ("keyring", "keyring")] + (
     [("win32com", "pywin32")] if os.name == "nt" else [])
@@ -93,7 +94,7 @@ def pause():
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description="NBE Operations Hub collector", epilog=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--jobs", help="only these jobs, comma separated (email, email_report, sla, itsm)")
+    ap.add_argument("--jobs", help="only these jobs, comma separated (email, email_report, sla, itsm, daily_summary)")
     ap.add_argument("--once", metavar="JOB", choices=JOB_NAMES, help="run one job now, print the result and exit")
     ap.add_argument("--no-email", action="store_true", help="do not send e-mail")
     ap.add_argument("--dry-run", action="store_true", help="scan, but write and send nothing")
@@ -159,24 +160,72 @@ def missing_packages():
 
 
 def run_pip(*pip_args):
-    return subprocess.call([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", *pip_args],
-                           creationflags=NO_WINDOW)
+    return subprocess.call([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--retries", "1",
+                            "--timeout", "15", *pip_args], creationflags=NO_WINDOW)
+
+
+# Without these the collector cannot work at all; without the others it runs and only what needs them reports it.
+CORE_PACKAGES = ("Flask", "openpyxl")
+WITHOUT = {"pywin32": "the e-mail jobs cannot open Outlook and no e-mail can be sent (the SLA and ITSM scans still run)",
+           "keyring": "passwords must be written in collector_config.json (Windows Credential Manager cannot be used)"}
+PIP_RETRY_HOURS = 12            # a failed install (no internet) is tried again only after this long
+
+
+def _pip_marker():
+    base = os.environ.get("LOCALAPPDATA") if os.name == "nt" else None
+    return Path(base or tempfile.gettempdir()) / "NBE-Ops" / "pip-install-failed.txt"
+
+
+def _pip_failed_recently():
+    try:
+        return time.time() - _pip_marker().stat().st_mtime < PIP_RETRY_HOURS * 3600
+    except OSError:
+        return False
+
+
+def _remember_pip_failure():
+    try:
+        _pip_marker().parent.mkdir(parents=True, exist_ok=True)
+        _pip_marker().write_text(datetime.now().isoformat(timespec="seconds"), encoding="ascii")
+    except OSError:
+        pass
+
+
+def _run_without(missing):
+    """The collector starts without the optional packages: say what that means and how to install them later."""
+    for name in missing:
+        say(f"WARNING: {name} is not installed - {WITHOUT.get(name, 'the jobs that need it report an error')}.")
+    say(f'         Install it when the internet (or the bank proxy) is reachable:  "{sys.executable}" -m pip install '
+        f'-r "{REQUIREMENTS}"   (add  --proxy http://PROXY:PORT  if needed), then restart the collector.')
+    say("         The collector starts now and runs every job it can.")
 
 
 def ensure_packages():
-    """Install what is missing (first run only) and start again in a fresh Python. None = nothing to do, else an exit code."""
+    """Install what is missing (first run) and start again in a fresh Python. None = go on, else an exit code.
+
+    Only a missing CORE package stops the collector. When pywin32 / keyring cannot be installed (no internet on the PC,
+    a blocked proxy) it still starts - the SLA and ITSM scans run, the e-mail jobs say what is missing - instead of
+    exiting and being restarted for ever with no job ever running (no heartbeat at all)."""
     missing = missing_packages()
     if not missing:
         return None
-    if os.environ.get(RESTART_FLAG):
-        say(f"ERROR: still missing after the install: {', '.join(missing)}. Run  {sys.executable} -m pip install -r "
-            f"\"{REQUIREMENTS}\"  and read the messages.")
-        return 1
+    core = [m for m in missing if m in CORE_PACKAGES]
+    if os.environ.get(RESTART_FLAG) or (_pip_failed_recently() and not core):
+        if core:
+            say(f"ERROR: still missing after the install: {', '.join(core)}. Run  {sys.executable} -m pip install -r "
+                f"\"{REQUIREMENTS}\"  and read the messages.")
+            return 1
+        _run_without(missing)
+        return None
     say(f"First run: installing the Python packages the collector needs ({', '.join(missing)}) - one time, internet needed...")
     if run_pip("-r", str(REQUIREMENTS)) != 0:
-        say("ERROR: the install failed - see the messages above. If the internet is blocked, ask IT for the proxy address and run:")
-        say(f'  "{sys.executable}" -m pip install --proxy http://PROXY:PORT -r "{REQUIREMENTS}"')
-        return 1
+        _remember_pip_failure()
+        if core:
+            say("ERROR: the install failed - see the messages above. If the internet is blocked, ask IT for the proxy address and run:")
+            say(f'  "{sys.executable}" -m pip install --proxy http://PROXY:PORT -r "{REQUIREMENTS}"')
+            return 1
+        _run_without(missing)
+        return None
     for module, spec in OPTIONAL_PACKAGES:
         if importlib.util.find_spec(module) is None and run_pip(spec) != 0:
             say(f"Note: {spec} could not be installed - the e-mail report will be sent without charts.")
@@ -290,6 +339,9 @@ def cmd_check(args):
     report = email_["report"]
     line("recipients", f"report to {len(report['to'])} / cc {len(report['cc'])}; SLA mail to {len(settings['sla']['mail']['to'])}; "
                        f"ITSM mail to {len(settings['itsm']['mail']['to'])} (empty = your own address)")
+    summary = settings.get("summary") or {}
+    line("daily summary", (f"on at {', '.join(summary.get('send_times') or []) or 'no time set'}; to {len(summary.get('to') or [])} "
+                           f"/ cc {len(summary.get('cc') or [])}") if summary.get("enabled") else "off")
     pinned = cc.pinned_keys()
     line("pinned settings", f"{len(pinned)} key(s) in collector_config.json override the web page")
     say()
@@ -561,21 +613,30 @@ def cmd_status(args):
     say(f"Data folder: {data_dir}")
     say("Jobs (from the heartbeat files):")
     states = health.job_states(store, settings, now)
+    STATE_TEXT = {"outside_hours": "outside working hours", "paused_auth": "PAUSED - login failed, fix the password",
+                  "disabled": "switched off in Settings", "running": "running now", "idle": "waiting for its next run",
+                  "stopped": "the collector was stopped"}
     for job in JOB_NAMES:
         s = states[job]
         if not s["present"]:
-            say(f"  {job:<13}no heartbeat yet")
+            say(f"  {job:<15}no heartbeat yet" + ("" if running else " - the collector has not run on this data folder yet"))
             continue
-        say(f"  {job:<13}{'online' if s['online'] else 'OFFLINE':<8}last: {s['last_status'] or '-':<8}ok at {s['last_ok_at'] or '-'}   "
+        say(f"  {job:<15}{'online' if s['online'] else 'OFFLINE':<8}last: {s['last_status'] or '-':<8}ok at {s['last_ok_at'] or '-'}   "
             f"next {s['next_run_at'] or '-'}   {s['last_summary'] or ''}"[:200])
+        if s.get("state") in STATE_TEXT:
+            say(f"               now: {STATE_TEXT[s['state']]}")
         if s["last_error"]:
             say(f"               error: {s['last_error'][:160]}")
-    log_path = store.logs_dir / "collector.log"
-    if log_path.exists():
-        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-6:]
-        say(f"Last lines of {log_path.name}:")
-        for text in lines:
-            say("  " + text)
+    for name in ("collector.log", "collector-console.log"):          # the console log shows a start-up that failed
+        log_path = store.logs_dir / name
+        if log_path.exists():
+            lines = [ln for ln in log_path.read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip()][-6:]
+            say(f"Last lines of {log_path.name}:")
+            for text in lines:
+                say("  " + text[:220])
+    if running and not any(states[j]["present"] for j in JOB_NAMES):
+        say("The collector is running but no job has written a heartbeat: it may be stuck at its start - read "
+            f"{store.logs_dir / 'collector-console.log'}  or run  python collector.py  in a window to see why.")
     return 0
 
 

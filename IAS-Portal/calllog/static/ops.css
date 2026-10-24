@@ -451,6 +451,9 @@ table.data.op-table tr.clickable:focus-visible { outline: 2px solid var(--btn); 
 .op-mv-orig-h { margin-top: 2px; }
 .op-mv-reply { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--hair); }
 .op-mv-reply-sub { color: var(--muted); font-size: 0.86rem; margin-bottom: 6px; }
+.op-mv-quality { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--hair); border-radius: 10px; background: var(--wash); }
+.op-mv-quality .op-mv-reply-h .op-chip + .op-chip, .op-mv-quality .op-mv-reply-h .chip + .chip { margin-inline-start: 6px; }
+.op-mv-quality p { margin: 4px 0 0; }
 .op-mv-reply .op-mv-text { border-inline-start: 3px solid var(--brand); background: color-mix(in srgb, var(--brand) 6%, var(--wash)); }
 .op-mv-foot { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; padding: 12px 18px 16px; border-top: 1px solid var(--hair); }
 /* SLA recording settings modal (opened from System › Settings › Ticketing). */

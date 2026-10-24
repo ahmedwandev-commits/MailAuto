@@ -244,7 +244,17 @@ APPLICATION_ALIASES = {
 SHORT_LATIN_ACRONYMS = frozenset((
     "ACH", "ACI", "BAW", "CCR", "CEM", "CPS", "CRM", "CSD", "CXM", "DMMS", "DWP", "ECM", "ECSD", "EIAM", "ERP", "FC",
     "FCPROD", "FCUBS", "FLEX", "FLX", "GL", "MFS", "OBCL", "OBDX", "OBMA", "PRIME", "REDI", "RTGS", "SBX", "SFTP", "SSO",
-    "TMS", "XCS", "XPRIME",
+    "TMS", "XCS", "XPRIME", "FC12", "FCUB", "OBBRN",
+))
+
+# Keywords that are also everyday words ("identity", "invitation", "approval", "e-mail", "confidentiality" in a
+# disclaimer, "prime", "windows" ...). They name a team ONLY when nothing more specific is found in the mail: a weak
+# word never outvotes a real system name, never adds a second team to a mail, and never stops the search through the
+# rest of the thread. The admin can still map any of them in System > Settings > Classification.
+WEAK_KEYWORDS = frozenset((
+    "Identity", "دعوة", "المصادقة", "المصادقه", "السرية", "الايميل", "الميل", "البريد الالكترونى", "للبريد الالكترونى",
+    "البريد الاليكتروني", "SERVICE PROVIDER", "Windows", "PRIME", "User Authentication Failed", "user not authenticated",
+    "ارشفة", "الاستدعاء",
 ))
 
 TEXT_NOISE_PHRASES = ("I-Flex SMS Team",)
@@ -257,9 +267,10 @@ QUALITY_REASONS = (
 )
 
 # Keywords that need a hand-written pattern because senders type them in many ways ("flexcube", "Flex-Cube", "E form").
+# The edges are "no Latin letter / digit next to it", so "الFlexcube" (an Arabic prefix glued on) still counts.
 CUSTOM_PATTERNS = {
-    "flex cube": re.compile(r"\bflex[\s\-_]*cube\b", re.IGNORECASE),
-    "e form": re.compile(r"\be[\s\-_]?form\b", re.IGNORECASE),
+    "flex cube": re.compile(r"(?<![A-Za-z0-9_])flex[\s\-_]*cube(?![A-Za-z0-9_])", re.IGNORECASE),
+    "e form": re.compile(r"(?<![A-Za-z0-9_])e[\s\-_]?form(?![A-Za-z0-9_])", re.IGNORECASE),
 }
 
 # What a custom pattern must contain literally: lets the matcher skip it with a fast substring test.
@@ -386,6 +397,17 @@ _SIGNATURE_START = [
     re.compile(r"^أطيب\s+التحيات[،,]?\s*$"),
     re.compile(r"^مع\s+تحيات[،,]?\s*$"),
 ]
+# Sign-offs that are also a whole message on their own ("Thank you", "شكرا"): they start the signature only AFTER some
+# text, so a mail that only says "thank you" is kept (and counted as needing no reply), while the department line and
+# the confidentiality footer under a real request are no longer read as part of it.
+_CLOSING_START = [
+    re.compile(r"^(thanks?|thank\s+you)([\s,&]+(and\s+)?(best|kind)?\s*regards)?[,.!]?\s*$", re.IGNORECASE),
+    re.compile(r"^(best|kind)\s+regards\s*(&|and)\s*thanks[,.!]?\s*$", re.IGNORECASE),
+    re.compile(r"^(br|rgds|respectfully|best\s+wishes|cheers)[,.]?\s*$", re.IGNORECASE),
+    re.compile(r"^وتفضلوا\s+بقبول\s+\S+\s+(الاحترام|التحية|التحيه).*$"),
+    re.compile(r"^(مع\s+)?(خالص\s+)?(تحياتي|تحياتى|الشكر|ا?[أا]طيب\s+التحيات)[،,.]?\s*$"),
+    re.compile(r"^و?شكرا[ًا]?[،,.!]?\s*$"),
+]
 # Mail-gateway banners that can be the whole "body" of an otherwise empty e-mail.
 _PLACEHOLDER_LINE = [
     re.compile(r"^confidential(\s+email)?[.!]?\s*$", re.IGNORECASE),
@@ -411,9 +433,39 @@ def strip_quoted_thread(raw_body):
     return _cut_at_first(raw_body, _THREAD_BOUNDARY)
 
 
+def _starts_signature(stripped, has_text):
+    return (any(p.match(stripped) for p in _SIGNATURE_START)
+            or (has_text and any(p.match(stripped) for p in _CLOSING_START)))
+
+
 def strip_signature_block(text):
-    """Everything before the first line that starts a signature ("Regards,", "--", "مع تحياتي", ...)."""
-    return _cut_at_first(text, _SIGNATURE_START)
+    """Everything before the first line that starts a signature ("Regards,", "--", "مع تحياتي", ... and, after some
+    text, "Thank you" / "شكرا")."""
+    lines = str(text or "").splitlines()
+    has_text = False
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped and _starts_signature(stripped, has_text):
+            return "\n".join(lines[:index])
+        has_text = has_text or bool(stripped)
+    return str(text or "")
+
+
+def strip_signatures_per_message(raw_body):
+    """The whole thread with the signature of EACH message removed: the newest message up to its sign-off, then every
+    quoted message (from its header line on) up to its own sign-off. Cutting the whole body at the first "Regards,"
+    would also drop the quoted request underneath a short "any update?" reply."""
+    out, keeping, has_text = [], True, False
+    for line in str(raw_body or "").splitlines():
+        stripped = line.strip()
+        if stripped and any(p.match(stripped) for p in _THREAD_BOUNDARY):
+            keeping, has_text = True, False                  # a quoted message starts: keep it until its signature
+        elif stripped and keeping and _starts_signature(stripped, has_text):
+            keeping = False
+        if keeping:
+            out.append(line)
+            has_text = has_text or bool(stripped)
+    return "\n".join(out)
 
 
 def strip_placeholder_lines(text):
@@ -437,7 +489,7 @@ def get_effective_body_text(raw_body, fallback_words=FORWARD_FALLBACK_WORD_LIMIT
     latest = extract_latest_message_text(raw_body)
     if len(latest.split()) > fallback_words:
         return latest
-    fuller = strip_signature_block(str(raw_body or "")).strip()
+    fuller = strip_signatures_per_message(raw_body).strip()
     return fuller if len(fuller) > len(latest) else latest
 
 
@@ -458,21 +510,46 @@ _WHOLE_WORD_BEFORE = r"(?<![A-Za-z0-9_])"
 _WHOLE_WORD_AFTER = r"(?![A-Za-z0-9_])"
 
 
+_ARABIC_LETTER = "ء-ي"
+
+
 def _system_pattern(keyword, strict=False):
-    """Regex for one system keyword. ``strict`` (admin rules): Latin edges must be whole-word edges."""
+    """Regex for one system keyword. A Latin letter or digit at either end must be a whole-word edge ("ACH" never in
+    "reach", "UAT 14" never in "UAT 145", "IT panel" never in "credit panel"), while an Arabic prefix glued to a Latin
+    name still counts ("الCRM"). Arabic words match inside longer words (Arabic glues "ال", "و", "ب" on), except a weak
+    everyday word, which must end where its word ends ("الميل" is not "الميلاد"). ``strict`` (admin rules): a short
+    all-capital rule such as "AD" is matched case-sensitively, so it never fires on the English "ad"."""
     custom = CUSTOM_PATTERNS.get(_key(keyword))
     if custom is not None:
         return custom
     words = normalize_arabic(keyword).split()
     body = r"[\s\-_]*".join(re.escape(w) for w in words)
-    if len(words) == 1 and keyword.isascii() and (strict or keyword.upper() in SHORT_LATIN_ACRONYMS):
-        edge_before, edge_after = (_WHOLE_WORD_BEFORE, _WHOLE_WORD_AFTER) if strict else (r"\b", r"\b")
-        return re.compile(edge_before + body + edge_after, re.IGNORECASE)
-    if strict:
-        first, last = words[0][0], words[-1][-1]
-        body = (_WHOLE_WORD_BEFORE if first.isascii() and first.isalnum() else "") + body \
-            + (_WHOLE_WORD_AFTER if last.isascii() and last.isalnum() else "")
-    return re.compile(body, re.IGNORECASE)
+    first, last = words[0][0], words[-1][-1]
+    before = _WHOLE_WORD_BEFORE if first.isascii() and first.isalnum() else ""
+    after = _WHOLE_WORD_AFTER if last.isascii() and last.isalnum() else ""
+    if not after and _key(keyword) in _WEAK_KEYS and not last.isascii():
+        after = f"(?![{_ARABIC_LETTER}])"
+    flags = re.IGNORECASE
+    word = str(keyword).strip()
+    if strict and word.isascii() and word.isalpha() and word.isupper() and len(word) <= 3:
+        flags = 0
+    return re.compile(before + body + after, flags)
+
+
+_WEAK_KEYS = frozenset(normalize_arabic(" ".join(str(w).lower().split())) for w in WEAK_KEYWORDS)
+
+# What is never a system name, wherever it appears: e-mail addresses (team mailboxes carry team names), links, file
+# names, and the header lines of a quoted message ("From: ... To: flexcube.desk@...").
+_DETECT_NOISE = re.compile(
+    r"^\s*(from|to|cc|bcc|sent|subject|date|من|إلى|الى|نسخة|نسخه|الموضوع|التاريخ|أرسل|ارسل|بتاريخ)\s*:.*$"
+    r"|\S+@\S+|https?://\S+|www\.\S+"
+    r"|(?<![A-Za-z0-9_])[\w\-]+\.(?:txt|log|csv|xlsx?|docx?|pdf|png|jpe?g|gif|zip|rar|msg|xml|json|sql)(?![A-Za-z0-9_])",
+    re.IGNORECASE | re.MULTILINE)
+
+
+def detection_text(text):
+    """``text`` without what can never be a system name (addresses, links, file names, quoted header lines)."""
+    return _DETECT_NOISE.sub(" ", str(text or ""))
 
 
 def _needle(keyword):
@@ -624,69 +701,111 @@ class Rules:
         return self._noise.sub(" ", text) if self._noise else text
 
     @staticmethod
-    def _scan(patterns, text):
+    def _scan(patterns, text, admin=False):
+        """[(keyword, team, position, admin)] of every keyword found in ``text``."""
         lowered = text.lower()
-        return [(kw, team) for kw, team, pattern, needle in patterns
-                if (not needle or needle in lowered) and pattern.search(text)]
+        out = []
+        for kw, team, pattern, needle in patterns:
+            if needle and needle not in lowered:
+                continue
+            match = pattern.search(text)
+            if match:
+                out.append((kw, team, match.start(), admin))
+        return out
 
-    def _pick_team(self, matches):
-        """Owner of a set of matches: the team with the most DISTINCT applications; a tie goes by team priority."""
+    def _pick_team(self, matches, subject_teams=()):
+        """Owner of a set of matches: the team with the most DISTINCT applications ("FCUBS", "GL", "Flex Cube" are one
+        application; everyday words are already left out, so they never outvote a real system). A tie goes to the team
+        of an admin rule, then to the team the subject names too, then by team priority."""
         if not matches:
             return None
-        apps = defaultdict(set)
-        for keyword, team in matches:
-            apps[team].add(self.canonical_application(keyword))
-        best = max(len(v) for v in apps.values())
-        leaders = [t for t, v in apps.items() if len(v) == best]
+        words = defaultdict(set)
+        for keyword, team, _pos, _admin in matches:
+            words[team].add(self.canonical_application(keyword))
+        best = max(len(v) for v in words.values())
+        leaders = [t for t, v in words.items() if len(v) == best]
+        if len(leaders) > 1:
+            admin = {team for _kw, team, _pos, is_admin in matches if is_admin and team in leaders}
+            if len(admin) == 1:
+                return admin.pop()
+            subject = [t for t in leaders if t in subject_teams]
+            if len(subject) == 1:
+                return subject[0]
         if len(leaders) == 1:
             return leaders[0]
         for team in self.team_priority:
             if team in leaders:
                 return team
-        return sorted(leaders)[0]
+        return min(leaders, key=lambda t: min(p for _kw, tm, p, _a in matches if tm == t))
+
+    @staticmethod
+    def _weak(match):
+        return _key(match[0]) in _WEAK_KEYS and not match[3]          # an admin rule is never weak
+
+    def _matches(self, subject, body):
+        subject_text = normalize_arabic(detection_text(self._strip_noise(subject)))
+        body_text = normalize_arabic(detection_text(self._strip_noise(body)))
+        body_hits = self._scan(self._mine, body_text, True) + self._scan(self._builtin, body_text)
+        subject_hits = self._scan(self._mine, subject_text, True) + self._scan(self._builtin, subject_text)
+        return body_hits, subject_hits
 
     def detect(self, subject, body):
         """Scan Subject + Body for system names. Returns ``(systems, primary_team, all_teams)``.
 
-        The BODY decides the team (the subject is often stale or generic); the subject is used only when the body names
-        nothing. An admin rule beats a built-in one. ``all_teams`` is every team named anywhere, strongest first.
+        A real system name (strong) always beats an everyday word (``WEAK_KEYWORDS``): the body's strong names decide,
+        then the subject's, then - only when the mail names nothing specific - the weak words. Within one part the team
+        with the most distinct keywords wins (see ``_pick_team``). ``all_teams`` is every team the deciding words
+        name, priority order first; a team named only by a weak word is left out when anything strong was found, so an
+        everyday word never splits a mail into a second team.
         """
-        subject_text = normalize_arabic(self._strip_noise(subject))
-        body_text = normalize_arabic(self._strip_noise(body))
-        mine_body, mine_subject = self._scan(self._mine, body_text), self._scan(self._mine, subject_text)
-        built_body, built_subject = self._scan(self._builtin, body_text), self._scan(self._builtin, subject_text)
-        everything = mine_body + built_body + mine_subject + built_subject
+        body_hits, subject_hits = self._matches(subject, body)
+        everything = body_hits + subject_hits
         if not everything:
             return [], UNCLASSIFIED, []
+        strong = [m for m in everything if not self._weak(m)]
+        pool = strong or everything
+        in_pool = lambda m: m in pool                                  # noqa: E731
+        body_pool = [m for m in body_hits if in_pool(m)]
+        subject_pool = [m for m in subject_hits if in_pool(m)]
+        subject_teams = {m[1] for m in subject_pool}
+        primary = self._pick_team(body_pool, subject_teams) or self._pick_team(subject_pool)
         systems, seen = [], set()
-        for keyword, _team in everything:
+        for keyword, _team, _pos, _admin in sorted(pool, key=lambda m: (m not in body_pool, m[2])):
             app = self.canonical_application(keyword)
             if app not in seen:
                 seen.add(app)
                 systems.append(app)
-        primary = (self._pick_team(mine_body) or self._pick_team(mine_subject)
-                   or self._pick_team(built_body) or self._pick_team(built_subject))
-        named = {team for _kw, team in everything}
+        named = {m[1] for m in pool}
         all_teams = [t for t in self.team_priority if t in named] + sorted(named - set(self.team_priority))
         return systems, primary, all_teams
 
+    def _strength(self, subject, body):
+        """'strong' / 'weak' / '' - how specific the best word of this text is."""
+        body_hits, subject_hits = self._matches(subject, body)
+        hits = body_hits + subject_hits
+        if not hits:
+            return ""
+        return "weak" if all(self._weak(m) for m in hits) else "strong"
+
     def detect_for_thread(self, thread_messages):
         """A reminder like "any update?" names nothing, but an earlier message of the same unanswered thread does:
-        try each message's own text first (oldest first), then the quoted history underneath them."""
+        try each message's own text first (oldest first), then the quoted history underneath them. The first text
+        that names a REAL system decides; a text that only has everyday words is used only when no text of the thread
+        names anything more specific."""
         if not thread_messages:
             return [], UNCLASSIFIED, []
-        last = ([], UNCLASSIFIED, [])
-        for message in thread_messages:
-            last = self.detect(message.get("subject", ""), message.get("body", ""))
-            if last[0]:
-                return last
-        for message in thread_messages:
-            quoted = message.get("full_thread_body", "")
-            if quoted:
-                result = self.detect(message.get("subject", ""), quoted)
-                if result[0]:
-                    return result
-        return last
+        texts = [(m.get("subject", ""), m.get("body", "")) for m in thread_messages]
+        texts += [(m.get("subject", ""), m.get("full_thread_body", "")) for m in thread_messages if m.get("full_thread_body")]
+        weak = None
+        for subject, body in texts:
+            strength = self._strength(subject, body)
+            if strength == "strong":
+                return self.detect(subject, body)
+            if strength == "weak" and weak is None:
+                weak = (subject, body)
+        if weak is not None:
+            return self.detect(*weak)
+        return [], UNCLASSIFIED, []
 
 
 def build_rules(email_settings):

@@ -98,6 +98,13 @@ def itsm():
     return render_template("itsm.html")
 
 
+@bp.get("/analysis")
+@page(*auth.OPS_ROLES)
+def analysis():
+    # calls, e-mails, tickets and change requests over time: trends, peak hour / day, heat map (a manager: own teams)
+    return render_template("analysis.html")
+
+
 @bp.get("/auto-assign")
 @page(*auth.OPS_ROLES)
 def auto_assign():

@@ -23,6 +23,8 @@
       warn: "Running it now SENDS those e-mails." },
     sla: { what: "Reads the security-requests portal and updates the SLA page.", sends: true, warn: "It may send reminder or breach e-mails." },
     itsm: { what: "Reads the ITSM scoreboard and updates the ITSM page.", sends: true, warn: "It may send the ITSM status e-mail." },
+    daily_summary: { what: "Today's calls, e-mails, tickets and change requests as one dashboard e-mail.", sends: true,
+      warn: "Running it now SENDS the summary e-mail." },
   };
   const views = {};
   const when = (iso, now) => (iso ? OPS.fmtWhen(iso, now) : "—");
@@ -64,42 +66,55 @@
     const retention = h("input", { type: "number", min: "0", step: "1", value: String(c.retention_days) });
     const cap = h("input", { type: "number", min: "1000", step: "1000", value: String(c.max_records) });
     const area = (val) => h("textarea", { rows: "2", dir: "auto", spellcheck: "false" }, (val || []).join("\n"));
+    // every step of «الحالة التاريخية للطلب», in the order the request goes through them
+    const STEPS = [
+      ["registered", "Registered by the branch — تسجيل"],
+      ["branch_confirmed", "Confirmed by the branch supervisor — تم التعزيز من قبل مشرف الفرع"],
+      ["region_approved", "Approved above the branch — تم التعزيز من قبل المنطقة / القطاع / Platinum"],
+      ["assigned", "Assigned to a security user — اسناد لمستخدم السرية (the SLA clock starts)"],
+      ["reassigned", "Re-assigned to another security user — اعادة اسناد … (the security user's clock restarts)"],
+      ["held", "On hold — معلق"],
+      ["returned", "Sent back to the branch to be corrected — مطلوب تعديل"],
+      ["executed", "Executed — تم التنفيذ (security user)"],
+      ["not_executed", "Not executed — لم يتم التنفيذ (security user)"],
+      ["confirmed_executed", "Confirmed, executed — تم التعزيز على التنفيذ / … (reviewer)"],
+      ["confirmed_not", "Confirmed, not executed — تم التعزيز على عدم التنفيذ (reviewer)"],
+      ["rejected", "Rejected — رفض (the request ends)"],
+      ["transferred", "Handed to another authority — تم التحويل / اجراءات التشغيل (kept in the timeline)"],
+      ["in_progress", "Current-status words that are not a step — تحت التنفيذ / …"],
+    ];
+    const TARGETS = [
+      ["branch", "Branch approval", "registration → the branch supervisor's confirmation"],
+      ["region", "Region / sector approval", "the branch's confirmation → the approval above it (exception requests)"],
+      ["pickup", "Waiting to be assigned", "in the security team's pool → the first assignment"],
+      ["work", "Security user", "assignment → «تم التنفيذ / لم يتم التنفيذ»"],
+      ["review", "Reviewer", "execution → «تم التعزيز»"],
+      ["lifetime", "Whole request", "registration → the reviewer's confirmation"],
+    ];
+    const tgt = {};
+    TARGETS.forEach(([k]) => { tgt[k] = h("input", { type: "number", min: "1", step: "1", value: String((c.stage_targets || {})[k] || "") }); });
     const st = {};
-    ["assigned", "executed", "not_executed", "confirmed_executed", "confirmed_not"].forEach((k) => { st[k] = area(c.statuses[k]); });
-    const fld = {};
-    ["id", "status", "executor", "checker", "system", "requester", "assigned_at", "executed_at", "confirmed_at"].forEach((k) => {
-      fld[k] = h("input", { type: "text", value: c.fields[k] || "", dir: "auto", spellcheck: "false" });
-    });
-    const feed = h("input", { type: "text", value: c.feed_path || "", dir: "ltr", spellcheck: "false", placeholder: "e.g. C:\\exports\\ALL_latest.csv" });
+    STEPS.forEach(([k]) => { st[k] = area(c.statuses[k]); });
     const field = (label, ctrl, hint) => h("label", { class: "op-field sx-cfg-field" }, h("span", {}, label), ctrl, hint ? h("span", { class: "hint" }, hint) : null);
     const body = h("div", { class: "sx-cfg" },
-      field("SLA target (hours)", hours),
+      field("SLA target (hours)", hours, "first assignment → the reviewer's confirmation"),
       field("Keep closed requests (days)", retention, "0 = keep forever"),
       field("Max records kept", cap, "oldest closed requests are dropped past this"),
-      h("h4", { class: "sx-cfg-h" }, "Status labels — one per line"),
-      field("Assigned to a security user", st.assigned),
-      field("Executed — تم التنفيذ (employee)", st.executed),
-      field("Not executed — لم يتم التنفيذ", st.not_executed),
-      field("Confirmed, executed — تم التعزيز على التنفيذ / …", st.confirmed_executed),
-      field("Confirmed, not executed — تم التعزيز على عدم التنفيذ", st.confirmed_not),
-      h("h4", { class: "sx-cfg-h" }, "Column mapping (scrape / feed)"),
-      field("Request id", fld.id), field("Status", fld.status), field("Executor (مستخدم السرية)", fld.executor),
-      field("Checker (مراجع السرية)", fld.checker), field("System", fld.system), field("Requester", fld.requester),
-      h("p", { class: "hint" }, "Optional time columns — leave blank to stamp the time the stage is first seen:"),
-      field("assigned_at", fld.assigned_at), field("executed_at", fld.executed_at), field("confirmed_at", fld.confirmed_at),
-      field("Export feed path (optional)", feed, "an ALL_*.csv / requests_*.csv the portal refreshes; re-read on a schedule"));
+      h("h4", { class: "sx-cfg-h" }, "Stage targets (minutes) — green on target, amber up to 1.5×, red beyond"),
+      ...TARGETS.map(([k, label, hint]) => field(label, tgt[k], hint)),
+      h("h4", { class: "sx-cfg-h" }, "Status labels — one per line, as «الحالة» shows them (a longer status that contains one also counts)"),
+      ...STEPS.map(([k, label]) => field(label, st[k])));
     await OPS.modal({
       title: "SLA recording settings", submitLabel: "Save", body,
       onSubmit: async () => {
         const lines = (t) => t.value.split("\n").map((s) => s.trim()).filter(Boolean);
         await api("PUT", "/api/ops/sla-config", {
+          ...c,
           sla_minutes: Math.round((parseFloat(hours.value) || 3) * 60),
           retention_days: parseInt(retention.value, 10) || 0,
           max_records: parseInt(cap.value, 10) || 100000,
-          statuses: { assigned: lines(st.assigned), executed: lines(st.executed), not_executed: lines(st.not_executed),
-            confirmed_executed: lines(st.confirmed_executed), confirmed_not: lines(st.confirmed_not) },
-          fields: Object.fromEntries(Object.keys(fld).map((k) => [k, fld[k].value.trim()])),
-          feed_path: feed.value.trim(),
+          stage_targets: Object.fromEntries(TARGETS.map(([k]) => [k, parseInt(tgt[k].value, 10) || (c.stage_targets || {})[k]])),
+          statuses: Object.fromEntries(STEPS.map(([k]) => [k, lines(st[k])])),
         });
         toast("SLA recording settings saved.");
       },
@@ -254,7 +269,7 @@
     async function runNow(job) {
       const meta = JOB_INFO[job] || {}, label = OPS.JOB_LABELS[job] || job;
       const ok = await OPS.confirm({ title: `Run "${label}" now?`, message: `${meta.what || ""} It starts within a minute and ignores the working days and hours. ${meta.warn || ""}`.trim(),
-        confirmLabel: "Run now", danger: !!meta.sends && job === "email_report" });
+        confirmLabel: "Run now", danger: !!meta.sends && (job === "email_report" || job === "daily_summary") });
       if (!ok) return;
       try {
         const r = await api("POST", `/api/ops/jobs/${encodeURIComponent(job)}/run`);
@@ -447,8 +462,18 @@
         { path: "sla.username", type: "text", max: 60, label: "Portal user name", hint: "The password is never stored here: see collector_config.json." },
         { path: "sla.base_url", type: "text", max: 300, label: "Portal address", dir: "ltr" },
         SCHEDULE("sla.schedule", "Ticketing")] },
+      { title: "Left out of the SLA", text: "Requests of these teams' applications, and of these applications, are not counted in the SLA, its reminder / breach e-mails, Home, or the SLA Analysis. The team of an application comes from Auto Assign › Applications, else from the classification keywords.", fields: [
+        { path: "sla.exclude_teams", type: "lines", kind: "text", label: "Teams left out", hint: "One team per line, e.g. Third Party." },
+        { path: "sla.exclude_applications", type: "lines", kind: "text", label: "Applications left out", hint: "One application per line, exactly as the portal's «النظام» column shows it." }] },
+      { title: "SLA history (live analysis source)", text: "At every scan the collector also opens «الاستفسار عن الطلبات» and reads the status history («الحالة التاريخية للطلب») of the requests that moved: who assigned, executed and confirmed each one, and exactly when. Nothing is uploaded.", fields: [
+        { path: "sla.history_enabled", type: "switch", label: "Read the status history at every scan" },
+        { path: "sla.history_days", type: "number", min: 1, max: 31, label: "Search the last (days)", hint: "Requests still open are followed until they close, even when older." },
+        { path: "sla.history_max_details", type: "number", min: 10, max: 2000, label: "Request details opened per scan (max)", hint: "The rest are read at the next scan." },
+        { path: "sla.history_seconds", type: "number", min: 30, max: 3600, label: "Time for the history per scan (seconds)", hint: "Stops opening details after this; everything read is kept and the rest follows at the next scan. Kept inside the scan's own time limit." },
+        { path: "sla.inquiry_path", type: "text", max: 300, label: "Inquiry page", dir: "ltr" },
+        { path: "sla.inquiry_date_format", type: "select", label: "Date format of the inquiry page", options: () => [["%d-%m-%Y", "21-10-2026"], ["%d/%m/%Y", "21/10/2026"], ["%Y-%m-%d", "2026-10-21"], ["%m/%d/%Y", "10/21/2026"]] }] },
       { title: "SLA recording (live analysis)", slaRecording: true, fields: [],
-        text: "The live SLA Analysis on the Ticketing page: the SLA target, the Arabic status labels for each stage (executed / confirmed by the employee vs the checker), the column mapping, and an optional export feed." },
+        text: "The SLA Analysis on the Ticketing page: the SLA target, how long closed requests are kept, the Arabic status label of every step, and the applications / teams left out of the SLA." },
       { title: "Reminder and breach e-mails", fields: [...MAIL("sla.mail", [
         { path: "sla.mail.subject", type: "text", max: 150, label: "Subject" },
         { path: "sla.mail.display_only", type: "switch", label: "Show instead of sending", hint: "Opens the e-mail on the collector PC without sending it." },
@@ -513,6 +538,21 @@
         { path: "itsm.headless", type: "switch", label: "Run Chrome without a window" },
         { path: "itsm.cdp_port", type: "number", min: 1024, max: 65535, label: "Chrome debugging port" },
         { path: "itsm.browser_executable", type: "text", max: 400, label: "Chrome program (optional)", dir: "ltr" }] }] },
+    { id: "summary", title: "Daily summary", cards: [
+      { title: "Daily summary e-mail", text: "Today's calls, e-mails, tickets and change requests as one dashboard e-mail, sent by the collector at each checkpoint time below that falls on a working day and inside the active hours. “Run now” on the Collectors tab sends it at once.", fields: [
+        { path: "summary.enabled", type: "switch", label: "Send the daily summary" },
+        { path: "summary.send_times", type: "times", label: "Checkpoints (send at)", hint: "24-hour times, comma separated, like 10:00, 13:00, 15:00. Only times inside the active hours are sent." },
+        { path: "summary.to", type: "lines", kind: "email", label: "To", hint: "One address per line." },
+        { path: "summary.cc", type: "lines", kind: "email", label: "Cc", hint: "One address per line." },
+        { path: "summary.subject_prefix", type: "text", max: 120, label: "Subject" },
+        { path: "summary.modules.calls", type: "switch", label: "Include calls" },
+        { path: "summary.modules.email", type: "switch", label: "Include e-mails" },
+        { path: "summary.modules.tickets", type: "switch", label: "Include tickets" },
+        { path: "summary.modules.crs", type: "switch", label: "Include change requests (ITSM)" },
+        { path: "summary.per_team", type: "switch", label: "Add a table by team" },
+        { path: "summary.catch_up_minutes", type: "number", min: 5, max: 180, label: "Send a missed checkpoint up to (minutes) late", hint: "If the collector was restarting at 13:00, the 13:00 summary still goes until this many minutes later." },
+        { path: "summary.display_only", type: "switch", label: "Show instead of sending", hint: "Opens the e-mail on the collector PC without sending it." },
+        SCHEDULE("summary.schedule", "Daily summary")] }] },
   ];
   const ALL_FIELDS = SECTIONS.flatMap((s) => s.cards.flatMap((c) => c.fields.map((f) => ({ ...f, section: s.id }))));
   const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];

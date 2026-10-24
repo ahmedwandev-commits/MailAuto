@@ -24,7 +24,7 @@ from ..config import APP_DIR, load_config
 from .settings import _FREE_DICTS, deep_merge
 
 FILE_NAME = "collector_config.json"
-SECTIONS = ("general", "email", "sla", "itsm")
+SECTIONS = ("general", "email", "sla", "itsm", "summary")
 ACCOUNT_KINDS = ("sla", "itsm")
 SECRET_KEYS = ("password",)
 
