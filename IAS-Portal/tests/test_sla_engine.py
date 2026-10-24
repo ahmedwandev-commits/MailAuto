@@ -371,18 +371,20 @@ class TestExcel:
         assert [c.value for c in users[1]] == ["SECURITY_USER", "TOTAL", "WITHIN_SLA", "REMINDER", "BREACHED", "NO_DATE", "OLDEST"]
         assert users.max_row == 5 and everything.max_row == 13 and over.max_row == 9
         heads = [c.value for c in everything[1]]
-        assert heads[:5] == ["SECURITY_USER", "SENT_AT", "AGE_MIN", "AGE", "SLA_STATUS"] and "تاريخ الارسال للسرية" in heads
+        assert heads[:6] == ["SECURITY_USER", "SENT_AT", "ASSIGNED_AT", "AGE_MIN", "AGE", "SLA_STATUS"]
+        assert "تاريخ الارسال للسرية" in heads
 
     def test_values_and_status_colours(self):
         wb, _ = self.build()
         _, over, everything = wb.worksheets
         first = [c.value for c in everything[2]]
-        assert first[2:5] == [400, "6h 40m", "SLA BREACHED"] and first[1] == "12/10/2026 03:20"
-        status = everything["E2"]
+        assert first[3:6] == [400, "6h 40m", "SLA BREACHED"] and first[1] == "12/10/2026 03:20"
+        assert first[2] in (None, "")                        # no SLA history: aged from the sent date
+        status = everything["F2"]
         assert status.fill.fgColor.rgb.endswith("FDECEA") and status.font.color.rgb.endswith("B71C1C") and status.font.bold
-        assert {over.cell(r, 5).value for r in range(2, over.max_row + 1)} == {"SLA BREACHED", "REMINDER"}
+        assert {over.cell(r, 6).value for r in range(2, over.max_row + 1)} == {"SLA BREACHED", "REMINDER"}
         last = [c.value for c in everything[everything.max_row]]
-        assert last[1] in (None, "") and last[2] is None and last[3] == "-" and last[4] == "NO SENT DATE"
+        assert last[1] in (None, "") and last[3] is None and last[4] == "-" and last[5] == "NO SENT DATE"
 
     def test_count_cells_are_coloured_when_positive(self):
         wb, _ = self.build()
@@ -547,6 +549,23 @@ class TestRun:
         assert store.read_state("sla")["last_sent"] is None and store.read_state("sla")["alerted"] == {}
         retry, ctx2 = run(store, now=NOW + timedelta(minutes=15))
         assert retry.emails_sent == 1 and len(ctx2.mailer.sent) == 1
+
+    def test_a_live_ticket_is_aged_from_its_last_assignment_not_from_the_day_it_was_sent(self, store):
+        """The Re-Assign page only gives «تاريخ الارسال للسرية». The SLA history knows when the security user holding
+        the request got it: that is the clock (a request re-assigned 30 minutes ago is not 3 hours "with" its holder)."""
+        assigned = (NOW - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
+        store.update_sla_history_state(lambda d: d.update(open={"R1": {
+            "id": "R1", "stage": "open", "user_no": "1000", "system": "نظام", "request_type": "نوع",
+            "holder": OWNER_A, "assigned_at": assigned}}))
+        result, _ = run(store, (HEADERS, [row("a", 200, OWNER_A), row("b", 130, OWNER_B, user_no="1001")]))
+        a, b = by_name(result)["a"], by_name(result)["b"]
+        assert a["assigned_at"] == assigned and a["age_from"] == "assignment"
+        assert a["age_minutes"] == 30 and a["status"] == schemas.SLA_WITHIN
+        assert b["assigned_at"] is None and b["age_from"] == "sent" and b["age_minutes"] == 130
+        assert [r["fields"]["اسم الموظف"] for r in result.snapshot_data["requests"]] == ["b", "a"]   # oldest first
+        totals = result.snapshot_data["totals"]
+        assert totals["within"] == 1 and totals["breached"] == 1 and totals["oldest_minutes"] == 130
+        assert result.history_extra["first_breach"] == {b["key"]: NOW.isoformat(timespec="seconds")}
 
     def test_missing_mailer_falls_back_to_outlook_and_fails_cleanly_here(self, store):
         ctx = make_ctx(store)

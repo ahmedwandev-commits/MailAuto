@@ -287,13 +287,20 @@ def email_headline(stats):
     return {k: stats.get(k, 0) for k in EMAIL_HEADLINE}
 
 
+def sla_since(r):
+    """The clock of an open request: its last assignment to the security user holding it when the scan matched it to
+    the SLA history (``assigned_at``), else the day it was sent to the team (``sent_at``)."""
+    return (r or {}).get("assigned_at") or (r or {}).get("sent_at")
+
+
 def sla_oldest_now(requests):
-    """Minutes the oldest open request has been waiting NOW (from its sent date), the way the Live tickets tab counts
-    it - not the age frozen at the last scan. None when no request has a sent date (pages show "—")."""
+    """Minutes the oldest open request has been waiting NOW (from its last assignment, else its sent date), the way the
+    Live tickets tab counts it - not the age frozen at the last scan. None when no request has a date (pages show
+    "—")."""
     now, ages = auth.now(), []
     for r in requests or []:
         try:
-            sent = datetime.fromisoformat(str((r or {}).get("sent_at") or "")[:19])
+            sent = datetime.fromisoformat(str(sla_since(r) or "")[:19])
         except ValueError:
             continue
         ages.append(max(0, int((now - sent).total_seconds() // 60)))
@@ -659,7 +666,8 @@ def my_sla(user):
     totals["oldest_minutes"] = sla_oldest_now(mine)                # by the clock, like the Live tab and Home
     return {**empty, "available": True, "updated_at": snap.get("generated_at"),
             "thresholds": (snap.get("data") or {}).get("thresholds") or {}, "totals": totals,
-            "requests": [{"key": r.get("key", ""), "sent_at": r.get("sent_at"), "age_minutes": r.get("age_minutes"),
+            "requests": [{"key": r.get("key", ""), "sent_at": r.get("sent_at"), "assigned_at": r.get("assigned_at"),
+                          "age_from": r.get("age_from") or "sent", "age_minutes": r.get("age_minutes"),
                           "status": r.get("status"), "fields": r.get("fields") or {}}
                          for r in mine[:_MAX_LIST]]}
 

@@ -318,9 +318,12 @@
     if (!s.requests.length) return OPS.card("My tickets", {}, tiles, OPS.emptyState({ title: "Nothing waiting for you", icon: "check", text: "No ticket is open under your name." }));
     const rows = s.requests.map((r) => {
       const fields = r.fields || {};
-      return h("tr", { "data-sent": r.sent_at || "" },
+      const since = r.assigned_at || r.sent_at;          // the last assignment when the scan knows it, else the sent date
+      return h("tr", { "data-sent": since || "" },
         h("td", {}, OPS.statusChip(r.status)),
-        h("td", { class: "nowrap my-age", "data-age": "" }, OPS.fmtDuration(liveMinutes(r.sent_at, r.age_minutes))),
+        h("td", { class: "nowrap my-age", "data-age": "", "data-since": r.assigned_at ? "assignment" : "sent",
+          title: r.assigned_at ? "Since it was assigned to you" : "Since it was sent to the security team" },
+        OPS.fmtDuration(liveMinutes(since, r.age_minutes))),
         ...["اسم الموظف", "النظام", "نوع الطلب"].map((k) => h("td", { dir: "auto" }, bidi(fields[k] || "—"))));
     });
     return OPS.card("My tickets", {}, tiles,

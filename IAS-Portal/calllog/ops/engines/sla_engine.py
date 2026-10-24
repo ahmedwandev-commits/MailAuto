@@ -901,8 +901,8 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     todo = {it["key"] for it in grid if sla_history.needs_details(it, index)
             and sla_history.detail_priority(it["status"], plan["cfg"]) is not None
             and not excluded(it["system"])}
-    # when a scan cannot read them all, the CLOSED requests first (their history holds every stamp of the SLA), then
-    # the ones awaiting the reviewer, then the open ones; the oldest request first within each
+    # when a scan cannot read them all, the requests still with a security user first (their live clock starts at the
+    # assignment line), then the ones awaiting the reviewer, then the closed ones; the oldest request first within each
     ordered = sorted(grid, key=lambda it: (it["key"] not in todo, sla_history.detail_priority(it["status"], plan["cfg"]) or 0,
                                            (sla_history.parse_time(it["date"]) or datetime.max)))
     items, opened, failed, streak, unverified, partial = [], 0, 0, 0, 0, 0
@@ -1079,6 +1079,34 @@ def build_table(headers, rows):
     return [cols[i] for i in keep], [[row[i] for i in keep] for row in body]
 
 
+def age_from_assignment(ctx, cfg, requests, now, secrets=()):
+    """Age each live request from its LAST assignment to the security user holding it, as the SLA history recorded it
+    (``sla_history.apply_assignment_ages``); the Re-Assign page's «تاريخ الارسال للسرية» stays the clock of a request
+    the history has not read. Re-sorts oldest first. A missing or broken recording leaves the sent-date ages."""
+    from .. import sla_history
+    try:
+        open_records = (ctx.store.read_sla_history_state() or {}).get("open") or {}
+    except Exception as exc:
+        open_records = {}
+        ctx.log(f"SLA history could not be read to age the requests: {type(exc).__name__}: {scrub(str(exc), secrets)}")
+    matched = sla_history.apply_assignment_ages(requests, open_records, now, int(cfg["warning_minutes"]),
+                                                int(cfg["breach_minutes"]))
+    for r in requests:
+        r["_since"] = parse_time_iso(r.get("assigned_at")) or r.get("_sent")
+    requests.sort(key=lambda r: (r["age_minutes"] is None, -(r["age_minutes"] or 0)))
+    if requests:
+        ctx.log(f"{matched} of {len(requests)} request(s) aged from their last assignment (SLA history); "
+                f"the others from «تاريخ الارسال للسرية»")
+    return matched
+
+
+def parse_time_iso(stamp):
+    try:
+        return datetime.fromisoformat(stamp) if stamp else None
+    except (TypeError, ValueError):
+        return None
+
+
 def status_of(age, warn, breach):
     if age is None:
         return schemas.SLA_NO_DATE
@@ -1233,11 +1261,13 @@ def build_workbook(columns, requests, by_user):
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-    first = ["SECURITY_USER", "SENT_AT", "AGE_MIN", "AGE", "SLA_STATUS"]
+    first = ["SECURITY_USER", "SENT_AT", "ASSIGNED_AT", "AGE_MIN", "AGE", "SLA_STATUS"]
 
     def request_row(r):
         sent = r["_sent"].strftime("%d/%m/%Y %H:%M") if r["_sent"] else ""
-        return [r["security_user"], sent, r["age_minutes"], fmt_age(r["age_minutes"]), LABELS[r["status"]], *r["_cells"]]
+        assigned = r["_since"].strftime("%d/%m/%Y %H:%M") if r.get("age_from") == "assignment" and r.get("_since") else ""
+        return [r["security_user"], sent, assigned, r["age_minutes"], fmt_age(r["age_minutes"]), LABELS[r["status"]],
+                *r["_cells"]]
 
     wb = Workbook()
     sheets = [
@@ -1376,7 +1406,9 @@ def html_body(requests, by_user, cfg, now, has_logo=False, max_rows=MAX_EMAIL_RO
         for r in grp[:max_rows - shown]:
             shown += 1
             cells = "".join(f'<td {td} dir="auto">{esc(r["fields"].get(n))}</td>' for n in detail_names)
-            sent = r["_sent"].strftime("%d/%m %H:%M") if r["_sent"] else "-"
+            since = r.get("_since") or r["_sent"]
+            sent = (since.strftime("%d/%m %H:%M") + (" (assigned)" if r.get("age_from") == "assignment" else "")
+                    if since else "-")
             det_rows.append(
                 f'<tr>{cells}<td {tdc}>{esc(sent)}</td>'
                 f'<td {tdc}><b>{esc(fmt_age(r["age_minutes"]))}</b></td><td {tdc}>{_badge(r["status"])}</td></tr>')
@@ -1385,7 +1417,7 @@ def html_body(requests, by_user, cfg, now, has_logo=False, max_rows=MAX_EMAIL_RO
     head = "".join(f"<th {th}>{esc(n)}</th>" for n in detail_names)
     details = (
         f'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">'
-        f'<tr>{head}<th {th}>Sent to Security</th><th {th}>Age</th><th {th}>Status</th></tr>'
+        f'<tr>{head}<th {th}>Since</th><th {th}>Age</th><th {th}>Status</th></tr>'
         f'{"".join(det_rows)}</table>{more}'
         if det_rows else
         f'<p style="color:#2E7D32;font-weight:bold">&#10004; No request is older than {fmt_hours(warn)}.</p>')
@@ -1696,6 +1728,7 @@ def run(ctx, scraper=None):
                                 sla_records.system_team_map(ctx.store.read_auto_assign()))
         except Exception as exc:
             ctx.log(f"SLA history could not be recorded: {type(exc).__name__}: {scrub(str(exc), secrets)}")
+    age_from_assignment(ctx, cfg, requests, now, secrets)
 
     by_user = summarize(requests)
     data = snapshot_data(requests, by_user, cfg)
