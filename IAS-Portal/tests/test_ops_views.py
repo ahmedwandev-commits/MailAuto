@@ -1129,3 +1129,39 @@ def test_max_per_run_is_set_on_the_page_saved_and_shown_before_a_run(app, demo_d
     assert "Each run assigns at most 12 request(s)" in text_of(page, "dialog.dlg")
     page.keyboard.press("Escape")
     assert t.later_problems(*not_yet_written()) == [], t.problems
+
+
+def test_the_daily_summary_card_says_why_it_does_not_send_and_runs_now(app, ops, demo_data, tab):
+    """Settings › Daily summary has its own "Run now": switched off with no recipient (as NBE OpsHub's settings arrive)
+    it says so and sends nothing; once it has a saved recipient, Run now asks the collector to send it."""
+    from calllog.ops import settings as hub_settings
+    t = tab()
+    page = open_system(t, "settings")
+    page.click('#tab-settings .op-subtabs button:has-text("Daily summary")')
+    status = page.locator('[data-run-status="daily_summary"]')
+    page.wait_for_function("() => !document.querySelector('[data-run-status=\"daily_summary\"]').textContent.startsWith('Checking')")
+    text = status.inner_text()
+    assert "No recipient" in text and "Off:" in text and "Last run" in text and "summary sent (13:00)" in text
+    assert "op-t-danger" in status.get_attribute("class")
+    page.click('[data-run-now="daily_summary"]')
+    page.wait_for_selector("#toast .toast-msg")
+    assert "Add at least one address" in page.locator("#toast").inner_text() and ops.pending_run_requests("daily_summary") == []
+    page.locator('.op-field[data-path="summary.enabled"] .op-switch').click()
+    page.locator('.op-field[data-path="summary.to"] textarea').fill("summary@example.test")
+    page.click('[data-run-now="daily_summary"]')                          # not saved yet: Run now would use the old ones
+    page.wait_for_function("() => document.querySelector('#toast').textContent.includes('Save the settings first')")
+    assert ops.pending_run_requests("daily_summary") == []
+    page.locator(".op-savebar button.btn-primary").click()
+    page.wait_for_function("() => document.querySelector('.op-savebar .op-dirty').textContent.startsWith('No unsaved')")
+    saved = hub_settings.load(ops)["summary"]
+    assert saved["enabled"] is True and saved["to"] == ["summary@example.test"]
+    status = page.locator('[data-run-status="daily_summary"]')
+    page.wait_for_function("() => { const s = document.querySelector('[data-run-status=\"daily_summary\"]').textContent;"
+                           " return !s.startsWith('Checking') && !s.includes('No recipient') && !s.includes('Off:'); }")
+    page.click('[data-run-now="daily_summary"]')
+    page.wait_for_selector("dialog.dlg")
+    assert "1 saved recipient" in text_of(page, "dialog.dlg") and ops.pending_run_requests("daily_summary") == []
+    page.click("dialog.dlg button[type=submit]")
+    page.wait_for_function("() => document.querySelector('[data-run-status=\"daily_summary\"]').textContent.includes('Run now requested')")
+    assert len(ops.pending_run_requests("daily_summary")) == 1
+    assert t.later_problems() == [], t.problems

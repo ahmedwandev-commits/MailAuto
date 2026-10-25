@@ -201,6 +201,20 @@ HOW TO UPDATE (your data is kept)
      (since the first assignment) and "With this user". The inquiry now reaches back to every Live ticket, so
      their histories are read too.
 
+20. DAILY SUMMARY: SENT EVEN WHEN OUTLOOK'S DEFAULT DATA FILE CANNOT HOLD A MAIL, AND "RUN NOW" IN ITS SETTINGS
+   - The summary failed with «Cannot create the email message because a data file to send and receive messages
+     cannot be found»: Outlook on the collector PC could not make a new mail in its DEFAULT data file (an archive
+     or a .pst that is gone is set as the default). Every mail of the collector (daily summary, e-mail report,
+     SLA and ITSM mails) is now made in the e-mail account's own mailbox (its Drafts) and sent from that account
+     when that happens. If even that fails, the error says Outlook's own words and what to change (Outlook >
+     File > Account Settings > Data Files: set your mailbox as the default), and that the summary WAS built.
+   - System > Settings > Daily summary has its own "Run now" (it asks the collector to send it at once to the
+     saved recipients, whatever the time and day) and a status line: switched off, no recipient, the last run
+     and its result, the next checkpoint.
+   - The settings brought over from NBE OpsHub have the daily summary switched OFF and no recipient (the old
+     version had no daily summary): switch "Send the daily summary" on, type the To addresses, Save - then
+     press Run now to try it. Run now refuses unsaved changes and an empty recipient list, and says so.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -348,3 +362,16 @@ IAS PORTAL - الجديد في هذا التحديث
      على طول والأوقات بتيجي لما يتقري - كارت Closed بيقول كام واحد). و"Right now" بيعرض كل الطلبات المفتوحة: بتاعة
      الاستعلام وكل تيكت في Live، مع "Request age" (من أول إسناد) و"With this user". والاستعلام بقى بيرجع لحد
      أقدم تيكت في Live علشان تاريخها يتقري هو كمان.
+
+20. الملخص اليومي: بيتبعت حتى لو ملف البيانات الافتراضي في Outlook مش بيقبل إيميل، وزرار "Run now" في إعداداته
+   - الملخص كان بيفشل بالرسالة «Cannot create the email message because a data file to send and receive messages
+     cannot be found»: الـ Outlook على جهاز الـ collector مش قادر يعمل إيميل جديد في ملف البيانات الافتراضي (أرشيف
+     أو ملف pst. اتشال ومتعين افتراضي). دلوقتي كل إيميلات الـ collector (الملخص اليومي وتقرير الإيميلات وإيميلات
+     الـ SLA والـ ITSM) بتتعمل في صندوق البريد بتاع الحساب نفسه (Drafts) وبتتبعت منه لما ده يحصل. ولو حتى ده فشل
+     الخطأ بيقول كلام الـ Outlook نفسه والمطلوب تغييره (Outlook > File > Account Settings > Data Files: خلّي
+     صندوق البريد بتاعك هو الافتراضي)، وإن الملخص اتعمل فعلاً.
+   - System > Settings > Daily summary فيها "Run now" خاص بيها (بيطلب من الـ collector يبعته فوراً للمستلمين
+     المحفوظين في أي وقت وأي يوم) وسطر حالة: مقفول، مفيش مستلم، آخر مرة اشتغل ونتيجتها، والميعاد اللي جاي.
+   - الإعدادات اللي جت من NBE OpsHub فيها الملخص اليومي مقفول ومن غير مستلمين (النسخة القديمة ماكانش فيها ملخص
+     يومي): فعّل "Send the daily summary" واكتب عناوين To واعمل Save - وبعدين دوس Run now علشان تجربه. Run now
+     مش بيشتغل لو فيه تعديلات مش محفوظة أو مفيش مستلمين، وبيقول كده.

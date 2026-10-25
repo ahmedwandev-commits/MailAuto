@@ -129,6 +129,36 @@ def norm_arabic(text):
 
 
 # --------------------------------------------------------------------- Outlook
+OL_FOLDER_DRAFTS = 16                    # Outlook's olFolderDrafts
+_SEND_USING_ACCOUNT = 64209              # the DISPID of MailItem.SendUsingAccount (pywin32 cannot always set it by name)
+
+
+class _suppress:
+    """``with _suppress():`` - one Outlook attempt that may fail (the next one is tried)."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, kind, exc, tb):
+        return kind is not None and issubclass(kind, Exception)
+
+
+def _send_using(mail, account):
+    """Send ``mail`` from ``account`` (its own mailbox), the way pywin32 allows."""
+    try:
+        mail.SendUsingAccount = account
+    except Exception:                                    # noqa: BLE001 - the late-bound property setter
+        mail._oleobj_.Invoke(_SEND_USING_ACCOUNT, 0, 8, 0, account)
+
+
+def outlook_error_text(exc):
+    """The words Outlook gives for a COM error (its description), not the whole tuple; else the error's own text."""
+    args = getattr(exc, "args", ()) or ()
+    detail = args[2] if len(args) > 2 and isinstance(args[2], tuple) else ()
+    text = detail[2] if len(detail) > 2 and detail[2] else (args[1] if len(args) > 1 and isinstance(args[1], str) else str(exc))
+    return " ".join(str(text).split())[:300]
+
+
 class OutlookMailer:
     """Sends HTML mail through Outlook desktop (COM). Safe to call from any collector thread."""
 
@@ -155,6 +185,33 @@ class OutlookMailer:
                     pass
         raise MailError("Could not find your own e-mail address in Outlook - put a recipient in the settings.")
 
+    def _new_mail(self, outlook):
+        """A new mail item. ``CreateItem`` makes it in the profile's DEFAULT data file; when Outlook refuses that
+        («Cannot create the email message because a data file to send and receive messages cannot be found» - the
+        default is an archive / a .pst that is gone), the mail is made in the Drafts folder of the first e-mail
+        account's own mailbox and sent from that account, else of any data file that has a Drafts folder."""
+        try:
+            return outlook.CreateItem(0)
+        except Exception as first:                       # noqa: BLE001 - tried in the account's own mailbox below
+            ns = outlook.GetNamespace("MAPI")
+            accounts = []
+            with _suppress():
+                accounts = [ns.Accounts.Item(i) for i in range(1, int(ns.Accounts.Count) + 1)]
+            for account in accounts:
+                with _suppress():
+                    mail = account.DeliveryStore.GetDefaultFolder(OL_FOLDER_DRAFTS).Items.Add(0)
+                    with _suppress():                    # else it still goes from the mailbox it was made in
+                        _send_using(mail, account)
+                    return mail
+            stores = []
+            with _suppress():
+                stores = [ns.Stores.Item(i) for i in range(1, int(ns.Stores.Count) + 1)]
+            for store in stores:
+                with _suppress():
+                    return store.GetDefaultFolder(OL_FOLDER_DRAFTS).Items.Add(0)
+            raise MailError("Outlook on this PC cannot create an e-mail: " + outlook_error_text(first)
+                            + " - in Outlook › File › Account Settings › Data Files, set your mailbox as the default.") from first
+
     def send(self, to, cc=(), subject="", html_body="", attachments=(), inline_images=None, display_only=None,
              bcc=()):
         """``inline_images``: {content_id: path} referenced in the body as <img src="cid:content_id">."""
@@ -164,7 +221,7 @@ class OutlookMailer:
         display = self.display_only if display_only is None else display_only
         with OUTLOOK_LOCK:
             outlook = self._outlook()
-            mail = outlook.CreateItem(0)
+            mail = self._new_mail(outlook)
             mail.To = "; ".join(to)
             if cc:
                 mail.CC = "; ".join(cc)

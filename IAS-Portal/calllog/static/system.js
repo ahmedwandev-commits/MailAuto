@@ -539,7 +539,7 @@
         { path: "itsm.cdp_port", type: "number", min: 1024, max: 65535, label: "Chrome debugging port" },
         { path: "itsm.browser_executable", type: "text", max: 400, label: "Chrome program (optional)", dir: "ltr" }] }] },
     { id: "summary", title: "Daily summary", cards: [
-      { title: "Daily summary e-mail", text: "Today's calls, e-mails, tickets and change requests as one dashboard e-mail, sent by the collector at each checkpoint time below that falls on a working day and inside the active hours. “Run now” on the Collectors tab sends it at once.", fields: [
+      { title: "Daily summary e-mail", runNow: "daily_summary", text: "Today's calls, e-mails, tickets and change requests as one dashboard e-mail, sent by the collector at each checkpoint time below that falls on a working day and inside the active hours. “Run now” sends it at once to the saved recipients.", fields: [
         { path: "summary.enabled", type: "switch", label: "Send the daily summary" },
         { path: "summary.send_times", type: "times", label: "Checkpoints (send at)", hint: "24-hour times, comma separated, like 10:00, 13:00, 15:00. Only times inside the active hours are sent." },
         { path: "summary.to", type: "lines", kind: "email", label: "To", hint: "One address per line." },
@@ -821,9 +821,64 @@
       return field.el;
     }
 
+    // ------------------------------------------------------------------ "Run now" inside a settings card
+    /** The daily summary's own "Run now": what stops it from sending (switched off, no recipient, unsaved changes),
+        the last run and the next checkpoint, from the collector's heartbeat; a request is followed until it ran. */
+    function runNowPanel(job) {
+      const status = h("p", { class: "op-note op-t-info op-block", role: "status", "data-run-status": job }, "Checking the collector…");
+      const saved = () => (st.base || {}).summary || {};
+      const recipients = () => (saved().to || []).length + (saved().cc || []).length;
+      const unsaved = () => changed().some((f) => f.section === "summary");
+      let timer = null;
+      function show(tone, text) {
+        status.className = `op-note op-t-${tone} op-block`;
+        status.replaceChildren(OPS.icon(tone === "info" || tone === "ok" ? "info" : "alert"), h("span", {}, text));
+      }
+      async function refresh() {
+        let d = null;
+        try { d = await api("GET", "/api/ops/jobs"); } catch (e) { d = null; }
+        const j = d && d.jobs ? d.jobs[job] : null;
+        const pending = !!(d && (d.pending || []).some((p) => p.job === job));
+        const now = d && d.server_time, parts = [];
+        if (!recipients()) parts.push("No recipient: add an address in To or Cc and save. Nothing is sent until then, not even by Run now.");
+        if (!saved().enabled) parts.push("Off: the collector does not send it at the checkpoints (switch “Send the daily summary” on and save).");
+        if (pending) parts.push("Run now requested: the collector sends it within a minute.");
+        else if (j && j.present && j.last_run_at) {
+          parts.push(`Last run ${OPS.fmtWhen(j.last_run_at, now)}: ${j.last_status === "error" ? (j.last_error || "failed") : (j.last_summary || "done")}.`);
+        } else if (!j || !j.present) parts.push("The collector has not reported yet: is collector.py running on the Outlook PC?");
+        if (saved().enabled && j && j.next_run_at) parts.push(`Next checkpoint ${OPS.fmtWhen(j.next_run_at, now)}.`);
+        const failed = j && j.last_status === "error";
+        show(!recipients() || failed ? "danger" : !saved().enabled || pending ? "warn" : "ok", parts.join(" "));
+        return pending;
+      }
+      async function run() {
+        if (unsaved()) { toast("Save the settings first: Run now sends with the saved settings.", "error"); return; }
+        if (!recipients()) { toast("Add at least one address in To or Cc and save first.", "error"); return; }
+        const ok = await OPS.confirm({ title: "Send the daily summary now?", confirmLabel: "Send now", danger: true,
+          message: `It goes to the ${recipients()} saved recipient(s) within a minute, whatever the time and day.` });
+        if (!ok) return;
+        try {
+          const r = await api("POST", `/api/ops/jobs/${encodeURIComponent(job)}/run`);
+          toast(r.already_pending ? "A request is already waiting for the collector." : "Requested. The collector sends it within a minute.");
+        } catch (e) { toast(e.message, "error"); return; }
+        clearInterval(timer);
+        let polls = 0;
+        refresh();
+        timer = setInterval(async () => {                    // follow the request until the collector ran it (3 min at most)
+          polls += 1;
+          if (!document.body.contains(status) || polls > 18 || !(await refresh())) clearInterval(timer);
+        }, 10000);
+      }
+      refresh();
+      return h("div", { class: "op-stack" }, status, h("div", { class: "op-toolbar" },
+        h("button", { class: "btn btn-primary", type: "button", "data-run-now": job, onclick: run }, OPS.icon("refresh"), "Run now"),
+        h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: refresh }, "Refresh")));
+    }
+
     // ------------------------------------------------------------------ the page
     function card(c, section) {
       const body = [c.text ? h("p", { class: "muted" }, c.text) : null];
+      if (c.runNow) body.push(runNowPanel(c.runNow));
       if (c.classification) {
         body.push(h("p", { class: "op-note op-t-info op-block" }, OPS.icon("info"),
           h("span", {}, "“Unclassified” is where an e-mail goes when the scan finds no team for it. Rules added here are used from the next scan. Mails that are still unclassified can be assigned one by one, or turned into a rule, on the ",

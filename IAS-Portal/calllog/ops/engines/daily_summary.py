@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 
 from .. import itsm_records, overlay, schemas, sla_history, sla_records, teams
 from ..settings import DEFAULTS, deep_merge
-from .common import FONT_STACK, NBE_GOLD, NBE_GREEN, JobResult, OutlookMailer, esc
+from .common import FONT_STACK, NBE_GOLD, NBE_GREEN, JobResult, OutlookMailer, esc, outlook_error_text
 from . import email_report as er
 
 STATE_NAME = "daily_summary"                 # {"day": "YYYY-MM-DD", "sent": {slot: iso time}}
@@ -441,8 +441,12 @@ def _run(ctx):
     if not ctx.can_email():
         return JobResult(ok=True, summary=f"summary built, e-mail off ({slot}): {counts}")
     mailer = ctx.mailer or OutlookMailer()
-    mailer.send(cfg.get("to") or [], cc=cfg.get("cc") or [], subject=subject, html_body=html,
-                inline_images=er.mail_images() or None, display_only=bool(cfg.get("display_only")))
+    try:
+        mailer.send(cfg.get("to") or [], cc=cfg.get("cc") or [], subject=subject, html_body=html,
+                    inline_images=er.mail_images() or None, display_only=bool(cfg.get("display_only")))
+    except Exception as exc:                                # noqa: BLE001 - built, not sent: say which of the two
+        ctx.log(f"daily summary built ({slot}: {counts}) but Outlook could not send it: {outlook_error_text(exc)}")
+        return JobResult(ok=False, error=f"The daily summary was built but Outlook could not send it: {outlook_error_text(exc)}")
     sent[slot if slot != "manual" else f"manual {now:%H:%M:%S}"] = now.strftime("%Y-%m-%dT%H:%M:%S")
     try:
         ctx.store.write_state(STATE_NAME, {"day": day, "sent": sent})
