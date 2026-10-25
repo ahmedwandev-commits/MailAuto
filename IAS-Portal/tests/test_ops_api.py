@@ -911,6 +911,20 @@ def test_auto_assign_application_filter(admin, flex_mgr, make_account, ops):
     assert assigns["<f2@x>"]["assigned_to_email"] == "flex@example.test"
 
 
+def test_auto_assign_max_per_run_is_saved_and_limits_each_run(admin, flex_mgr, make_account, ops):
+    make_account("3101", "user", "Emp Max", email="max@example.test", team="Flex Cube")
+    put_snapshot(ops, "email", email_data([email_row(f"<n{i}@x>") for i in range(5)]))
+    r = flex_mgr.put("/api/ops/auto-assign/team", {"team": "Flex Cube", "kind": "email", "enabled": True, "max_per_run": 2,
+        "rules": [{"employees": ["max@example.test"], "applications": [], "from": "", "to": ""}]}).get_json()
+    assert r["block"]["max_per_run"] == 2 and r["assigned"] == 2                  # this run: 2, the rest wait
+    assert flex_mgr.post("/api/ops/auto-assign/apply", {}).get_json()["assigned"] == 2      # the next run: 2 more
+    got = flex_mgr.get("/api/ops/auto-assign").get_json()["teams"]["Flex Cube"]["email"]
+    assert got["max_per_run"] == 2
+    bad = flex_mgr.put("/api/ops/auto-assign/team", {"team": "Flex Cube", "kind": "ticketing", "enabled": True,
+                                                      "max_per_run": "lots", "rules": []}).get_json()
+    assert bad["block"]["max_per_run"] == 0                                         # not a number = no limit
+
+
 def test_auto_assign_disabled_does_nothing(admin, flex_mgr, make_account, ops):
     make_account("5001", "user", "Somebody", email="some@example.test", team="Flex Cube")
     put_snapshot(ops, "email", email_data([email_row("<z1@x>")]))
@@ -1274,6 +1288,20 @@ def test_ticketing_auto_assign_keeps_running_until_stopped_and_never_keeps_the_p
     everything = json.dumps(done) + json.dumps(app.extensions.get("ops_ticketing_run"), default=str)
     assert "Portal-Secret-9" not in everything
     assert not any("Portal-Secret-9" in p.read_text(errors="ignore") for p in app.extensions["ops"].root.rglob("*") if p.is_file())
+
+
+def test_ticketing_run_gets_the_saved_max_per_run(app, flex_mgr, make_account, monkeypatch):
+    from calllog.ops.engines import assign_engine, common
+    _ticketing_ready(flex_mgr, make_account)
+    block = flex_mgr.get("/api/ops/auto-assign").get_json()["teams"]["Flex Cube"]["ticketing"]
+    assert flex_mgr.put("/api/ops/auto-assign/team", {"team": "Flex Cube", "kind": "ticketing", **block,
+                                                       "max_per_run": 15}).status_code == 200
+    seen = []
+    monkeypatch.setattr(assign_engine, "run", lambda ctx: seen.append(ctx.options["teams"]["Flex Cube"]["block"]["max_per_run"])
+                        or common.JobResult(ok=True, summary="ok", snapshot_data={"assigned": 0, "found": 0}))
+    flex_mgr.post("/api/ops/auto-assign/run-ticketing", {"team": "Flex Cube", "username": "mgr1", "password": "pw"})
+    done = _wait_for(lambda: (lambda d: d if not d["running"] else None)(flex_mgr.get("/api/ops/auto-assign/run-ticketing").get_json()))
+    assert seen == [15] and done["max_per_run"] == 15
 
 
 def test_a_wrong_password_stops_the_loop_at_once(app, flex_mgr, make_account, monkeypatch):

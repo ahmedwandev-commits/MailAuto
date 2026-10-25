@@ -103,6 +103,14 @@
     const interval = h("input", { type: "number", min: "1", max: "1440", step: "1", class: "aa-interval",
       value: block.interval_minutes || 10, "aria-label": "Run auto-assign every how many minutes" });
     interval.addEventListener("change", () => { block.interval_minutes = Math.max(1, Math.min(1440, parseInt(interval.value, 10) || 10)); });
+    const what = kind === "email" ? "e-mails" : "requests";
+    const maxPerRun = h("input", { type: "number", min: "0", max: "1000", step: "1", class: "aa-interval aa-max",
+      value: block.max_per_run || 0, "aria-label": `At most how many ${what} each run assigns (0 = no limit)`,
+      title: `At most this many ${what} are assigned in each run; the rest wait for the next run. 0 = no limit.` });
+    maxPerRun.addEventListener("change", () => {
+      block.max_per_run = Math.max(0, Math.min(1000, parseInt(maxPerRun.value, 10) || 0));
+      maxPerRun.value = block.max_per_run;
+    });
     const rulesWrap = h("div", { class: "aa-rules" });
     function drawRules() {
       rulesWrap.replaceChildren(...(block.rules.length
@@ -113,7 +121,8 @@
     async function save() {
       try {
         const r = await api("PUT", "/api/ops/auto-assign/team",
-          { team, kind, enabled: block.enabled, interval_minutes: block.interval_minutes, rules: block.rules });
+          { team, kind, enabled: block.enabled, interval_minutes: block.interval_minutes, max_per_run: block.max_per_run || 0,
+            rules: block.rules });
         info[kind] = r.block;
         toast(kind === "email" && r.assigned ? `Saved — ${r.assigned} e-mail(s) distributed.` : "Saved.");
         render();
@@ -121,15 +130,16 @@
     }
     const applyBtn = kind === "email"
       ? h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: distributeNow }, I("refresh"), "Distribute now")
-      : h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: () => runTicketing(team, block.interval_minutes || 10) }, I("refresh"), "Run now");
+      : h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: () => runTicketing(team, (info.ticketing || {}).interval_minutes || 10, (info.ticketing || {}).max_per_run || 0) }, I("refresh"), "Run now");
     const note = kind === "ticketing"
       ? h("p", { class: "op-note op-t-info op-block" }, I("info"),
-        h("span", {}, "These rules drive the portal. Press Run now and type your own portal login to assign new requests to your team — once, or again every “Run every” minutes until you press Stop (your password is kept only in the server's memory, never saved). Each employee needs a “Number in the security portal” set in Admin › Users."))
+        h("span", {}, "These rules drive the portal. Press Run now and type your own portal login to assign new requests to your team — once, or again every “Run every” minutes until you press Stop (your password is kept only in the server's memory, never saved). “Max per run” caps how many requests each run assigns (0 = no limit); the rest wait for the next run — save it before Run now. Each employee needs a “Number in the security portal” set in Admin › Users."))
       : null;
     return h("section", { class: "card op-fieldset aa-target" },
       h("div", { class: "card-head" }, h("h3", {}, kind === "email" ? "E-mail auto-assign" : "Ticketing auto-assign"),
         h("span", { class: "grow" }),
         h("label", { class: "aa-interval-field" }, h("span", {}, "Run every"), interval, h("span", { class: "muted" }, "min")),
+        h("label", { class: "aa-interval-field" }, h("span", {}, "Max per run"), maxPerRun, h("span", { class: "muted" }, "0 = no limit")),
         h("label", { class: "aa-switch" }, enable, h("span", {}, "Enabled"))),
       note, rulesWrap,
       h("div", { class: "op-toolbar" },
@@ -147,7 +157,7 @@
   const runHost = h("div", {});                 // a persistent panel: survives render(), updated live while a run polls
   let polling = false;
 
-  async function runTicketing(team, every) {
+  async function runTicketing(team, every, maxPerRun) {
     const user = h("input", { type: "text", autocomplete: "off", spellcheck: "false", dir: "ltr", maxlength: "60", "aria-label": "Portal username" });
     const pass = h("input", { type: "password", autocomplete: "off", dir: "ltr", maxlength: "200", "aria-label": "Portal password" });
     const dry = h("input", { type: "checkbox" });
@@ -157,6 +167,8 @@
       h("p", { class: "muted", dir: "auto" }, `Assign new portal requests for “${team}” by your saved rules. Type your OWN portal login — it is kept only in the server's memory while it runs, never stored.`),
       h("label", { class: "field" }, "Portal username", user),
       h("label", { class: "field" }, "Portal password", pass),
+      h("p", { class: "muted" }, maxPerRun ? `Each run assigns at most ${maxPerRun} request(s); the rest wait for the next run.`
+        : "Each run assigns every request the rules cover (no “Max per run” is saved)."),
       h("label", { class: "aa-switch" }, keep, h("span", {}, `Keep running: again every ${every} min until I press Stop (or the working hours end)`)),
       h("label", { class: "aa-switch" }, dry, h("span", {}, "Dry run (do everything except the final Execute; runs once)")));
     const ok = await CL.modal({

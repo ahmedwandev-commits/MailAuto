@@ -17,6 +17,9 @@ stand-alone NBE auto-authorizer bot (``nbe_auto_assign.py``) proved on the live 
      offers them for this form type), re-read the grid (the post-backs re-render it), tick EXACTLY their planned rows,
      check the tick count matches, press Execute (تنفيذ) once, and verify the commit by the grid shrinking.
 
+A team's "Max per run" (``max_per_run``, 0 = no limit) caps how many requests one run assigns, across every form type:
+once it is reached the run stops searching, and the rest wait for the next run.
+
 Nothing is ever executed when there is nothing eligible to assign. Every step is written to the run log, including why
 nothing was planned (no active rule, no portal number, no rule for these applications, ...), so an "assigned 0" run
 explains itself.
@@ -484,22 +487,38 @@ def _assign_group(ctx, browser, cfg, group, form_type, offered_logged, notes=Non
 
 
 # --------------------------------------------------------------------------- planning (pure, across the run's teams)
-def plan_run(ctx, requests):
-    """Combine the manager's team(s) into one plan over the grid's ``requests`` ([{id, system}]). Returns the plan and
-    a per-team tally."""
+def plan_run(ctx, requests, used=None):
+    """Combine the manager's team(s) into one plan over the grid's ``requests`` ([{id, system}]). ``used`` = {team:
+    requests planned earlier in this run}, updated here, so a team's "Max per run" counts across every form type.
+    Returns the plan, a per-team tally and {team: requests held back for the next run by that limit}."""
     teams = (ctx.options or {}).get("teams") or {}
     now = ctx.now()
     canon = application_names(ctx)
-    load, plan, per_team = {}, [], {}
+    used = {} if used is None else used
+    load, plan, per_team, held = {}, [], {}, {}
     for team, info in teams.items():
+        block = info.get("block") or {}
         taken = {p["id"] for p in plan}
-        picks = auto_assign.plan_ticketing(info.get("block") or {}, [r for r in requests if r["id"] not in taken],
+        picks = auto_assign.plan_ticketing(block, [r for r in requests if r["id"] not in taken],
                                            now, info.get("members") or {}, load, canon=canon)
+        cap = auto_assign.clean_max_per_run(block.get("max_per_run"))
+        room = max(0, cap - used.get(team, 0)) if cap else len(picks)
+        if len(picks) > room:
+            held[team] = len(picks) - room
+            picks = picks[:room]
         for item in picks:
             load[item["portal_id"]] = load.get(item["portal_id"], 0) + 1
         plan.extend(picks)
         per_team[team] = len(picks)
-    return plan, per_team
+        used[team] = used.get(team, 0) + len(picks)
+    return plan, per_team, held
+
+
+def limits_reached(ctx, used):
+    """True when every team of the run has a "Max per run" and has used it up (no need to search further forms)."""
+    teams = (ctx.options or {}).get("teams") or {}
+    caps = {t: auto_assign.clean_max_per_run((info.get("block") or {}).get("max_per_run")) for t, info in teams.items()}
+    return bool(caps) and all(cap and used.get(t, 0) >= cap for t, cap in caps.items())
 
 
 def application_names(ctx):
@@ -548,6 +567,7 @@ def run(ctx, scraper=None, assigner=None):
 
     browser = None
     assigned, per_employee, per_team_total, found = 0, {}, {}, 0
+    used, held_total, capped = {}, 0, False                  # "Max per run": planned so far per team, held back
     try:
         if live:
             browser = open_browser(ctx, cfg, headless=not ctx.headed)
@@ -560,6 +580,10 @@ def run(ctx, scraper=None, assigner=None):
         for form_type in form_types:
             name = f"form {form_type} ({labels[form_type]})" if form_type in labels else (
                 f"form {form_type}" if form_type else "the grid")
+            if limits_reached(ctx, used):
+                capped = True
+                ctx.log(f"max per run reached ({_caps_text(ctx)}) - {name} and the forms after it wait for the next run")
+                break
             rows = scraper(ctx, browser, form_type) if scraper else _search_form(ctx, browser, cfg, form_type, notes)
             found += len(rows)
             if not rows:
@@ -575,11 +599,16 @@ def run(ctx, scraper=None, assigner=None):
             if not eligible:
                 ctx.log(f"{name}: nothing to assign - Execute not pressed")
                 continue
-            plan, per_team = plan_run(ctx, eligible)
+            plan, per_team, held = plan_run(ctx, eligible, used)
             for team, n in per_team.items():
                 per_team_total[team] = per_team_total.get(team, 0) + n
+            if held:
+                capped, held_total = True, held_total + sum(held.values())
+                ctx.log(f"{name}: max per run reached ({_caps_text(ctx)}) - "
+                        + ", ".join(f"{n} request(s) of {team}" for team, n in held.items()) + " wait for the next run")
             if not plan:
-                ctx.log(f"{name}: nothing planned - {why_nothing_planned(ctx, eligible)}")
+                if not held:
+                    ctx.log(f"{name}: nothing planned - {why_nothing_planned(ctx, eligible)}")
                 continue
             groups = auto_assign.group_by_employee(plan)
             ctx.log(f"{name}: planned " + ", ".join(f"{len(g['ids'])} -> {g.get('name') or g['portal_id']}"
@@ -604,11 +633,20 @@ def run(ctx, scraper=None, assigner=None):
                 browser.close()
 
     summary = (f"assigned {assigned} of {found} new request(s)" + (" (dry-run)" if ctx.dry_run else "")
-               + (" - " + ", ".join(f"{k}: {v}" for k, v in sorted(per_employee.items())) if per_employee else ""))
+               + (" - " + ", ".join(f"{k}: {v}" for k, v in sorted(per_employee.items())) if per_employee else "")
+               + (f" - max per run reached ({_caps_text(ctx)}), the rest wait for the next run" if capped else ""))
     ctx.log(summary)
     return JobResult(ok=True, summary=summary,
                      snapshot_data={"assigned": assigned, "found": found, "by_employee": per_employee,
-                                    "by_team": per_team_total, "dry_run": bool(ctx.dry_run)})
+                                    "by_team": per_team_total, "dry_run": bool(ctx.dry_run),
+                                    "max_per_run_reached": capped, "held_by_limit": held_total})
+
+
+def _caps_text(ctx):
+    """'Flex Cube: 20' - each team's "Max per run", for the log."""
+    teams = (ctx.options or {}).get("teams") or {}
+    return ", ".join(f"{t}: {auto_assign.clean_max_per_run((i.get('block') or {}).get('max_per_run'))}"
+                     for t, i in teams.items() if auto_assign.clean_max_per_run((i.get("block") or {}).get("max_per_run")))
 
 
 def partial(assigned, found, per_employee, per_team):

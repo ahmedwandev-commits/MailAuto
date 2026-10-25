@@ -11,8 +11,8 @@ Config shape::
       "applications": [{"name": "Flexcube", "team": "Flex Cube"}, ...],   # admin: app -> team; a team sees only its apps
       "teams": {
         "<team>": {
-          "email":     {"enabled": bool, "rules": [RULE, ...]},
-          "ticketing": {"enabled": bool, "rules": [RULE, ...]}
+          "email":     {"enabled": bool, "interval_minutes": int, "max_per_run": int, "rules": [RULE, ...]},
+          "ticketing": {"enabled": bool, "interval_minutes": int, "max_per_run": int, "rules": [RULE, ...]}
         }
       }
     }
@@ -21,6 +21,8 @@ Config shape::
       applications - which apps this rule covers ([] = every app of the team); for e-mail, matched against a mail's
                      detected systems; multi-select.
       from / to    - the daily window the rule is active ("" = always; a window may wrap past midnight).
+    max_per_run    - at most this many e-mails / requests are handed out in one run (0 = no limit); the rest wait for
+                     the next run, every ``interval_minutes``.
 
 Everything here is a pure function over plain dicts (no Flask, no files), so the engine and the web app share it and it
 is easy to test.
@@ -33,6 +35,7 @@ TARGETS = ("email", "ticketing")
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 DEFAULT_INTERVAL_MINUTES = 10          # how often auto-assign runs for a team, unless the manager changes it
 MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES = 1, 1440
+MAX_PER_RUN_LIMIT = 1000               # the largest "max per run" a manager can set (0 = no limit)
 
 
 def default_config():
@@ -46,6 +49,15 @@ def clean_interval(value):
     except (TypeError, ValueError):
         return DEFAULT_INTERVAL_MINUTES
     return max(MIN_INTERVAL_MINUTES, min(MAX_INTERVAL_MINUTES, n))
+
+
+def clean_max_per_run(value):
+    """How many e-mails / requests one run may hand out: a whole number clamped to [0, 1000]; 0 (or invalid) = no limit."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(MAX_PER_RUN_LIMIT, n))
 
 
 # ---------------------------------------------------------------------- reading the config
@@ -64,7 +76,7 @@ def team_block(config, team, kind):
     """The ``email`` / ``ticketing`` block of a team's config, with defaults filled in."""
     block = (((config or {}).get("teams") or {}).get(team) or {}).get(kind) or {}
     return {"enabled": bool(block.get("enabled")), "interval_minutes": clean_interval(block.get("interval_minutes")),
-            "rules": list(block.get("rules") or [])}
+            "max_per_run": clean_max_per_run(block.get("max_per_run")), "rules": list(block.get("rules") or [])}
 
 
 # ---------------------------------------------------------------------- rules and time windows
@@ -99,13 +111,14 @@ def _apps_match(rule_apps, detected_systems, canon=None):
 
 
 # ---------------------------------------------------------------------- e-mail distribution (internal, pure)
-def plan_email(block, rows, now, members, load=None):
+def plan_email(block, rows, now, members, load=None, limit=None):
     """Which PENDING, still-unassigned e-mails to hand to which employee.
 
     ``block`` = a team's ``email`` config; ``rows`` = that team's overlaid e-mail rows; ``now`` = datetime;
     ``members`` = {email: name} of the team's active employees; ``load`` = {email: count} already carried (for balance).
     E-mail auto-assign has NO application filter: every pending, unassigned mail of the team goes to the team members
     of the rules active right now (all their employees together), the fewest-loaded first, then alphabetical.
+    ``limit`` = at most this many (the oldest first; None / 0 = all).
     Returns ``[{"message_id", "email", "name"}]``. A mail already assigned is skipped.
     """
     if not block.get("enabled"):
@@ -121,6 +134,8 @@ def plan_email(block, rows, now, members, load=None):
                       and not overlay.normalize_email(r.get("assigned_to_email")) and r.get("message_id")),
                      key=lambda r: str(r.get("received_time") or ""))
     for row in pending:
+        if limit and len(out) >= limit:
+            break
         mid = row.get("message_id")
         if mid in taken:
             continue
@@ -139,7 +154,8 @@ def plan_ticketing(block, requests, now, members, load=None, canon=None):
     ``id`` (the grid row id the engine will tick) and a ``system`` (the request's application, matched against a rule's
     applications). ``members`` maps a team member's e-mail to ``{"name", "portal_id"}``; ``portal_id`` is that person's
     value in the portal's الموظفين drop-down (set per user in admin). ``load`` is an optional {portal_id: count} already
-    carried, for balance. ``canon`` names an application the way the rules do (see ``_apps_match``).
+    carried, for balance. ``canon`` names an application the way the rules do (see ``_apps_match``). The team's "Max per
+    run" is applied by the engine (``assign_engine.plan_run``), across every form type of a run.
 
     Returns ``[{"id", "portal_id", "email", "name"}]`` - one per request an active rule covers, balanced across that
     rule's employees that have a portal id (fewest-loaded first, then portal id). A request matched by no rule, or whose
@@ -212,10 +228,11 @@ def clean_rule(rule, allowed_apps, members):
 
 
 def clean_block(block, allowed_apps, members):
-    """A normalised ``{enabled, interval_minutes, rules}`` block (invalid rules dropped)."""
+    """A normalised ``{enabled, interval_minutes, max_per_run, rules}`` block (invalid rules dropped)."""
     block = block if isinstance(block, dict) else {}
     rules = [r for r in (clean_rule(x, allowed_apps, members) for x in block.get("rules") or []) if r]
-    return {"enabled": bool(block.get("enabled")), "interval_minutes": clean_interval(block.get("interval_minutes")), "rules": rules}
+    return {"enabled": bool(block.get("enabled")), "interval_minutes": clean_interval(block.get("interval_minutes")),
+            "max_per_run": clean_max_per_run(block.get("max_per_run")), "rules": rules}
 
 
 def clean_applications(apps, teams):

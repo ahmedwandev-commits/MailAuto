@@ -1050,7 +1050,9 @@ def test_the_collector_needs_no_playwright_or_selenium():
                 (REPO / "requirements-collector.txt").read_text(encoding="utf-8").splitlines()]
     assert not [p for p in packages if p.startswith(("playwright", "selenium"))]
     assert not [name for _, name in collector.PACKAGES if name.lower() in ("playwright", "selenium")]
-    engines = REPO / "calllog" / "ops" / "engines"
     imports = re.compile(r"^\s*(?:import|from)\s+(?:playwright|selenium)\b", re.M)
-    for path in [*engines.glob("*.py"), REPO / "collector.py", REPO / "calllog" / "ops" / "runner.py"]:
+    program = [*(REPO / "calllog").rglob("*.py"), *REPO.glob("*.py"), *(REPO / "tools").glob("*.py")]
+    program = [p for p in program if p.name != "shots_hub.py"]        # the developer screenshot tool is never shipped
+    assert REPO / "calllog" / "ops" / "engines" / "cdp.py" in program and len(program) > 40
+    for path in program:
         assert not imports.search(path.read_text(encoding="utf-8")), path

@@ -273,6 +273,45 @@ body.auth-split { min-height: 100vh; }
   .auth-hero-title { font-size: 1.6rem; }
 }
 
+/* ---------- welcome after sign-in (templates/welcome.html): the lines appear slowly, one after the other ---------- */
+body.welcome-page { min-height: 100vh; }
+.welcome { position: relative; min-height: 100vh; display: grid; place-items: center; overflow: hidden; padding: 24px; }
+.welcome-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 18%;
+  transform: scale(1.08); animation: welcome-zoom 9s ease-out forwards; }
+.welcome-veil { position: absolute; inset: 0;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--side-bg) 50%, transparent) 0%,
+    color-mix(in srgb, var(--side-bg) 90%, transparent) 100%); }
+.welcome-card { position: relative; width: min(640px, 100%); display: grid; gap: 14px; justify-items: center;
+  text-align: center; padding: 34px 30px 26px; border-radius: 20px; box-shadow: var(--shadow-lg);
+  background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(6px); }
+.welcome-logo { width: 64px; height: 64px; background: #fff; border-radius: 16px; padding: 7px; }
+.welcome-hello { margin: 0; font-size: 1.05rem; font-weight: 650; color: var(--accent-text); }
+.welcome-hello-en { color: var(--ink-2); font-weight: 500; }
+.welcome-ar { margin: 0; font-size: 1.55rem; line-height: 1.75; font-weight: 700; color: var(--ink); }
+.welcome-en { margin: 0; font-size: 1.05rem; line-height: 1.6; color: var(--ink-2); }
+.welcome-role { margin: 0; font-size: 0.82rem; letter-spacing: 0.3px; color: var(--muted); }
+.welcome-go { margin-top: 4px; }
+.welcome-bar { width: 100%; height: 3px; border-radius: 3px; overflow: hidden; background: var(--brand-soft); }
+.welcome-bar i { display: block; width: 100%; height: 100%; background: var(--brand); transform-origin: left;
+  transform: scaleX(0); animation: welcome-fill 7s linear forwards; }        /* 7 s = welcome.SECONDS */
+.wl { opacity: 0; transform: translateY(16px); animation: welcome-rise 1.6s cubic-bezier(0.2, 0.7, 0.2, 1) forwards; }
+.wl-1 { animation-delay: 0.2s; }
+.wl-2 { animation-delay: 0.9s; }
+.wl-3 { animation-delay: 1.7s; animation-duration: 2.2s; }
+.wl-4 { animation-delay: 2.9s; }
+.wl-5 { animation-delay: 3.7s; }
+@keyframes welcome-rise { to { opacity: 1; transform: none; } }
+@keyframes welcome-zoom { to { transform: scale(1); } }
+@keyframes welcome-fill { to { transform: scaleX(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .wl, .welcome-bg { animation: none; opacity: 1; transform: none; }
+  .welcome-bar { display: none; }
+}
+@media (max-width: 560px) {
+  .welcome-card { padding: 26px 18px 20px; }
+  .welcome-ar { font-size: 1.3rem; }
+}
+
 /* ---------- log a call ---------- */
 .entry h2 { margin-bottom: 4px; }
 .ip-input {

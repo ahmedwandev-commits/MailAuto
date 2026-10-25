@@ -192,6 +192,17 @@ def test_e2e_assigns_every_eligible_request_balanced_and_never_a_future_one(chro
 
 
 @pytest.mark.usefixtures("fast")
+def test_e2e_max_per_run_ticks_only_that_many_and_leaves_the_rest_on_the_portal(chromium, tmp_path):
+    capped = {"Flex Cube": {**TEAM_AB["Flex Cube"], "block": {**TEAM_AB["Flex Cube"]["block"], "max_per_run": 3}}}
+    with FakeAssignPortal() as portal:
+        res, logs = e2e_run(portal, chromium, tmp_path, teams=capped)
+    text = "\n".join(logs)
+    assert res.ok and res.snapshot_data["assigned"] == 3, text
+    assert portal.assigned == {"R101": "111", "R102": "222", "R104": "111"}, text      # R105 and form 2 wait
+    assert "1 request(s) of Flex Cube wait for the next run" in text and "max per run reached (Flex Cube: 3)" in res.summary
+
+
+@pytest.mark.usefixtures("fast")
 def test_e2e_execute_is_confirmed_by_the_portals_success_label_although_new_requests_arrive(chromium, tmp_path):
     """The real portal says «تم التنفيذ بنجاح» after Execute; its queue keeps growing, so the grid alone cannot prove it."""
     with FakeAssignPortal(arrivals=True) as portal:
@@ -265,3 +276,59 @@ def test_classify_fails_closed_when_the_grid_has_no_period_column():
     eligible, stats = ae.classify(rows, dt.date(2026, 10, 19))
     assert eligible == [] and stats["no_period"] == 2                  # never assign blind in "not future-dated" mode
     assert len(ae.classify(rows, dt.date(2026, 10, 19), "all")[0]) == 2   # "every request" mode still takes them
+
+
+# ---------------------------------------------------------------------- "Max per run"
+def _capped(cap):
+    rules = [{"employees": ["a@x", "b@x"], "applications": [], "from": "", "to": ""}]
+    return {"Flex Cube": {"block": {"enabled": True, "max_per_run": cap, "rules": rules}, "members": MEMBERS}}
+
+
+def test_plan_run_takes_the_first_requests_still_balanced_and_counts_what_was_used():
+    reqs = [{"id": str(i), "system": "x"} for i in range(1, 8)]
+    used = {}
+    plan, per_team, held = ae.plan_run(_ctx(_capped(3)), reqs, used)
+    assert [p["id"] for p in plan] == ["1", "2", "3"] and [p["portal_id"] for p in plan] == ["111", "222", "111"]
+    assert per_team == {"Flex Cube": 3} and held == {"Flex Cube": 4} and used == {"Flex Cube": 3}
+    assert ae.plan_run(_ctx(_capped(3)), reqs, used)[0] == [] and ae.limits_reached(_ctx(_capped(3)), used)
+    plan, _, held = ae.plan_run(_ctx(_capped(0)), reqs)
+    assert len(plan) == 7 and held == {}                                     # 0 = no limit
+
+
+def test_max_per_run_counts_across_every_form_type_and_stops_searching_when_reached():
+    grids = {"1": [{"id": f"A{i}", "system": "x"} for i in range(3)], "2": [{"id": f"B{i}", "system": "x"} for i in range(4)],
+             "3": [{"id": "C0", "system": "x"}]}
+    searched, ticked, logs = [], [], []
+
+    def scraper(ctx, browser, form_type):
+        searched.append(form_type)
+        return grids[form_type]
+
+    def assigner(ctx, browser, group):
+        ticked.extend(group["ids"])
+        return len(group["ids"])
+
+    ctx = _ctx(_capped(5), log=logs.append)
+    ctx.settings = {"form_types": ["1", "2", "3"]}
+    res = ae.run(ctx, scraper=scraper, assigner=assigner)
+    text = "\n".join(logs)
+    assert res.ok and res.snapshot_data["assigned"] == 5, text
+    assert sorted(ticked) == ["A0", "A1", "A2", "B0", "B1"]                  # 3 of form 1, then 2 of form 2
+    assert searched == ["1", "2"]                                            # form 3 waits for the next run
+    assert res.snapshot_data["max_per_run_reached"] and res.snapshot_data["held_by_limit"] == 2
+    assert "2 request(s) of Flex Cube wait for the next run" in text and "form 3 and the forms after it wait" in text
+    assert "max per run reached (Flex Cube: 5)" in res.summary
+
+
+def test_no_max_per_run_assigns_everything_and_says_nothing_about_a_limit():
+    logs = []
+    res = ae.run(_ctx(_capped(0), log=logs.append), scraper=lambda c, b, f: [{"id": f"r{i}", "system": "x"} for i in range(9)],
+                 assigner=lambda c, b, g: len(g["ids"]))
+    assert res.ok and res.snapshot_data["assigned"] == 9 and not res.snapshot_data["max_per_run_reached"]
+    assert "max per run" not in "\n".join(logs) + res.summary
+
+
+def test_a_dry_run_shows_the_same_limited_plan():
+    res = ae.run(_ctx(_capped(2), dry_run=True), scraper=lambda c, b, f: [{"id": f"r{i}", "system": "x"} for i in range(6)],
+                 assigner=lambda c, b, g: len(g["ids"]))
+    assert res.ok and res.snapshot_data["assigned"] == 2 and res.snapshot_data["held_by_limit"] == 4

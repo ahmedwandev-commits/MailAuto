@@ -391,9 +391,9 @@ def not_yet_written():
 class Tab:
     """One signed-in browser window that remembers everything that went wrong in it (console, CSP, failed requests)."""
 
-    def __init__(self, browser, base, scheme="light", width=1440, height=900):
+    def __init__(self, browser, base, scheme="light", width=1440, height=900, **context):
         self.base = base
-        self.context = browser.new_context(viewport={"width": width, "height": height}, color_scheme=scheme)
+        self.context = browser.new_context(viewport={"width": width, "height": height}, color_scheme=scheme, **context)
         self.page = self.context.new_page()
         self.page.set_default_timeout(10000)
         self.problems = []
@@ -1102,4 +1102,30 @@ def test_ticketing_run_now_offers_keep_running_and_a_stop_button(app, demo_data,
     page.wait_for_function("() => document.body.innerText.includes('stopping after this run')")
     assert app.extensions["ops_ticketing_run"]["stop"] is True
     app.extensions["ops_ticketing_run"]["running"] = False                  # let the page's poll settle
+    assert t.later_problems(*not_yet_written()) == [], t.problems
+
+
+def test_max_per_run_is_set_on_the_page_saved_and_shown_before_a_run(app, demo_data, tab):
+    """Each auto-assign card has "Max per run" (0 = no limit); Save stores it, and Run now says how many one run takes."""
+    t = tab(demo.MANAGER_ID, demo_data["password"])
+    page = t.open("/auto-assign", ".aa-target")
+    card = page.locator(".aa-target", has_text="Ticketing auto-assign").first
+    box = card.locator("label", has_text="Max per run").locator("input")
+    assert box.input_value() == "0" and "0 = no limit" in card.inner_text()
+    box.fill("5000")
+    box.dispatch_event("change")
+    assert box.input_value() == "1000"                                     # the largest a manager can set
+    box.fill("12")
+    box.dispatch_event("change")
+    card.get_by_role("button", name="Save").click()
+    page.wait_for_selector("text=Saved.")
+    saved = app.extensions["ops"].read_auto_assign()["teams"]
+    assert [(blk.get("ticketing") or {}).get("max_per_run") for blk in saved.values()].count(12) == 1
+    page = t.open("/auto-assign", ".aa-target")
+    card = page.locator(".aa-target", has_text="Ticketing auto-assign").first
+    assert card.locator("label", has_text="Max per run").locator("input").input_value() == "12"
+    card.get_by_role("button", name="Run now").click()
+    page.wait_for_selector("dialog.dlg")
+    assert "Each run assigns at most 12 request(s)" in text_of(page, "dialog.dlg")
+    page.keyboard.press("Escape")
     assert t.later_problems(*not_yet_written()) == [], t.problems

@@ -155,3 +155,19 @@ def test_ticketing_rule_applications_match_the_portals_spelling():
     reqs = [treq("1", "Flex Cube"), treq("2", "صناديق الإستثمار FCIS"), treq("3", "DWP")]
     assert [o["id"] for o in aa.plan_ticketing(block, reqs, NOW, TMEMBERS, canon=canon)] == ["1", "2"]
     assert aa.plan_ticketing(block, reqs, NOW, TMEMBERS) == []                 # letter-for-letter: nothing matched
+
+
+# ---------------------------------------------------------------------- "Max per run"
+def test_max_per_run_is_a_whole_number_from_0_to_1000():
+    assert [aa.clean_max_per_run(v) for v in (None, "", "x", -5, 0, "7", 7.9, 5000)] == [0, 0, 0, 0, 0, 7, 7, 1000]
+    b = aa.clean_block({"enabled": True, "max_per_run": "25", "rules": [{"employees": ["a@x"]}]}, [], {"a@x": "Alice"})
+    assert b["max_per_run"] == 25
+    assert aa.team_block({}, "Flex Cube", "ticketing")["max_per_run"] == 0                  # not set = no limit
+    assert aa.team_block({"teams": {"T": {"ticketing": {"max_per_run": 3}}}}, "T", "ticketing")["max_per_run"] == 3
+
+
+def test_email_limit_hands_out_the_oldest_first():
+    block = {"enabled": True, "rules": [{"employees": ["a@x", "b@x"], "applications": [], "from": "", "to": ""}]}
+    rows = [row("3", received="2026-10-17T11:00:00"), row("1", received="2026-10-17T09:00:00"),
+            row("2", received="2026-10-17T10:00:00")]
+    assert [o["message_id"] for o in aa.plan_email(block, rows, NOW, MEMBERS, limit=2)] == ["1", "2"]

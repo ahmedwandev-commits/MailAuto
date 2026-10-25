@@ -1,7 +1,7 @@
 """HTML pages: login, logout, password change, the two dashboards."""
 from flask import Blueprint, g, redirect, render_template, request, session, url_for
 
-from . import auth
+from . import auth, welcome as welcome_messages
 from .security import password_problem, verify_password, hash_password
 from .storage import iso_now, norm_uid
 
@@ -56,7 +56,19 @@ def login():
     auth.csrf_token()
     auth.store().update_user(uid, {"last_login": iso_now(auth.now())})
     auth.audit("login", actor=user)
-    return redirect(url_for("pages.index"))
+    session["welcome"] = True       # the welcome message is shown once, before the first page
+    return redirect(url_for("pages.welcome"))
+
+
+@bp.get("/welcome")
+@auth.login_required
+def welcome():
+    """A positive message for the person's role, once after each sign-in (after the password change a new account
+    must make first), then the portal opens by itself. Any other visit goes straight to the person's start page."""
+    if not session.pop("welcome", False):
+        return redirect(url_for("pages.index"))
+    return render_template("welcome.html", message=welcome_messages.message_for(g.user, auth.now()),
+                           next_url=url_for("pages.index"), seconds=welcome_messages.SECONDS)
 
 
 @bp.post("/logout")
@@ -94,7 +106,7 @@ def password():
         "password_changed_at": iso_now(auth.now())})
     session["pwv"] = auth.password_mark({"password_hash": new_hash})      # this session stays, every other one ends
     auth.audit("password_changed")
-    return redirect(url_for("pages.index"))
+    return redirect(url_for("pages.welcome" if session.get("welcome") else "pages.index"))
 
 
 @bp.get("/dashboard")

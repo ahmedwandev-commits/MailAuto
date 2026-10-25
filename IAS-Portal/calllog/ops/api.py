@@ -2543,13 +2543,14 @@ def auto_assign_put_team():
     # e-mail auto-assign has no application filter (every pending mail of the team goes to its members)
     apps = auto_assign.team_applications(_aa_config(), team) if kind == "ticketing" else []
     block = auto_assign.clean_block({"enabled": body.get("enabled"), "interval_minutes": body.get("interval_minutes"),
-                                     "rules": body.get("rules")}, apps, members)
+                                     "max_per_run": body.get("max_per_run"), "rules": body.get("rules")}, apps, members)
 
     def change(doc):
         doc.setdefault("teams", {}).setdefault(team, {})[kind] = block
     ops().update_auto_assign(change)
     auth.audit("ops_auto_assign_config", target=team,
-               details={"kind": kind, "enabled": block["enabled"], "rules": len(block["rules"])})
+               details={"kind": kind, "enabled": block["enabled"], "rules": len(block["rules"]),
+                        "max_per_run": block["max_per_run"]})
     assigned = apply_email_auto_assign(only_teams=[team], actor=g.user, force=True) if kind == "email" else 0
     return jsonify(ok=True, block=block, assigned=assigned)
 
@@ -2628,7 +2629,8 @@ def auto_assign_run_ticketing_status():
                    summary=st.get("summary", ""), assigned=int(st.get("assigned") or 0),
                    by_employee=st.get("by_employee") or {}, error=st.get("error", ""), dry_run=bool(st.get("dry_run")),
                    repeat=bool(st.get("repeat")), runs=int(st.get("runs") or 0), next_run_at=st.get("next_run_at", ""),
-                   interval_minutes=int(st.get("interval_minutes") or 0), stopping=bool(st.get("stop")))
+                   interval_minutes=int(st.get("interval_minutes") or 0), max_per_run=int(st.get("max_per_run") or 0),
+                   stopping=bool(st.get("stop")))
 
 
 @bp.post("/auto-assign/run-ticketing/stop")
@@ -2687,7 +2689,7 @@ def auto_assign_run_ticketing():
         st.update({"running": True, "team": team, "actor": actor, "started_at": now_iso(clock()),
                    "log": [], "done": False, "summary": "", "assigned": 0, "by_employee": {}, "error": "",
                    "dry_run": dry_run, "repeat": repeat, "runs": 0, "next_run_at": "", "interval_minutes": interval,
-                   "stop": False})
+                   "max_per_run": block.get("max_per_run") or 0, "stop": False})
     auth.audit("ops_auto_assign_run", target=team, details={"kind": "ticketing", "dry_run": dry_run, "repeat": repeat})
     teams_arg = {team: {"block": block, "members": members}}
 
@@ -2788,7 +2790,7 @@ def apply_email_auto_assign(only_teams=None, actor=None, force=False):
                 continue
         team_at[team] = time.monotonic()
         team_rows = [r for r in rows if overlay.row_in_team(r, team)]
-        for item in auto_assign.plan_email(block, team_rows, now, members, load):
+        for item in auto_assign.plan_email(block, team_rows, now, members, load, limit=block.get("max_per_run")):
             mid, email, name = item["message_id"], item["email"], item["name"]
             row = next((r for r in team_rows if r.get("message_id") == mid), None)
             subject = str((row or {}).get("subject") or "")[:200]

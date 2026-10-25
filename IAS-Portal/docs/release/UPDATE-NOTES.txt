@@ -155,6 +155,35 @@ HOW TO UPDATE (your data is kept)
      E-mail quality (tile, who rated, by employee), My quality reviews, and the end-of-day e-mail (scorecard,
      team index). Earlier ratings stay as they were.
 
+16. A WELCOME MESSAGE AFTER SIGNING IN
+   - After signing in, a short positive message appears slowly (Arabic and English) before the portal
+     opens: "Good morning / afternoon / evening" with the person's first name, a message for their role
+     (employee, manager or administrator - each role has its own set) and the role itself.
+   - Colleagues get different messages, and each person gets a new one on another day (the same one all
+     day). The portal opens by itself after 7 seconds, or at once on Continue, a click, Enter or Escape.
+   - Shown once per sign-in. A new account first chooses its own password, then sees the message.
+     With "reduce motion" turned on in Windows nothing moves and it waits less.
+
+17. MOVING FROM NBE OPSHUB (the "ready to run" package)
+   - Users, roles, teams, passwords, settings, auto-assign rules, history and the collector settings carry
+     over as they are: the data format is the same, nothing has to be converted.
+   - The ready-to-run package already holds your data folder, .secret_key, collector_config.json and libs.
+     Stop the old run.py and collector.py, then copy everything inside "program" over the old program
+     folder (or into a new folder) and start run.py and collector.py. Everyone signs in with the same
+     user ID and password as before.
+   - If the old version was used after the copy in the package was taken, copy your newest "data" folder
+     over the one from the package before the first start.
+   - The program drives Edge / Chrome over the DevTools protocol only (cdp.py): no Selenium, no Playwright.
+     tools\shots_hub.py (a developer screenshot tool) is no longer shipped - delete it if the old folder has it.
+
+18. AUTO ASSIGN: "MAX PER RUN" - HOW MANY REQUESTS EACH RUN ASSIGNS
+   - Auto Assign: each team's Ticketing (and E-mail) card has "Max per run" next to "Run every". One run
+     assigns at most that many requests (e-mails), still shared evenly between the rule's employees; the
+     rest wait for the next run. 0 = no limit (as before). Save, then press Run now.
+   - Ticketing: the number counts across every form type of the run; once it is reached the run stops
+     searching. The run log and summary say "max per run reached" and how many wait. A Dry run shows the
+     same limited plan.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -261,3 +290,30 @@ IAS PORTAL - الجديد في هذا التحديث
    - "Very good" بيتحسب لوحده في كل حتة: E-mail > Quality (الكارت والـ scorecard)، و Analysis > E-mail quality
      (الكارت ومين قيّم وكل موظف)، و My quality reviews، وإيميل آخر اليوم (الـ scorecard ومؤشر الفريق).
      التقييمات القديمة زي ما هي.
+
+16. رسالة ترحيب بعد تسجيل الدخول
+   - بعد تسجيل الدخول بتظهر ببطء رسالة إيجابية قصيرة (عربي وإنجليزي) قبل ما البورتال يفتح: "صباح الخير /
+     نهارك سعيد / مساء الخير" مع الاسم الأول، ورسالة حسب الدور (موظف أو مدير أو مسؤول النظام - كل دور له
+     رسايله) والدور نفسه.
+   - كل زميل بيشوف رسالة غير التاني، وكل شخص بيشوف رسالة جديدة في يوم تاني (ونفس الرسالة طول اليوم).
+     البورتال بيفتح لوحده بعد 7 ثواني، أو فوراً بـ Continue أو كليك أو Enter أو Escape.
+   - بتظهر مرة واحدة مع كل تسجيل دخول. الحساب الجديد بيختار الباسورد بتاعه الأول وبعدين يشوف الرسالة.
+     لو "reduce motion" مفعّل في الويندوز مفيش حركة والانتظار أقل.
+
+17. النقل من NBE OpsHub (نسخة "جاهزة للتشغيل")
+   - المستخدمين والأدوار والفرق والباسوردات والإعدادات وقواعد الـ auto-assign والتاريخ وإعدادات الـ collector
+     كلها بتتنقل زي ما هي: شكل البيانات واحد ومفيش أي تحويل.
+   - النسخة الجاهزة فيها مجلد data و .secret_key و collector_config.json و libs بتوعك. أوقف run.py و
+     collector.py القديمين، وانسخ كل اللي جوه "program" فوق مجلد البرنامج القديم (أو في مجلد جديد)
+     وشغّل run.py و collector.py. كل واحد بيدخل بنفس اسم المستخدم والباسورد زي الأول.
+   - لو النسخة القديمة اتستخدمت بعد ما اتاخدت النسخة اللي في الباكدج، انسخ أحدث مجلد "data" عندك فوق
+     اللي في الباكدج قبل أول تشغيل.
+   - البرنامج بيشغّل Edge / Chrome عن طريق DevTools protocol بس (cdp.py): مفيش Selenium ولا Playwright.
+     الملف tools\shots_hub.py (أداة صور للمطورين) مبقاش في النسخة - امسحه لو لسه موجود في المجلد القديم.
+
+18. الـ Auto Assign: "Max per run" - عدد الطلبات اللي بتتوزع في كل رن
+   - في صفحة Auto Assign، كارت Ticketing (والـ E-mail) لكل فريق فيه خانة "Max per run" جنب "Run every". كل رن
+     بيوزّع العدد ده بالكتير (طلبات أو إيميلات)، ولسه بالتساوي على موظفين القاعدة، والباقي يستنى الرن اللي
+     بعده. 0 = من غير حد (زي الأول). اعمل Save وبعدين Run now.
+   - في الـ Ticketing العدد بيتحسب على كل أنواع النماذج في الرن، ولما يوصل للعدد الرن بيقف عن البحث. الـ log
+     والملخص بيقولوا "max per run reached" وكام طلب مستني. الـ Dry run بيعرض نفس الخطة بنفس الحد.
