@@ -115,43 +115,69 @@ _LABELS_MEMO = {}
 
 
 def _labels(cfg):
-    """[(normalised label, step or None)] of the settings, longest label first (memoised per settings)."""
+    """(memo key, [(normalised label, step or None)]) of the settings, longest label first (memoised per settings).
+    A current-status word («تحت التنفيذ», «قيد الإجراء») is never a step, even where an older saved setting still
+    lists it under the assignment (NBE OpsHub did): it would restart the security user's clock."""
     statuses = (cfg or {}).get("statuses") or {}
     memo_key = repr(sorted((k, tuple(v or ())) for k, v in statuses.items()))
     hit = _LABELS_MEMO.get(memo_key)
     if hit is None:
-        pairs = []
+        current = {_norm(label) for label in statuses.get("in_progress") or []} - {""}
+        pairs = [(n, None) for n in current]
         for key, labels in statuses.items():
             step = STEP_ALIASES.get(key, key)
-            if step not in STEP_KEYS and key != "in_progress":
+            if step not in STEP_KEYS:
                 continue
             for label in labels or []:
                 n = _norm(label)
-                if n:
-                    pairs.append((n, None if key == "in_progress" else step))
+                if n and n not in current:
+                    pairs.append((n, step))
         pairs.sort(key=lambda p: -len(p[0]))
         if len(_LABELS_MEMO) > 32:
             _LABELS_MEMO.clear()
-        hit = _LABELS_MEMO[memo_key] = pairs
+        hit = _LABELS_MEMO[memo_key] = (memo_key, pairs, {})
     return hit
+
+
+# a final state the portal words in more ways than the settings list: the reviewer's confirmation, or the reply / the
+# password sent to the employee («تم ارسال الرد», «تم تسليم الرد», «تم ارسال كلمة المرور عن طريق ال SMS», ...)
+_FINAL_NOT = _norm("التعزيز على عدم")
+_FINAL_CONFIRM = _norm("التعزيز على")
+_FINAL_DONE = _norm("تم")
+_FINAL_SENT = (_norm("الرد"), "sms")
+
+
+def _final_step(s):
+    """The step of a normalised status no settings label names, when it plainly ENDS the request; else None."""
+    if _FINAL_NOT in s:
+        return "confirmed_not"
+    if _FINAL_CONFIRM in s:
+        return "confirmed_executed"
+    if s.startswith(_FINAL_DONE) and any(word in s for word in _FINAL_SENT):
+        return "confirmed_executed"
+    return None
 
 
 def step_of(status, cfg):
     """The lifecycle step a status label means (``STEP_KEYS``), or None for a label that is not a step. An exact label
     wins; else the LONGEST label the status contains («تم التعزيز من قبل مشرف الفرع و بانتظار رد المنطقة» is a branch
-    confirmation, «إعادة اسناد لمسخدم السرية» a re-assignment, «لم يتم التنفيذ» is not «تم التنفيذ»). A current-status
-    word («تحت التنفيذ») is never a step."""
+    confirmation, «إعادة اسناد لمسخدم السرية» a re-assignment, «لم يتم التنفيذ» is not «تم التنفيذ»); else a final
+    state in other words (``_final_step``). A current-status word («تحت التنفيذ», «قيد الإجراء») is never a step."""
     s = _norm(status)
     if not s:
         return None
-    pairs = _labels(cfg)
-    for label, step in pairs:
-        if s == label:
-            return step
-    for label, step in pairs:
-        if label in s:
-            return step
-    return None
+    _, pairs, memo = _labels(cfg)
+    if s in memo:
+        return memo[s]
+    step = next((st for label, st in pairs if s == label), "")
+    if step == "":
+        step = next((st for label, st in pairs if label in s), "")
+    if step == "":
+        step = _final_step(s)
+    if len(memo) > 2000:
+        memo.clear()
+    memo[s] = step
+    return step
 
 
 def events_from_table(headers, rows, cfg):
@@ -276,6 +302,35 @@ def lifecycle(events, cfg=None):
     }
 
 
+def rederive(r, cfg):
+    """A record read under older status rules, brought up to the current ones: the steps of its kept timeline are named
+    again from their status text and its stamps re-computed (so a «قيد الإجراء» line read as an assignment no longer
+    restarts the security user's clock, and a final state named in other words closes it). The same record when
+    nothing changes."""
+    trail = (r or {}).get("trail") or []
+    current = {_norm(label) for label in ((cfg or {}).get("statuses") or {}).get("in_progress") or []}
+    events, changed = [], False
+    for n, t in enumerate(trail):
+        t = list(t) + [""] * (6 - len(t))
+        step = step_of(t[2], cfg) if _clean(t[2]) else t[1]
+        if step is None and _norm(t[2]) not in current:
+            step = t[1]                                   # a wording the rules do not know: keep what was recorded
+        changed = changed or step != t[1]
+        if step in _RANK:
+            events.append({"at": t[0], "step": step, "status": t[2], "user": t[3], "user_no": t[4], "user_type": "",
+                           "notes": t[5], "_n": n})
+    if not changed:
+        return r
+    events.sort(key=lambda e: (e["at"], _RANK[e["step"]], e["_n"]))
+    for e in events:
+        e.pop("_n", None)
+    lc = lifecycle(events, cfg)
+    for name, stamp in _NAME_OF_STEP:                     # the grid filled a name the history did not give
+        if lc[stamp] and not lc[name]:
+            lc[name] = r.get(name, "")
+    return {**r, **lc}
+
+
 def closing_day(r):
     """The day a finished request is filed under: its confirmation, else its rejection ("" while it is not finished)."""
     if r.get("stage") == "rejected" or (not r.get("confirmed_at") and r.get("rejected_at")):
@@ -346,12 +401,13 @@ def grid_key(item, occurrence=1):
 MAX_TRIES = 2                       # a row whose details failed this many times is left until its status moves
 
 
-def needs_details(item, index):
+def needs_details(item, index, cfg=None):
     """Open this row's details? Yes when the row is new, its status changed since the last read (the history only
     grows when the status moves), or it moved to another security user (a re-assignment keeps the status but starts a
-    new assignment). ``index`` = {grid key: {"id", "status", "holder", "day", "fail"}} kept with the recording. A
-    row that could not be read ``MAX_TRIES`` times in the same status waits until its status moves (so one broken row
-    never costs every scan a full wait)."""
+    new assignment). Also once when the grid shows it FINISHED but its record is not (read under older rules that
+    did not know that final state, e.g. «تم ارسال الرد»). ``index`` = {grid key: {"id", "status", "holder", "day",
+    "checked", "fail"}} kept with the recording. A row that could not be read ``MAX_TRIES`` times in the same status
+    waits until its status moves (so one broken row never costs every scan a full wait)."""
     known = (index or {}).get(item.get("key"))
     fail = (known or {}).get("fail") or {}
     if fail and int(fail.get("n") or 0) >= MAX_TRIES and _norm(fail.get("status")) == _norm(item.get("status")):
@@ -359,6 +415,9 @@ def needs_details(item, index):
     if not known or not known.get("id"):
         return True
     if _norm(known.get("status")) != _norm(item.get("status")):
+        return True
+    if (not known.get("day") and grid_stage(item.get("status"), cfg) in ("closed", "rejected")
+            and _norm(known.get("checked")) != _norm(item.get("status"))):
         return True
     # a re-assignment keeps the status but hands the request to another security user: its assignment time is new.
     # An entry read before holders were kept is read once more while the request is with a security user.
@@ -472,48 +531,76 @@ def fold_history(records, index, items, cfg, now, system_team=None):
             rec.update(lc)
             stats["updated"] += 1
             index[key] = {"id": rid, "status": _clean(g.get("status")), "holder": _clean(g.get("executor")),
-                          "day": closing_day(rec) if is_finished(rec) else ""}
+                          "day": closing_day(rec) if is_finished(rec) else "", "checked": _clean(g.get("status"))}
         else:
             stats["seen"] += 1
             index[key] = {"id": rid, "status": known.get("status", ""), "day": known.get("day", ""),
                           **({"holder": known["holder"]} if "holder" in known else {}),
+                          **({"checked": known["checked"]} if known.get("checked") else {}),
                           **({"fail": known["fail"]} if known.get("fail") else {})}
     return stats
 
 
 # ------------------------------------------------------------------------------------------------ right now
-def right_now(grid, open_records, index, cfg, now, keep=None):
-    """What is open / awaiting the reviewer RIGHT NOW, from the latest inquiry grid (complete: every listed request,
-    read or not). The time a request has been waiting comes from its exact history when its details were read for its
-    CURRENT stage; otherwise it is None ("not read yet") - never a guess. ``keep(row)`` narrows the rows (team, person,
+def right_now(grid, open_records, index, cfg, now, keep=None, live=None):
+    """What is open / awaiting the reviewer RIGHT NOW: every request the latest inquiry grid lists (read or not), plus
+    every live ticket of the Re-Assign page the grid does not list (``live``: the Live tickets tab's requests, already
+    limited to the viewer) - so the open count is complete. A request's age counts from its FIRST «اسناد لمستخدم
+    السرية» (like the Live tickets tab); ``holder_minutes`` = since the security user holding it got it. Ages come
+    from the exact history; a request whose history is not read yet has none ("not read yet") - never a guess. The
+    stage is taken from the CURRENT status with the current rules. ``keep(row)`` narrows the rows (team, person,
     exclusions)."""
     sla = int((cfg or {}).get("sla_minutes") or 180)
     open_now, awaiting_now, pre = [], [], 0
+    open_keys = {}                                       # (user number, system, request type) -> open entries
     for key, g in (grid or {}).items():
         if keep and not keep(g):
             continue
-        stage = g.get("stage")
+        stage = grid_stage(g.get("status"), cfg) if _clean(g.get("status")) else g.get("stage")
         entry = (index or {}).get(key) or {}
         rid = entry.get("id") or ""
         rec = (open_records or {}).get(rid) or {}
         # the record was read at this very stage, and with the security user who holds it now (a re-assignment keeps
-        # the status: its clock is not read yet - never shown as the previous holder's time)
+        # the status: the new holder's clock is not read yet - never shown as the previous holder's time)
         same = (bool(rec) and stage_of(rec) == stage
                 and ("holder" not in entry or _norm(entry.get("holder")) == _norm(g.get("holder"))))
+        first = (rec.get("first_assigned_at") or rec.get("assigned_at")) if rec and stage_of(rec) in ("open", "awaiting") else ""
+        request_m = _minutes(first, now) if first else None
         if stage == "pre":
             pre += 1
         elif stage == "open":
-            m = _minutes(rec.get("assigned_at"), now) if same else None
-            open_now.append({"id": rid, "holder": g.get("holder") or "", "system": g.get("system") or "",
-                             "requester": g.get("employee") or "", "assigned_at": rec.get("assigned_at", "") if same else "",
-                             "minutes": round(m, 1) if m is not None else None, "on_hold": bool(same and rec.get("on_hold")),
-                             "breached": m is not None and m > sla, "status": g.get("status") or ""})
+            held_m = _minutes(rec.get("assigned_at"), now) if same else None
+            item = {"id": rid, "holder": g.get("holder") or "", "system": g.get("system") or "",
+                    "requester": g.get("employee") or "", "request_type": g.get("request_type") or "",
+                    "first_assigned_at": first, "assigned_at": rec.get("assigned_at", "") if same else "",
+                    "minutes": round(request_m, 1) if request_m is not None else None,
+                    "holder_minutes": round(held_m, 1) if held_m is not None else None,
+                    "on_hold": bool(same and rec.get("on_hold")),
+                    "breached": request_m is not None and request_m > sla, "status": g.get("status") or "",
+                    "source": "inquiry"}
+            open_now.append(item)
+            open_keys.setdefault(_live_key_of_grid(g), []).append(item)
         elif stage == "awaiting":
             m = _minutes(rec.get("executed_at"), now) if same else None
+            work = _minutes(rec.get("assigned_at"), rec.get("executed_at")) if same else None
             awaiting_now.append({"id": rid, "executor": (rec.get("executor") if same else "") or g.get("holder") or "",
                                  "system": g.get("system") or "", "executed_at": rec.get("executed_at", "") if same else "",
                                  "minutes": round(m, 1) if m is not None else None,
+                                 "employee_minutes": round(work, 1) if work is not None else None,
+                                 "request_minutes": round(request_m, 1) if request_m is not None else None,
                                  "outcome": rec.get("exec_outcome", "") if same else ""})
+    live_only = 0
+    for req in _live_unlisted(live, open_keys):          # on the Re-Assign page, not (yet) on the inquiry grid
+        live_only += 1
+        fields = req.get("fields") or {}
+        first = req.get("assigned_at") if req.get("age_from") == "assignment" else ""
+        m = _minutes(first, now) if first else None
+        open_now.append({"id": "", "holder": req.get("security_user") or "",
+                         "system": _field(fields, "النظام"), "requester": _field(fields, "اسم الموظف"),
+                         "request_type": _field(fields, "نوع الطلب"), "first_assigned_at": first or "",
+                         "assigned_at": req.get("holder_since") or first or "", "sent_at": req.get("sent_at") or "",
+                         "minutes": round(m, 1) if m is not None else None, "holder_minutes": None, "on_hold": False,
+                         "breached": m is not None and m > sla, "status": "", "source": "live"})
     holders = {}
     for o in open_now:
         h = holders.setdefault(o["holder"] or "—", {"holder": o["holder"] or "—", "n": 0, "breached": 0, "on_hold": 0,
@@ -527,16 +614,69 @@ def right_now(grid, open_records, index, cfg, now, keep=None):
     ages = [o["minutes"] for o in open_now if o["minutes"] is not None]
     open_now.sort(key=lambda x: -(x["minutes"] if x["minutes"] is not None else -1))
     awaiting_now.sort(key=lambda x: -(x["minutes"] if x["minutes"] is not None else -1))
-    return {"now": {"open": len(open_now), "awaiting": len(awaiting_now), "pre": pre,
+    return {"now": {"open": len(open_now), "awaiting": len(awaiting_now), "pre": pre, "live_only": live_only,
                     "breached": sum(1 for o in open_now if o["breached"]),
                     "on_hold": sum(1 for o in open_now if o["on_hold"]),
                     "unread": sum(1 for o in open_now if o["minutes"] is None),
                     "oldest_minutes": round(max(ages), 1) if ages else None,
                     "by_holder": sorted(holders.values(), key=lambda x: (-x["breached"], -(x["oldest_minutes"] or 0), -x["n"]))},
-            "open_now": open_now[:300], "awaiting_now": awaiting_now[:300]}
+            "open_now": open_now[:1000], "awaiting_now": awaiting_now[:1000]}
 
 
-# ------------------------------------------------------------------- live tickets: the age from the last assignment
+def _field(fields, header):
+    want = _norm(header)
+    return next((_clean(v) for k, v in (fields or {}).items() if _norm(k) == want), "")
+
+
+def _live_key_of_grid(g):
+    return (_norm(g.get("user_no")), _norm(g.get("system")), _norm(g.get("request_type")))
+
+
+def _live_unlisted(live, open_keys):
+    """The live tickets (Re-Assign page) that match no OPEN row of the inquiry grid (same «رقم المستخدم», «النظام»,
+    «نوع الطلب»; each grid row matched once, the same security user first)."""
+    left = {k: list(v) for k, v in (open_keys or {}).items()}
+    out = []
+    for req in live or []:
+        key = tuple(_live_field(req, k) for k in ("user_no", "system", "request_type"))
+        cands = left.get(key) or []
+        if key[0] and cands:
+            same = next((c for c in cands if _norm(c["holder"]) == _norm(req.get("security_user"))), cands[0])
+            cands.remove(same)
+            continue
+        out.append(req)
+    return out
+
+
+def grid_stubs(grid, index, records, cfg=None):
+    """The requests the latest inquiry grid lists with the security team (assigned, awaiting the reviewer, confirmed or
+    rejected) whose status history is not read yet, as records without stamps: so the SLA Analysis counts EVERY
+    request the portal lists, not only the ones read so far. Their stage and outcome come from the grid's status;
+    they have no clock until their history is read. Keyed "grid:<key>"; a row already read (its request number is
+    in the index) is never added twice."""
+    out = {}
+    for key, g in (grid or {}).items():
+        entry = (index or {}).get(key) or {}
+        if entry.get("id"):
+            continue
+        stage = grid_stage(g.get("status"), cfg) if _clean(g.get("status")) else g.get("stage")
+        if stage not in ("open", "awaiting", "closed", "rejected"):
+            continue
+        step = step_of(g.get("status"), cfg)
+        outcome = ("not_done" if step == "confirmed_not" else "completed") if stage == "closed" else (
+            "rejected" if stage == "rejected" else "in_progress")
+        out[f"grid:{key}"] = {
+            "id": f"grid:{key}", "source": SOURCE, "unread": True, "stage": stage, "outcome": outcome,
+            "final_outcome": ("not_executed" if step == "confirmed_not" else "executed") if stage == "closed" else "",
+            "request_date": _day(g.get("request_date")), "system": g.get("system") or "", "team": g.get("team") or "",
+            "teams": [g.get("team")] if g.get("team") else [], "holder": g.get("holder") or "",
+            "checker": g.get("checker") or "", "requester": g.get("employee") or "",
+            "request_type": g.get("request_type") or "", "user_no": g.get("user_no") or "",
+            "grid_status": g.get("status") or "", "grid_key": key}
+    return out
+
+
+# ------------------------------------------------------------------- live tickets: the age from the first assignment
 LIVE_FIELDS = {"user_no": "رقم المستخدم", "system": "النظام", "request_type": "نوع الطلب"}
 
 
@@ -584,15 +724,18 @@ def _stamp_sort(stamp):
 
 
 def apply_assignment_ages(requests, open_records, now, warn, breach):
-    """Age every live request from its LAST assignment to the security user holding it (``match_live_requests``), not
-    from the day it was sent to the team: sets ``assigned_at``, ``age_from`` ("assignment" / "sent"), ``age_minutes`` and
-    ``status`` (within / reminder / breached / no_date). Without a match the sent date stays the clock. Returns how many
-    were matched."""
+    """Age every live request from its FIRST «اسناد لمستخدم السرية» (``match_live_requests``; the owner's rule: the
+    request's age starts when it was first assigned to a security user), not from the day it was sent to the team:
+    sets ``assigned_at`` (that first assignment), ``holder_since`` (when the security user holding it now got it, if
+    later - a re-assignment), ``age_from`` ("assignment" / "sent"), ``age_minutes`` and ``status`` (within / reminder /
+    breached / no_date). Without a match the sent date stays the clock. Returns how many were matched."""
     from . import schemas
     matched = match_live_requests(requests, open_records)
     for r in requests or []:
         rec = matched.get(r.get("key"))
-        start = parse_time(rec.get("assigned_at")) if rec else None
+        start = parse_time(rec.get("first_assigned_at") or rec.get("assigned_at")) if rec else None
+        holder = parse_time(rec.get("assigned_at")) if rec else None
+        r["holder_since"] = holder.strftime(_FMT) if holder is not None and start is not None and holder > start else None
         if start is not None:
             r["assigned_at"], r["age_from"] = start.strftime(_FMT), "assignment"
         else:
@@ -620,7 +763,7 @@ def portal_comparison(grid, index, date_from="", date_to="", cfg=None):
             continue
         if (dfrom and day < dfrom) or (dto and day > dto):
             continue
-        stage = g.get("stage") or grid_stage(g.get("status"), cfg)
+        stage = grid_stage(g.get("status"), cfg) if _clean(g.get("status")) else g.get("stage")
         out["rows"] += 1
         if stage == "pre":
             out["with_branch"] += 1
@@ -874,9 +1017,12 @@ def analyze(records, cfg, now=None, list_limit=REQUEST_LIST_LIMIT, period=None):
                 stage_values[key].append(value)
         result = outcome_of(r)
         outcomes[result] = outcomes.get(result, 0) + 1
+        unread = bool(r.get("unread"))                  # listed by the portal, its history not read yet: no times
         for key, field in (("registered", "registered_at"), ("branch_confirmed", "branch_confirmed_at"),
                            ("assigned", "first_assigned_at"), ("executed", "executed_at"), ("confirmed", "confirmed_at")):
-            funnel[key] += bool(r.get(field) or (key == "assigned" and assigned))
+            funnel[key] += bool(r.get(field) or (key == "assigned" and assigned)) or (unread and (
+                key in ("registered", "assigned") or (key == "executed" and stage in ("awaiting", "closed"))
+                or (key == "confirmed" and stage == "closed")))
         returned_n += bool(r.get("returned"))
         reassigned_n += bool(r.get("reassigned"))
         region_n += bool(r.get("region_approved_at"))
@@ -892,12 +1038,13 @@ def analyze(records, cfg, now=None, list_limit=REQUEST_LIST_LIMIT, period=None):
             m = _minutes(assigned, executed)
             emp.add(r.get("exec_outcome"), m, sla)
             by_exec.setdefault(r.get("executor") or "—", _Agg()).add(r.get("exec_outcome"), m, sla)
-        if confirmed:
+        if confirmed or (unread and stage == "closed"):
             outcome = r.get("final_outcome")
-            mgr_m = _minutes(executed, confirmed) if executed else None
-            mgr.add(outcome, mgr_m, sla)
-            by_check.setdefault(r.get("checker") or "—", _Agg()).add(outcome, mgr_m, sla)
-            full = _minutes(first, confirmed)
+            if confirmed:
+                mgr_m = _minutes(executed, confirmed) if executed else None
+                mgr.add(outcome, mgr_m, sla)
+                by_check.setdefault(r.get("checker") or "—", _Agg()).add(outcome, mgr_m, sla)
+            full = _minutes(first, confirmed) if confirmed else None
             overall.add(outcome, full, sla)
             by_team.setdefault(r.get("team") or "—", _Agg()).add(outcome, full, sla)
             by_system.setdefault(r.get("system") or "—", _Agg()).add(outcome, full, sla)
@@ -908,14 +1055,13 @@ def analyze(records, cfg, now=None, list_limit=REQUEST_LIST_LIMIT, period=None):
             first_day = day if first_day is None or day < first_day else first_day
             last_day = day if last_day is None or day > last_day else last_day
         # the request's line in the period's list, and what needs a look (worst first)
-        live = None
-        if now and stage == "open":
-            live = _minutes(assigned, now)
-        elif now and stage == "awaiting":
-            live = _minutes(executed, now)
+        live = None                                       # the whole request so far: from its first assignment
+        if now and stage in ("open", "awaiting") and first:
+            live = _minutes(first, now)
         worst = max(((k, v / targets[k]) for k, v in mins.items() if v is not None and k in JOURNEY and targets.get(k)),
                     key=lambda kv: kv[1], default=(None, 0))
-        line = {"id": r.get("id"), "stage": stage, "outcome": result, "request_date": r.get("request_date", ""),
+        line = {"id": "" if unread else r.get("id"), "unread": unread, "stage": stage, "outcome": result,
+                "request_date": r.get("request_date", ""),
                 "branch": r.get("branch", ""), "requester": r.get("requester", ""), "requester_no": r.get("requester_no", ""),
                 "system": r.get("system", ""), "team": r.get("team", ""), "request_type": r.get("request_type", ""),
                 "assigner": r.get("assigner", ""), "executor": r.get("executor") or r.get("holder") or "",

@@ -232,6 +232,10 @@
     confirmed_executed: "Confirmed (executed)", confirmed_not: "Confirmed (not executed)", rejected: "Rejected",
     transferred: "Transferred" };
   async function openRequest(row) {
+    if (!row.id) {
+      CL.toast(row.unread ? "This request's status history is read at the next scan." : "Open it from the Live tickets tab.", "info");
+      return;
+    }
     let d;
     try {
       const q = new URLSearchParams({ id: row.id || "" });
@@ -375,19 +379,29 @@
 
   function openTable(rows, sla) {
     rows = rows || [];
+    const sentAgo = (r) => {                               // the Live tickets tab's own clock, for a request not read yet
+      const t = Date.parse(String(r.sent_at || "").slice(0, 19)), now = Date.parse(String((state.analysis || {}).server_time || "").slice(0, 19));
+      return Number.isNaN(t) || Number.isNaN(now) ? null : Math.max(0, Math.round((now - t) / 60000));
+    };
+    const notRead = (r) => {
+      const ago = r.sent_at ? sentAgo(r) : null;
+      return h("span", { class: "hint", title: "Its status history is read at the next scan; until then the Live tickets tab counts it from «تاريخ الارسال للسرية»" },
+        ago == null ? "not read yet" : `not read yet · sent ${fmtMin(ago)} ago`);
+    };
     return OPS.table({
-      search: rows.length > 12, copy: true, pageSize: 12, pageSizes: [12, 25, 100], caption: "Open requests, longest waiting first",
+      search: rows.length > 12, copy: true, pageSize: 12, pageSizes: [12, 25, 100], caption: "Open requests, oldest first",
       sort: { key: "minutes", desc: true },
       columns: [
-        { key: "id", label: "Request", sort: true, render: (r) => String(r.id), text: (r) => String(r.id) },
+        { key: "id", label: "Request", sort: true, render: (r) => String(r.id || "—"), text: (r) => String(r.id || "") },
         { key: "holder", label: "Security user", sort: true, render: (r) => h("span", { dir: "auto" }, r.holder || "—"), text: (r) => r.holder || "" },
         { key: "system", label: "System", sort: true, render: (r) => h("span", { dir: "auto" }, r.system || "—"), text: (r) => r.system || "" },
         { key: "requester", label: "Requester", sort: true, render: (r) => h("span", { dir: "auto" }, r.requester || "—"), text: (r) => r.requester || "" },
-        { key: "assigned_at", label: "Assigned", sort: true, render: (r) => fmtStamp(r.assigned_at), text: (r) => r.assigned_at || "" },
-        { key: "minutes", label: "Waiting", num: true, sort: true,
-          render: (r) => (r.minutes == null ? h("span", { class: "hint", title: "Its status history is read at the next scan" }, "not read yet")
-            : r.minutes > sla ? OPS.chip(fmtMin(r.minutes), "danger") : fmtMin(r.minutes)) },
-        { key: "on_hold", label: "", sort: false, render: (r) => (r.on_hold ? OPS.chip("on hold", "warn") : "") },
+        { key: "first_assigned_at", label: "First assigned", sort: true, render: (r) => fmtStamp(r.first_assigned_at), text: (r) => r.first_assigned_at || "" },
+        { key: "minutes", label: "Request age", num: true, sort: true,
+          render: (r) => (r.minutes == null ? notRead(r) : r.minutes > sla ? OPS.chip(fmtMin(r.minutes), "danger") : fmtMin(r.minutes)) },
+        { key: "holder_minutes", label: "With this user", num: true, sort: true,
+          render: (r) => (r.holder_minutes == null ? "—" : fmtMin(r.holder_minutes)) },
+        { key: "on_hold", label: "", sort: false, render: (r) => (r.on_hold ? OPS.chip("on hold", "warn") : r.source === "live" ? OPS.chip("Live tickets", "info") : "") },
       ], rows,
     }).el;
   }
@@ -399,29 +413,31 @@
         h("p", { class: "hint" }, "No request is open with a security user and none is waiting for the reviewer."));
     }
     const kpis = h("div", { class: "sx-kpis" },
-      OPS.kpi({ key: "an-open", label: "Open now", value: fmtNum(N.open || 0), sub: N.unread ? `with the security user · ${fmtNum(N.unread)} read at the next scan` : "with the security user (مستخدم السرية)", icon: "clock", hero: true }),
+      OPS.kpi({ key: "an-open", label: "Open now", value: fmtNum(N.open || 0), sub: N.unread ? `every open request · ${fmtNum(N.unread)} read at the next scan` : "every open request with a security user (مستخدم السرية)", icon: "clock", hero: true }),
       OPS.kpi({ key: "an-await-now", label: "Awaiting the reviewer", value: fmtNum(N.awaiting || 0), sub: "executed · not confirmed yet (مراجع السرية)", tone: N.awaiting ? "warn" : null, icon: "alert" }),
       OPS.kpi({ key: "an-past", label: `Past ${fmtMin(sla)}`, value: fmtNum(N.breached || 0), sub: "open longer than the SLA target", tone: N.breached ? "danger" : null, icon: "shield" }),
       OPS.kpi({ key: "an-hold", label: "On hold", value: fmtNum(N.on_hold || 0), sub: "«معلق» right now", icon: "clock" }),
-      OPS.kpi({ key: "an-oldest", label: "Oldest open", value: fmtMin(N.oldest_minutes), sub: "waiting the longest", tone: (N.oldest_minutes != null && N.oldest_minutes > sla) ? "danger" : null, icon: "clock" }),
+      OPS.kpi({ key: "an-oldest", label: "Oldest open", value: fmtMin(N.oldest_minutes), sub: "since its first «اسناد لمستخدم السرية»", tone: (N.oldest_minutes != null && N.oldest_minutes > sla) ? "danger" : null, icon: "clock" }),
       OPS.kpi({ key: "an-pre", label: "With the branch", value: fmtNum(N.pre || 0), sub: "registered · not assigned yet", icon: "user" }));
     const parts = [kpis];
     if (N.open) {
-      parts.push(h("div", { class: "sx-two" },
-        OPS.card("By security user (open)", { hint: "مستخدم السرية · who holds the open requests now" }, holderTable(N.by_holder)),
-        OPS.card("Open requests", { hint: "longest waiting first" }, openTable(d.open_now, sla))));
+      parts.push(OPS.card("By security user (open)", { hint: "مستخدم السرية · who holds the open requests now" }, holderTable(N.by_holder)),
+        OPS.card("Open requests", { hint: N.live_only ? `oldest first · ${fmtNum(N.live_only)} only on the Live tickets tab so far` : "oldest first · age since the first «اسناد لمستخدم السرية»" },
+          openTable(d.open_now, sla)));
     }
     if ((d.awaiting_now || []).length) {
       parts.push(OPS.card("Awaiting the reviewer", { hint: "مراجع السرية · executed, waiting for «تم التعزيز»" }, OPS.table({
         search: d.awaiting_now.length > 12, copy: true, pageSize: 12, pageSizes: [12, 25, 100], caption: "Executed requests waiting for confirmation",
         sort: { key: "minutes", desc: true },
         columns: [
-          { key: "id", label: "Request", sort: true, render: (r) => String(r.id), text: (r) => String(r.id) },
+          { key: "id", label: "Request", sort: true, render: (r) => String(r.id || "—"), text: (r) => String(r.id || "") },
           { key: "executor", label: "Executed by", sort: true, render: (r) => h("span", { dir: "auto" }, r.executor || "—"), text: (r) => r.executor || "" },
           { key: "system", label: "System", sort: true, render: (r) => h("span", { dir: "auto" }, r.system || "—"), text: (r) => r.system || "" },
           { key: "executed_at", label: "Executed", sort: true, render: (r) => fmtStamp(r.executed_at), text: (r) => r.executed_at || "" },
           { key: "outcome", label: "Outcome", sort: true, render: (r) => (r.outcome === "not_executed" ? OPS.chip("not executed", "warn") : r.outcome ? OPS.chip("executed", "ok") : "—"), text: (r) => r.outcome || "" },
-          { key: "minutes", label: "Waiting", num: true, sort: true, render: (r) => (r.minutes == null ? h("span", { class: "hint" }, "not read yet") : fmtMin(r.minutes)) },
+          { key: "employee_minutes", label: "Security user", num: true, sort: true, render: (r) => (r.employee_minutes == null ? "—" : fmtMin(r.employee_minutes)) },
+          { key: "minutes", label: "Waiting for the reviewer", num: true, sort: true, render: (r) => (r.minutes == null ? h("span", { class: "hint" }, "not read yet") : fmtMin(r.minutes)) },
+          { key: "request_minutes", label: "Request age", num: true, sort: true, render: (r) => (r.request_minutes == null ? "—" : fmtMin(r.request_minutes)) },
         ], rows: d.awaiting_now,
       }).el));
     }
@@ -518,7 +534,7 @@
     const slaTone = !timed ? null : o.sla_pct >= 80 ? "ok" : o.sla_pct >= 50 ? "warn" : "danger";
     const slaH = Math.round(m.sla_minutes / 60 * 10) / 10;
     const kpis = h("div", { class: "sx-kpis" },
-      OPS.kpi({ key: "an-closed", label: "Closed", value: fmtNum(b.closed || 0), sub: "confirmed by the reviewer in this period", icon: "check", hero: true }),
+      OPS.kpi({ key: "an-closed", label: "Closed", value: fmtNum(b.closed || 0), sub: m.unread ? `confirmed · ${fmtNum(m.unread)} request(s) of this period not read yet: counted, times follow` : "confirmed by the reviewer in this period", icon: "check", hero: true }),
       OPS.kpi({ key: "an-within", label: `Within ${slaH} h SLA`, value: timed ? OPS.fmtPct(o.sla_pct) : "—",
         sub: timed ? `median ${fmtMin(o.median_minutes)} · assignment → confirmation` : "no closed request yet", tone: slaTone, icon: "shield" }),
       OPS.kpi({ key: "an-exec", label: "Executed", value: fmtNum(o.executed || 0), sub: b.closed ? `${OPS.fmtPct(o.executed_pct)} of the closed` : "«تم التعزيز على التنفيذ»", tone: "ok", icon: "check" }),

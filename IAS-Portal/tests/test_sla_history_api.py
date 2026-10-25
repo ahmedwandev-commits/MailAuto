@@ -59,12 +59,14 @@ def no_third_party(admin):  # noqa: F811
 
 
 def test_a_request_counts_on_the_day_it_was_assigned_however_late_it_closed(no_third_party, history):
-    """9 October: the request closed the same day, the one closed on the 10th (its closing-day file is read too) and
-    the one still open - not the one assigned the day before, and never Third Party."""
+    """9 October: the request closed the same day, the one closed on the 10th (its closing-day file is read too), the
+    one still open and the rejected one the portal lists but whose history is not read yet (counted, without times) -
+    not the one assigned the day before, and never Third Party."""
     body = no_third_party.get("/api/ops/sla-analysis?from=2026-10-09&to=2026-10-09").get_json()
     assert body["available"] is True
-    assert body["meta"]["requests"] == 3
-    assert body["buckets"]["closed"] == 2 and body["buckets"]["open"] == 1
+    assert body["meta"]["requests"] == 4 and body["meta"]["unread"] == 1
+    assert body["buckets"]["closed"] == 2 and body["buckets"]["open"] == 1 and body["buckets"]["rejected"] == 1
+    assert body["outcomes"]["rejected"] == 1
     assert [d["date"] for d in body["by_day"]] == ["2026-10-09"]
     ten = no_third_party.get("/api/ops/sla-analysis?from=2026-10-10&to=2026-10-10").get_json()
     assert ten["meta"]["requests"] == 0                        # nothing was ASSIGNED on the 10th
@@ -85,3 +87,20 @@ def test_a_manager_compares_only_their_own_team(flex_mgr, history, admin):  # no
     assert {k: v for k, v in mine.items() if k != "last_read"} == {
         "rows": 5, "with_security": 3, "closed": 2, "with_branch": 1, "rejected": 1, "read": 3, "not_read": 1}
     assert admin.get("/api/ops/sla-analysis?from=2026-10-09&to=2026-10-09").get_json()["portal"]["rows"] == 6
+
+
+def test_right_now_lists_every_open_live_ticket_and_counts_the_unread_requests(no_third_party, history):
+    """«Open now» is complete: a Live ticket (Re-Assign page) the inquiry grid does not list is in it too, aged from
+    its first assignment; a Third Party ticket never is."""
+    from tests.test_ops_api import put_snapshot
+    tickets = [{"key": "old", "security_user": "مستخدم ثان", "sent_at": "2026-10-01T08:00:00",
+                "assigned_at": "2026-10-01T09:00:00", "age_from": "assignment", "status": "breached",
+                "fields": {"رقم المستخدم": "700399", "النظام": "Flexcube", "نوع الطلب": "حذف", "اسم الموظف": "موظف"}},
+               {"key": "tp", "security_user": "مستخدم ثان", "sent_at": "2026-10-01T08:00:00", "status": "breached",
+                "fields": {"رقم المستخدم": "700398", "النظام": "TP App", "نوع الطلب": "حذف"}}]
+    put_snapshot(history, "sla", {"requests": tickets, "totals": {}, "by_user": [], "thresholds": {}})
+    body = no_third_party.get("/api/ops/sla-analysis?from=2026-10-09&to=2026-10-09").get_json()
+    live = [o for o in body["open_now"] if o["source"] == "live"]
+    assert body["now"]["live_only"] == 1 and len(live) == 1 and live[0]["holder"] == "مستخدم ثان"
+    assert live[0]["first_assigned_at"] == "2026-10-01T09:00:00" and live[0]["breached"]
+    assert body["now"]["open"] == 2                                       # the grid's open row and the old ticket

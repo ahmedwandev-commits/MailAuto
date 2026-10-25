@@ -57,7 +57,7 @@ def default_config():
             "returned": ["مطلوب تعديل"],                              # sent back to the branch to be corrected
             "executed": ["تم التنفيذ"],                               # employee ran it
             "not_executed": ["لم يتم التنفيذ"],                        # employee could not run it
-            "confirmed_executed": ["تم التعزيز على التنفيذ", "تم تسليم الرد",
+            "confirmed_executed": ["تم التعزيز على التنفيذ", "تم تسليم الرد", "تم ارسال الرد",
                                    "تم ارسال كلمة المرور عن طريق ال SMS", "تم اعادة ارسال كلمة المرور عن طريق ال SMS"],
             "confirmed_not": ["تم التعزيز على عدم التنفيذ"],            # manager confirmed it was not executed
             "rejected": ["رفض", "مرفوض"],                             # rejected: the request ends without execution

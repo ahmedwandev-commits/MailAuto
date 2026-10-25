@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """The SLA history (calllog/ops/sla_history.py): the inquiry grid, when a request's status history is read again, the
-period a request belongs to, the live age of an open ticket from its LAST assignment, and the comparison with the
-portal's own inquiry results. Made-up data only."""
+period a request belongs to, the live age of an open ticket from its FIRST «اسناد لمستخدم السرية», which statuses
+are steps (and which end a request), and the comparison with the portal's own inquiry results. Made-up data only."""
 from calllog.ops import sla_history as sh
 from calllog.ops import sla_records
 
@@ -42,7 +42,7 @@ def test_a_reassigned_request_is_read_again_although_its_status_is_the_same():
     index[item["key"]].pop("holder")                              # read before holders were kept: once more if open
     assert sh.needs_details(item, index) is True
     closed = sh.grid_rows(HEAD, [grid_row(status="تم التعزيز على التنفيذ")])[0]
-    assert sh.needs_details(closed, {closed["key"]: {"id": "R2", "status": "تم التعزيز على التنفيذ"}}) is False
+    assert sh.needs_details(closed, {closed["key"]: {"id": "R2", "status": "تم التعزيز على التنفيذ", "day": "2026-10-20"}}) is False
 
 
 def test_the_recording_keeps_the_user_number_and_who_held_the_request_when_it_was_read():
@@ -56,14 +56,18 @@ def test_the_recording_keeps_the_user_number_and_who_held_the_request_when_it_wa
 
 
 def test_right_now_never_shows_the_previous_holders_clock():
+    """The request's age counts from its FIRST assignment whoever holds it; the time with the security user holding
+    it now is only shown once their assignment is read (never the previous holder's)."""
     item = sh.grid_rows(HEAD, [grid_row(executor="مستخدم ثان")])[0]
     grid = sh.grid_state([item], {}, "2026-10-20T10:00:00", CFG)
     index = {item["key"]: {"id": "R1", "status": "اسناد لمستخدم السرية", "holder": "مستخدم اول"}}
-    open_recs = {"R1": {"id": "R1", "stage": "open", "assigned_at": "2026-10-20T08:00:00", "holder": "مستخدم ثان"}}
-    now = sh.right_now(grid, open_recs, index, CFG, "2026-10-20T10:00:00")
-    assert now["open_now"][0]["minutes"] is None and now["now"]["unread"] == 1
+    open_recs = {"R1": {"id": "R1", "stage": "open", "first_assigned_at": "2026-10-20T07:00:00",
+                        "assigned_at": "2026-10-20T08:00:00", "holder": "مستخدم ثان"}}
+    row = sh.right_now(grid, open_recs, index, CFG, "2026-10-20T10:00:00")["open_now"][0]
+    assert row["minutes"] == 180.0 and row["holder_minutes"] is None and row["first_assigned_at"] == "2026-10-20T07:00:00"
     index[item["key"]]["holder"] = "مستخدم ثان"
-    assert sh.right_now(grid, open_recs, index, CFG, "2026-10-20T10:00:00")["open_now"][0]["minutes"] == 120.0
+    row = sh.right_now(grid, open_recs, index, CFG, "2026-10-20T10:00:00")["open_now"][0]
+    assert row["minutes"] == 180.0 and row["holder_minutes"] == 120.0
 
 
 # ------------------------------------------------------------------------------- the period: the assignment day
@@ -92,7 +96,7 @@ def test_the_by_day_table_counts_a_request_on_its_assignment_day():
     assert out["meta"]["date_from"] == out["meta"]["date_to"] == "2026-10-19"
 
 
-# ------------------------------------------------------------------------- live tickets: the last assignment
+# ------------------------------------------------------------------------- live tickets: the first assignment
 def live(key, user_no, system, request_type, holder, sent="2026-10-19T08:00:00"):
     return {"key": key, "security_user": holder, "sent_at": sent,
             "fields": {"رقم المستخدم": user_no, "النظام": system, "نوع الطلب": request_type}}
@@ -114,7 +118,7 @@ def test_a_live_ticket_is_matched_to_its_open_history_and_prefers_the_current_ho
     assert {k: v["id"] for k, v in got.items()} == {"a": "R2", "b": "R1"}
 
 
-def test_live_ages_come_from_the_last_assignment_else_the_sent_date():
+def test_live_ages_come_from_the_assignment_else_the_sent_date():
     from datetime import datetime
     open_recs = {"R1": {"id": "R1", "stage": "open", "user_no": "700301", "system": "Flexcube",
                         "request_type": "اضافة صلاحية", "holder": "مستخدم اول", "assigned_at": "2026-10-21T08:30:00"}}
@@ -192,3 +196,107 @@ def test_requests_with_a_security_user_are_read_first_so_their_live_clock_is_exa
     order = [sh.detail_priority(s, CFG) for s in ("اسناد لمستخدم السرية", "معلق", "تم التنفيذ",
                                                   "تم التعزيز على التنفيذ", "رفض", "تسجيل")]
     assert order[0] == order[1] < order[2] < order[3] < order[4] and order[5] is None
+
+
+# --------------------------------------------------- the owner's clocks: the request from its FIRST assignment
+def test_a_live_ticket_ages_from_its_first_assignment_and_says_since_when_the_holder_has_it():
+    """The owner's rule: a request's age starts at its first «اسناد لمستخدم السرية», also after a re-assignment; the
+    time the security user holding it now got it is kept as ``holder_since``."""
+    from datetime import datetime
+    open_recs = {"R1": {"id": "R1", "stage": "open", "user_no": "700301", "system": "Flexcube",
+                        "request_type": "اضافة صلاحية", "holder": "مستخدم ثان",
+                        "first_assigned_at": "2026-10-21T07:00:00", "assigned_at": "2026-10-21T08:30:00"}}
+    reqs = [live("a", "700301", "Flexcube", "اضافة صلاحية", "مستخدم ثان", sent="2026-10-20T08:00:00")]
+    sh.apply_assignment_ages(reqs, open_recs, datetime(2026, 10, 21, 9, 0), warn=60, breach=120)
+    assert reqs[0]["assigned_at"] == "2026-10-21T07:00:00" and reqs[0]["holder_since"] == "2026-10-21T08:30:00"
+    assert reqs[0]["age_minutes"] == 120 and reqs[0]["status"] == "breached"
+
+
+def _history(*lines):
+    return sh.events_from_table(HISTORY_HEAD, [["7005%02d" % i, "مستخدم %d" % i, "", at, status, ""]
+                                               for i, (at, status) in enumerate(lines)], CFG_OLD)
+
+
+# NBE OpsHub's saved settings listed «قيد الإجراء» as an assignment (the migrated sla_records.json still does)
+CFG_OLD = sla_records.clean_config({"statuses": {"assigned": ["اسناد لمستخدم السرية", "قيد الإجراء"]}})
+
+
+def test_in_progress_is_never_an_assignment_even_in_old_saved_settings():
+    """The security user's clock runs from «اسناد لمستخدم السرية» to «تم التنفيذ»: a «قيد الإجراء» line in between must
+    not restart it, although the settings migrated from NBE OpsHub list it under the assignment."""
+    assert sh.step_of("قيد الإجراء", CFG_OLD) is None and sh.step_of("تحت التنفيذ", CFG_OLD) is None
+    lc = sh.lifecycle(_history(("21/10/2026 08:00:00", "اسناد لمستخدم السرية"), ("21/10/2026 09:30:00", "قيد الإجراء"),
+                               ("21/10/2026 10:00:00", "تم التنفيذ"), ("21/10/2026 10:30:00", "تم التعزيز على التنفيذ")),
+                      CFG_OLD)
+    minutes = sh.stage_minutes(lc)
+    assert lc["assigned_at"] == "2026-10-21T08:00:00" and minutes["work"] == 120.0 and minutes["sla"] == 150.0
+
+
+def test_every_final_state_ends_the_request_whatever_its_wording():
+    """The whole request runs from the first assignment to its final state: the reviewer's confirmation (executed or
+    not) or the reply / password sent - in the settings' words or the portal's others."""
+    for status in ("تم التعزيز على التنفيذ", "تم تسليم الرد", "تم ارسال الرد", "تم الارسال عن طريق ال SMS",
+                   "تم ارسال كلمة المرور عن طريق ال sms", "تم اعادة ارسال كلمة المرور عن طريق ال SMS"):
+        assert sh.step_of(status, CFG_OLD) == "confirmed_executed", status
+        assert sh.grid_stage(status, CFG_OLD) == "closed", status
+    assert sh.step_of("تم التعزيز علي عدم التنفيذ", CFG_OLD) == "confirmed_not"
+    for status in ("تم التعزيز من قبل مشرف الفرع", "تم التنفيذ", "لم يتم التنفيذ", "اسناد لمستخدم السرية", "مطلوب تعديل"):
+        assert sh.step_of(status, CFG_OLD) not in ("confirmed_executed", "confirmed_not"), status
+    lc = sh.lifecycle(_history(("21/10/2026 08:00:00", "اسناد لمستخدم السرية"), ("21/10/2026 09:00:00", "تم ارسال الرد")),
+                      CFG_OLD)
+    assert lc["stage"] == "closed" and lc["confirmed_at"] == "2026-10-21T09:00:00" and sh.stage_minutes(lc)["sla"] == 60.0
+
+
+def test_a_record_read_under_the_old_rules_is_corrected_from_its_timeline():
+    """A request recorded while «قيد الإجراء» counted as an assignment gets its clocks again from its kept timeline."""
+    wrong = sla_records.default_config()
+    wrong["statuses"]["in_progress"] = ["تحت التنفيذ"]                    # the old rules: «قيد الإجراء» assigns
+    wrong["statuses"]["assigned"] = ["اسناد لمستخدم السرية", "قيد الإجراء"]
+    lines = [("21/10/2026 08:00:00", "اسناد لمستخدم السرية"), ("21/10/2026 09:30:00", "قيد الإجراء"),
+             ("21/10/2026 10:00:00", "تم التنفيذ")]
+    events = sh.events_from_table(HISTORY_HEAD, [["7005%02d" % i, "م", "", at, st, ""] for i, (at, st) in enumerate(lines)],
+                                  wrong)
+    rec = {"id": "R1", "source": sh.SOURCE, **sh.lifecycle(events, wrong)}
+    assert rec["assigned_at"] == "2026-10-21T09:30:00"                      # what the old rules recorded
+    fixed = sh.rederive(rec, CFG)
+    assert fixed["assigned_at"] == "2026-10-21T08:00:00" and sh.stage_minutes(fixed)["work"] == 120.0
+    assert sh.rederive(fixed, CFG) is fixed                                 # nothing left to correct
+
+
+def test_a_row_the_grid_shows_finished_is_read_again_once_when_its_record_is_not():
+    item = sh.grid_rows(HEAD, [grid_row(status="تم ارسال الرد")])[0]
+    index = {item["key"]: {"id": "R1", "status": "تم ارسال الرد", "day": ""}}
+    assert sh.needs_details(item, index, CFG) is True                       # recorded before «تم ارسال الرد» was final
+    index[item["key"]]["checked"] = "تم ارسال الرد"
+    assert sh.needs_details(item, index, CFG) is False                      # read once at this status: not again
+    index[item["key"]] = {"id": "R1", "status": "تم ارسال الرد", "day": "2026-10-21"}
+    assert sh.needs_details(item, index, CFG) is False                      # closed in its record: nothing to do
+
+
+def test_the_analysis_counts_the_requests_the_portal_lists_before_their_history_is_read():
+    rows = [grid_row(status="اسناد لمستخدم السرية"), grid_row(status="تم التنفيذ", user_no="700302"),
+            grid_row(status="تم ارسال الرد", user_no="700303"), grid_row(status="رفض", user_no="700304"),
+            grid_row(status="تسجيل", user_no="700305"), grid_row(status="تم التعزيز على التنفيذ", user_no="700306")]
+    items = sh.grid_rows(HEAD, rows)
+    grid = sh.grid_state(items, {}, "2026-10-21T09:00:00", CFG)
+    index = {items[5]["key"]: {"id": "R6"}}                                 # read: it is a record, not a stub
+    stubs = sh.grid_stubs(grid, index, {}, CFG)
+    assert len(stubs) == 4                                                  # the branch-only row has no SLA yet
+    a = sh.analyze(stubs, CFG, now="2026-10-21T09:00:00")
+    assert a["meta"]["requests"] == 4 and a["buckets"] == {"pre": 0, "open": 1, "awaiting": 1, "closed": 1, "rejected": 1}
+    assert a["overall"]["n"] == 1 and a["overall"]["measured"] == 0         # counted, no clock until it is read
+    assert all(line["id"] == "" and line["unread"] for line in a["requests_list"])
+
+
+def test_right_now_lists_every_live_ticket_even_the_ones_the_inquiry_does_not():
+    """«Open now» is complete: the inquiry grid's open rows plus every Live ticket (Re-Assign page) they do not list -
+    each ticket once."""
+    items = sh.grid_rows(HEAD, [grid_row(status="اسناد لمستخدم السرية")])
+    grid = sh.grid_state(items, {}, "2026-10-21T09:00:00", CFG)
+    tickets = [live("a", "700301", "Flexcube", "اضافة صلاحية", "مستخدم اول"),       # the grid's row: counted once
+               dict(live("b", "700399", "T24", "حذف", "مستخدم ثان", sent="2026-10-14T08:00:00"),
+                    assigned_at="2026-10-14T09:00:00", age_from="assignment")]   # older than the inquiry window
+    out = sh.right_now(grid, {}, {}, CFG, "2026-10-21T09:00:00", live=tickets)
+    assert out["now"]["open"] == 2 and out["now"]["live_only"] == 1
+    older = next(o for o in out["open_now"] if o["source"] == "live")
+    assert older["holder"] == "مستخدم ثان" and older["minutes"] == 10080.0 and older["breached"]

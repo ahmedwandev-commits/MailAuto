@@ -580,20 +580,22 @@ def test_sla_ages_follow_the_server_clock_between_scans(tab, hub, clock):
     t.clean()
 
 
-def test_a_live_ticket_is_aged_from_its_last_assignment_and_says_so(ops, tab, hub, clock):
-    """The scan matched k003 to its SLA history: it was re-assigned 20 minutes ago, so its clock starts there, not at
-    «تاريخ الارسال للسرية» 125 minutes ago; a request the history has not read still counts from its sent date."""
+def test_a_live_ticket_is_aged_from_its_first_assignment_and_says_so(ops, tab, hub, clock):
+    """The scan matched k003 to its SLA history: it was first assigned 20 minutes ago, so its clock starts there, not
+    at «تاريخ الارسال للسرية» 125 minutes ago, and it says since when the user holding it now has it (re-assigned 10
+    minutes ago); a request the history has not read still counts from its sent date."""
     snap = sla_snapshot()
     k003 = next(r for r in snap["requests"] if r["key"] == "k003")
-    k003.update(assigned_at=iso(NOW - dt.timedelta(minutes=20)), age_from="assignment", age_minutes=20, status="within")
+    k003.update(assigned_at=iso(NOW - dt.timedelta(minutes=20)), age_from="assignment", age_minutes=20, status="within",
+                holder_since=iso(NOW - dt.timedelta(minutes=10)))
     write_sla(ops, snap)
     t = tab()
     page = t.open("/sla", ".sx-requests tbody tr")
     row = lambda key: page.locator(f'.sx-requests tr[data-key="{key}"]')
     assert row("k003").locator("[data-age]").inner_text() == "20 min"
     since = row("k003").locator("[data-since]")
-    assert since.get_attribute("data-since") == "assignment" and since.inner_text() == "assigned 08:40"
-    assert "last assignment" in since.get_attribute("title")
+    assert since.get_attribute("data-since") == "assignment" and since.inner_text() == "assigned 08:40 · this user since 08:50"
+    assert "first «اسناد لمستخدم السرية»" in since.get_attribute("title")
     other = row("k004").locator("[data-since]")
     assert other.get_attribute("data-since") == "sent" and other.inner_text() == "sent 07:02"
     clock.advance(minutes=3)

@@ -184,6 +184,23 @@ HOW TO UPDATE (your data is kept)
      searching. The run log and summary say "max per run reached" and how many wait. A Dry run shows the
      same limited plan.
 
+19. SLA: THE REQUEST'S AGE, THE EMPLOYEE'S TIME AND COMPLETE NUMBERS
+   - Live tickets, Home, My tickets, the Excel report and the alert e-mail: a request's age now counts from its
+     FIRST «اسناد لمستخدم السرية». After a re-assignment the row also says since when the security user holding
+     it now has it ("this user since 10:15"). A request whose history is not read yet still counts from
+     «تاريخ الارسال للسرية» ("sent").
+   - The security user's time = their «اسناد لمستخدم السرية» -> «تم التنفيذ». «قيد الإجراء» never restarts it any more
+     (the settings brought over from NBE OpsHub listed it as an assignment).
+   - The whole request = the first assignment -> its final state: «تم التعزيز على التنفيذ», «تم التعزيز على عدم
+     التنفيذ», «تم ارسال الرد» / «تم تسليم الرد», the password sent by SMS, and the same states in other words.
+     Requests recorded with the old rules are corrected by themselves; one whose final state was missed is
+     read again at the next scan.
+   - Insights > Analysis > SLA counts EVERY request the portal lists for the period, also the ones whose history
+     is not read yet (they are counted at once; their times follow when they are read - the Closed tile says
+     how many). "Right now" lists every open request: the inquiry's and every Live ticket, with "Request age"
+     (since the first assignment) and "With this user". The inquiry now reaches back to every Live ticket, so
+     their histories are read too.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -317,3 +334,17 @@ IAS PORTAL - الجديد في هذا التحديث
      بعده. 0 = من غير حد (زي الأول). اعمل Save وبعدين Run now.
    - في الـ Ticketing العدد بيتحسب على كل أنواع النماذج في الرن، ولما يوصل للعدد الرن بيقف عن البحث. الـ log
      والملخص بيقولوا "max per run reached" وكام طلب مستني. الـ Dry run بيعرض نفس الخطة بنفس الحد.
+
+19. الـ SLA: عمر الطلب ووقت الموظف وأرقام كاملة
+   - في Live tickets والـ Home و My tickets وتقرير الإكسل وإيميل التنبيه: عمر الطلب بقى بيتحسب من أول «اسناد
+     لمستخدم السرية». ولو الطلب اتعاد إسناده الصف بيقول من إمتى مع المستخدم اللي معاه دلوقتي ("this user since
+     10:15"). الطلب اللي تاريخه لسه ما اتقراش بيتحسب من «تاريخ الارسال للسرية» ("sent").
+   - وقت مستخدم السرية = «اسناد لمستخدم السرية» بتاعه لحد «تم التنفيذ». «قيد الإجراء» خلاص مش بيبدأ العداد من جديد
+     (الإعدادات اللي جت من NBE OpsHub كانت حاسباه إسناد).
+   - الطلب كله = من أول إسناد لحد الحالة النهائية: «تم التعزيز على التنفيذ» أو «تم التعزيز على عدم التنفيذ» أو
+     «تم ارسال الرد» / «تم تسليم الرد» أو إرسال كلمة المرور بالـ SMS، وأي صيغة تانية لنفس الحالات. الطلبات اللي
+     اتسجلت بالقواعد القديمة بتتصلح لوحدها، واللي حالته النهائية ما اتعرفتش بيتقري تاني في الـ scan اللي بعده.
+   - Insights > Analysis > SLA بقى بيعد كل طلب البورتال بيعرضه في الفترة، حتى اللي تاريخه لسه ما اتقراش (بيتعد
+     على طول والأوقات بتيجي لما يتقري - كارت Closed بيقول كام واحد). و"Right now" بيعرض كل الطلبات المفتوحة: بتاعة
+     الاستعلام وكل تيكت في Live، مع "Request age" (من أول إسناد) و"With this user". والاستعلام بقى بيرجع لحد
+     أقدم تيكت في Live علشان تاريخها يتقري هو كمان.

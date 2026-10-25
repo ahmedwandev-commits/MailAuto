@@ -1205,12 +1205,13 @@ def test_the_oldest_request_is_aged_by_the_clock_everywhere_like_the_live_tab(ad
     assert admin.get("/api/ops/overview").get_json()["sla"]["oldest_minutes"] is None
 
 
-def test_the_oldest_request_and_my_tickets_count_from_the_last_assignment_when_the_scan_knows_it(admin, emp, ops, clock):
-    """The scan ages a request from its LAST assignment to the security user holding it (the SLA history's clock); a
-    request sent 150 minutes before the scan but re-assigned 30 minutes before it is 70 minutes old 40 minutes later,
-    on Home and on My work, and My tickets says which clock it is."""
+def test_the_oldest_request_and_my_tickets_count_from_the_first_assignment_when_the_scan_knows_it(admin, emp, ops, clock):
+    """The scan ages a request from its FIRST «اسناد لمستخدم السرية» (the SLA history's clock); a request sent 150
+    minutes before the scan but first assigned 30 minutes before it is 70 minutes old 40 minutes later, on Home and on
+    My work, and My tickets says which clock it is and since when its holder has it."""
     req = sla_request("k1", "احمد سالم", "within", 30)
-    req.update(sent_at="2026-10-11T06:30:00", assigned_at="2026-10-11T08:30:00", age_from="assignment")
+    req.update(sent_at="2026-10-11T06:30:00", assigned_at="2026-10-11T08:30:00", age_from="assignment",
+               holder_since="2026-10-11T08:50:00")
     put_snapshot(ops, "sla", sla_data([req, sla_request("k2", "Bob", "within", 20)]))
     clock.advance(minutes=40)
     assert admin.get("/api/ops/overview").get_json()["sla"]["oldest_minutes"] == 70
@@ -1218,7 +1219,7 @@ def test_the_oldest_request_and_my_tickets_count_from_the_last_assignment_when_t
     assert mine["totals"]["oldest_minutes"] == 70
     one = mine["requests"][0]
     assert one["assigned_at"] == "2026-10-11T08:30:00" and one["age_from"] == "assignment"
-    assert one["sent_at"] == "2026-10-11T06:30:00"
+    assert one["sent_at"] == "2026-10-11T06:30:00" and one["holder_since"] == "2026-10-11T08:50:00"
 
 
 def test_a_manager_is_told_when_a_role_of_their_team_could_not_be_read(admin, flex_mgr, ops):

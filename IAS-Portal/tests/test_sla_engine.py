@@ -1108,3 +1108,19 @@ class TestEndToEnd:
         finally:
             browser.close()
         assert got == [sla.norm(s) for s in samples]
+
+
+def test_the_inquiry_reaches_back_to_every_live_ticket_so_its_history_is_read(store):
+    """The analysis must know every open request: the inquiry window (the last ``history_days`` days) reaches back to
+    the oldest ticket of the last Live scan (a few days before it was sent to the team), at most HISTORY_REACH_DAYS."""
+    ctx = make_ctx(store, None, NOW)
+    plain = sla.history_plan(ctx, sla_settings(), NOW)
+    store.write_snapshot("sla", {"requests": [{"key": "old", "sent_at": (NOW - timedelta(days=9)).isoformat()},
+                                              {"key": "ancient", "sent_at": (NOW - timedelta(days=90)).isoformat()}]},
+                         generated_at=NOW.isoformat(timespec="seconds"))
+    plan = sla.history_plan(ctx, sla_settings(), NOW)
+    assert plain["date_from"] == NOW.date() - timedelta(days=2)                      # the default 3 days
+    assert plan["date_from"] == NOW.date() - timedelta(days=sla.HISTORY_REACH_DAYS - 1)   # capped, the 90-day one
+    store.write_snapshot("sla", {"requests": [{"key": "old", "sent_at": (NOW - timedelta(days=9)).isoformat()}]},
+                         generated_at=NOW.isoformat(timespec="seconds"))
+    assert sla.history_plan(ctx, sla_settings(), NOW)["date_from"] == NOW.date() - timedelta(days=12)

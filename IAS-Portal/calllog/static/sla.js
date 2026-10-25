@@ -3,7 +3,8 @@
 
    Reads GET /api/ops/sla (the last good scan + collector health) every 15 s with ?since=, so an unchanged scan costs
    almost nothing, and draws: KPI tiles, a per-security-user table, the request list (filters, sorting, paging) and
-   today's timeline. Ages tick live between scans from "assigned_at" (else "sent_at") and the server clock. "Run scan now" asks the
+   today's timeline. Ages tick live between scans from "assigned_at" (the first «اسناد لمستخدم السرية», else
+   "sent_at") and the server clock. "Run scan now" asks the
    collector for a scan and waits (visibly, with a time limit) until a newer scan appears.
 
    Every scraped text goes in with textContent (CL.h) - never innerHTML - and Arabic text carries dir="auto". */
@@ -78,8 +79,8 @@
   }
   const fmtLimit = (min) => (min && min % 60 === 0 ? `${min / 60} h` : `${min} min`);
 
-  /** Minutes since the request reached the security user holding it, counted now: from its LAST assignment when the
-      scan matched it to the SLA history ("assigned_at"), else from «تاريخ الارسال للسرية» (null with neither). */
+  /** The request's age, counted now: from its FIRST «اسناد لمستخدم السرية» when the scan matched it to the SLA history
+      ("assigned_at"), else from «تاريخ الارسال للسرية» (null with neither). */
   function ageOf(r) {
     const t = r._t === undefined ? (r._t = naiveMs(r.assigned_at || r.sent_at)) : r._t;
     if (t == null) return null;
@@ -323,17 +324,18 @@
     return now === "breached" ? `now over ${fmtLimit(limits().breach)}` : `now over ${fmtLimit(limits().warn)}`;
   }
 
-  /** Which clock the age counts from: "assigned 09:30" (the last assignment, from the SLA history) or "sent 09:30"
-      (the Re-Assign page's sent date, when the history has not read the request yet). */
+  /** Which clock the age counts from: "assigned 09:30" (the first «اسناد لمستخدم السرية», from the SLA history) or
+      "sent 09:30" (the Re-Assign page's sent date, when the history has not read the request yet); after a
+      re-assignment also "· this user since 10:15". */
   function sinceText(r) {
     const at = r.assigned_at || r.sent_at;
     if (!at) return "";
-    const word = r.assigned_at ? "assigned" : "sent";
-    const t = hhmm(at), today = state.snap.generated_at.slice(0, 10);
-    return at.slice(0, 10) === today ? `${word} ${t}` : `${word} ${at.slice(8, 10)}/${at.slice(5, 7)} ${t}`;
+    const today = state.snap.generated_at.slice(0, 10);
+    const when = (s) => (s.slice(0, 10) === today ? hhmm(s) : `${s.slice(8, 10)}/${s.slice(5, 7)} ${hhmm(s)}`);
+    return `${r.assigned_at ? "assigned" : "sent"} ${when(at)}` + (r.holder_since ? ` · this user since ${when(r.holder_since)}` : "");
   }
   const sinceTitle = (r) => (r.assigned_at
-    ? "Age from the last assignment to this security user (SLA history)"
+    ? "Age from the first «اسناد لمستخدم السرية» (SLA history)" + (r.holder_since ? "; re-assigned to the user holding it now later" : "")
     : "Age from «تاريخ الارسال للسرية»: the status history of this request is not read yet");
 
   function requestRow(r, cols) {

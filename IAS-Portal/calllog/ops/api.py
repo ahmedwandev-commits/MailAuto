@@ -288,13 +288,13 @@ def email_headline(stats):
 
 
 def sla_since(r):
-    """The clock of an open request: its last assignment to the security user holding it when the scan matched it to
-    the SLA history (``assigned_at``), else the day it was sent to the team (``sent_at``)."""
+    """The clock of an open request: its first «اسناد لمستخدم السرية» when the scan matched it to the SLA history
+    (``assigned_at``), else the day it was sent to the team (``sent_at``)."""
     return (r or {}).get("assigned_at") or (r or {}).get("sent_at")
 
 
 def sla_oldest_now(requests):
-    """Minutes the oldest open request has been waiting NOW (from its last assignment, else its sent date), the way the
+    """Minutes the oldest open request has been waiting NOW (from its first assignment, else its sent date), the way the
     Live tickets tab counts it - not the age frozen at the last scan. None when no request has a date (pages show
     "—")."""
     now, ages = auth.now(), []
@@ -668,6 +668,7 @@ def my_sla(user):
     return {**empty, "available": True, "updated_at": snap.get("generated_at"),
             "thresholds": (snap.get("data") or {}).get("thresholds") or {}, "totals": totals,
             "requests": [{"key": r.get("key", ""), "sent_at": r.get("sent_at"), "assigned_at": r.get("assigned_at"),
+                          "holder_since": r.get("holder_since"),
                           "age_from": r.get("age_from") or "sent", "age_minutes": r.get("age_minutes"),
                           "status": r.get("status"), "fields": r.get("fields") or {}}
                          for r in mine[:_MAX_LIST]]}
@@ -706,7 +707,7 @@ def _my_sla_history(user, day, numbers, name, store, state):
     for d in store.sla_closed_days():
         if start <= d <= day:
             records.update(store.read_sla_closed_day(d))
-    records = {k: r for k, r in records.items() if not excluded(r.get("system"))}
+    records = {k: sla_history.rederive(r, cfg) for k, r in records.items() if not excluded(r.get("system"))}
     is_me = lambda no, who: (no and str(no).strip() in numbers) or (name and sla_history._norm(who) == name)  # noqa: E731
     executed = {k: r for k, r in records.items() if is_me(r.get("executor_no"), r.get("executor"))}
     confirmed = {k: r for k, r in records.items() if is_me(r.get("checker_no"), r.get("checker"))}
@@ -721,7 +722,8 @@ def _my_sla_history(user, day, numbers, name, store, state):
                         "not_executed": one["employee_clock"]["not_executed"],
                         "median_minutes": one["employee_clock"]["median_minutes"]})
     now = auth.now().isoformat(timespec="seconds")
-    held = sla_history.right_now(state.get("grid") or {}, state.get("open") or {}, state.get("index") or {}, cfg, now,
+    held = sla_history.right_now(state.get("grid") or {}, {k: r for k, r in records.items() if k in (state.get("open") or {})},
+                                 state.get("index") or {}, cfg, now,
                                  lambda g: sla_history._norm(g.get("holder")) in names and not excluded(g.get("system")))
     return {"available": True, "numbers": sorted(numbers), "sla_minutes": cfg["sla_minutes"],
             "today": {"executed": a["employee_clock"]["executed"], "not_executed": a["employee_clock"]["not_executed"],
@@ -1070,14 +1072,14 @@ def sla_analysis_get():
     hit = memo.get(memo_key)
     if hit and time.monotonic() - hit[0] < SLA_VIEW_TTL:
         return jsonify(hit[1])
-    view = sla_history_view(scope, filt["date_from"], filt["date_to"])
+    view, chosen = sla_period(scope, filt)
     if not view["records"] and not view["grid"]:            # nothing recorded yet: say why
         return jsonify(available=False, server_time=now, scope=overlay.scope_label(scope), recorder=view["recorder"],
                        scan_interval=health.module_interval(hub_cfg(), "sla"))
-    records, cfg = view["records"], view["cfg"]
-    options = sla_history.filter_options(records)           # the employees/checkers/teams/date-range the viewer may pick
-    period = sla_history.analyze(sla_history.filter_records(records, filt), cfg, now=now,
-                                 period=(filt["date_from"], filt["date_to"]))
+    cfg = view["cfg"]
+    options = sla_history.filter_options(view["records"])   # the employees/checkers/teams/date-range the viewer may pick
+    period = sla_history.analyze(chosen, cfg, now=now, period=(filt["date_from"], filt["date_to"]))
+    period["meta"]["unread"] = sum(1 for r in chosen.values() if r.get("unread"))
     # "right now" is never date-bounded: what the latest inquiry grid lists as open / awaiting, read or not
     person = sla_history._norm(filt["executor"])
     grid_text = {k: sla_history._norm(filt[k]) for k in ("team", "system", "request_type") if filt.get(k)}
@@ -1085,7 +1087,14 @@ def sla_analysis_get():
     def keep(g):
         return ((not person or sla_history._norm(g.get("holder")) == person)
                 and all(sla_history._norm(g.get(k)) == v for k, v in grid_text.items()))
-    period.update(sla_history.right_now(view["grid"], view["open"], view["index"], cfg, now, keep))
+    def keep_live(r):
+        fields = r.get("fields") or {}
+        text = {"system": sla_history._field(fields, "النظام"), "request_type": sla_history._field(fields, "نوع الطلب"),
+                "team": teams.sla_request_team(r, team_resolver(), sla_system_header())}
+        return ((not person or sla_history._norm(r.get("security_user")) == person)
+                and all(sla_history._norm(text[k]) == v for k, v in grid_text.items()))
+    period.update(sla_history.right_now(view["grid"], view["open"], view["index"], cfg, now, keep,
+                                        live=[r for r in view["live"] if keep_live(r)]))
     # the portal's own «الاستفسار عن الطلبات» rows of the period's request dates, next to what the history holds
     period["portal"] = {**sla_history.portal_comparison(view["grid"], view["index"], filt["date_from"], filt["date_to"],
                                                         cfg),
@@ -1118,9 +1127,12 @@ def sla_filter_args(args):
 
 
 def sla_period(scope, filt):
-    """(view, the records of the filtered period) for one viewer - the SLA Analysis and its export read the same."""
+    """(view, the records of the filtered period) for one viewer - the SLA Analysis and its export read the same.
+    Every request the latest inquiry grid lists with the security team counts, read or not: the ones whose history is
+    not read yet come in without times (``sla_history.grid_stubs``), so the numbers match the portal."""
     view = sla_history_view(scope, filt["date_from"], filt["date_to"])
-    return view, sla_history.filter_records(view["records"], filt)
+    stubs = sla_history.grid_stubs(view["grid"], view["index"], view["records"], view["cfg"])
+    return view, sla_history.filter_records({**stubs, **view["records"]}, filt)
 
 
 @bp.get("/sla-analysis/request")
@@ -1370,9 +1382,10 @@ def sla_history_view(scope, date_from="", date_to=""):
     records = {}
     for day in days:
         records.update(store.read_sla_closed_day(day))
-    open_recs = state.get("open") or {}
+    open_recs = {k: sla_history.rederive(r, cfg) for k, r in (state.get("open") or {}).items()}
     records.update(open_recs)
-    records = {k: link(r) for k, r in records.items() if not excluded(r.get("system"))}
+    # records read under older status rules are brought up to the current ones (sla_history.rederive)
+    records = {k: link(sla_history.rederive(r, cfg)) for k, r in records.items() if not excluded(r.get("system"))}
     unmapped = sum(1 for r in records.values() if r["team"] == teams.NO_TEAM)
     # the grid names the security user holding a request but not their number: the number they act under in the
     # history (any request they executed or confirmed) links them, else their account's security name does
@@ -1390,7 +1403,10 @@ def sla_history_view(scope, date_from="", date_to=""):
     if scope is not None:
         records = {k: r for k, r in records.items() if teams.in_scope(scope, r["team"])}
         grid = {k: r for k, r in grid.items() if teams.in_scope(scope, r["team"])}
-    return {"records": records, "open": {k: r for k, r in open_recs.items() if k in records},
+    snap, _ = read_snapshot("sla")                       # the Live tickets (Re-Assign page), limited like the Live tab
+    live = [r for r in (scoped_data("sla", (snap or {}).get("data"), scope) or {}).get("requests") or []
+            if isinstance(r, dict) and not excluded(teams.sla_system(r, sla_system_header()))]
+    return {"records": records, "open": {k: r for k, r in records.items() if k in open_recs}, "live": live,
             "index": state.get("index") or {}, "grid": grid, "cfg": cfg, "unmapped": unmapped,
             "recorder": {"enabled": bool(sla_cfg.get("history_enabled", True)), "last_read": state.get("last_history") or "",
                          "stats": state.get("history_stats") or {}, "error": state.get("history_error") or {},

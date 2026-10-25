@@ -1036,7 +1036,7 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     # a request still with the branch (registered / confirmed by its supervisor) has no SLA step yet: opened once it moves
     # and a request of an excluded application (the Third Party team's by default) is never opened at all
     excluded = plan.get("excluded") or (lambda system: False)
-    todo = {it["key"] for it in grid if sla_history.needs_details(it, index)
+    todo = {it["key"] for it in grid if sla_history.needs_details(it, index, plan["cfg"])
             and sla_history.detail_priority(it["status"], plan["cfg"]) is not None
             and not excluded(it["system"])}
     # when a scan cannot read them all, the requests still with a security user first (their live clock starts at the
@@ -1230,12 +1230,15 @@ def build_table(headers, rows):
 
 
 def age_from_assignment(ctx, cfg, requests, now, secrets=()):
-    """Age each live request from its LAST assignment to the security user holding it, as the SLA history recorded it
-    (``sla_history.apply_assignment_ages``); the Re-Assign page's «تاريخ الارسال للسرية» stays the clock of a request
-    the history has not read. Re-sorts oldest first. A missing or broken recording leaves the sent-date ages."""
-    from .. import sla_history
+    """Age each live request from its FIRST «اسناد لمستخدم السرية», as the SLA history recorded it
+    (``sla_history.apply_assignment_ages``; ``holder_since`` = when the security user holding it got it); the Re-Assign
+    page's «تاريخ الارسال للسرية» stays the clock of a request the history has not read. Re-sorts oldest first. A
+    missing or broken recording leaves the sent-date ages."""
+    from .. import sla_history, sla_records
     try:
-        open_records = (ctx.store.read_sla_history_state() or {}).get("open") or {}
+        rules = sla_records.clean_config((ctx.store.read_sla_records() or {}).get("config"))
+        open_records = {k: sla_history.rederive(r, rules)
+                        for k, r in ((ctx.store.read_sla_history_state() or {}).get("open") or {}).items()}
     except Exception as exc:
         open_records = {}
         ctx.log(f"SLA history could not be read to age the requests: {type(exc).__name__}: {scrub(str(exc), secrets)}")
@@ -1245,7 +1248,7 @@ def age_from_assignment(ctx, cfg, requests, now, secrets=()):
         r["_since"] = parse_time_iso(r.get("assigned_at")) or r.get("_sent")
     requests.sort(key=lambda r: (r["age_minutes"] is None, -(r["age_minutes"] or 0)))
     if requests:
-        ctx.log(f"{matched} of {len(requests)} request(s) aged from their last assignment (SLA history); "
+        ctx.log(f"{matched} of {len(requests)} request(s) aged from their first «اسناد لمستخدم السرية» (SLA history); "
                 f"the others from «تاريخ الارسال للسرية»")
     return matched
 
@@ -1723,6 +1726,7 @@ def _notify(ctx, cfg, requests, by_user, columns, now):
 
 
 HISTORY_REACH_DAYS = 31        # how far back the inquiry is searched for a request that is still open
+LIVE_REACH_MARGIN_DAYS = 3     # a live ticket's request date can be this many days before it was sent to the team
 
 
 def sla_excluder(ctx, cfg):
@@ -1746,15 +1750,25 @@ def history_plan(ctx, cfg, now):
     days = max(1, int(cfg.get("history_days") or DEFAULTS["sla"]["history_days"]))
     date_from = today - timedelta(days=days - 1)
     floor = today - timedelta(days=HISTORY_REACH_DAYS - 1)
+    rules = sla_records.clean_config((ctx.store.read_sla_records() or {}).get("config"))
     still_open = [r.get("request_date") for r in (state.get("open") or {}).values()]
-    still_open += [g.get("request_date") for g in (state.get("grid") or {}).values()
-                   if g.get("stage") not in ("closed", "rejected", "pre")]   # a branch-only request has no SLA yet
+    still_open += [g.get("request_date") for g in (state.get("grid") or {}).values()   # a branch-only request has no
+                   if sla_history.grid_stage(g.get("status"), rules) not in ("closed", "rejected", "pre")]   # SLA yet
     for stamp in still_open:                              # follow every request that is not finished yet
         day = sla_history.parse_time(stamp)
         if day and floor <= day.date() < date_from:
             date_from = day.date()
-    return {"date_from": date_from, "date_to": today, "index": dict(state.get("index") or {}),
-            "cfg": sla_records.clean_config((ctx.store.read_sla_records() or {}).get("config")),
+    # and every ticket of the last Live scan (the Re-Assign page): its request date is at most a few days before the
+    # day it was sent to the security team, so the inquiry lists it and its history is read
+    with suppress(Exception):
+        live = (((ctx.store.read_snapshot("sla") or {}).get("data") or {}).get("requests") or [])
+        for r in live:
+            sent = sla_history.parse_time(r.get("sent_at")) if isinstance(r, dict) else None
+            if sent:
+                day = max(floor, sent.date() - timedelta(days=LIVE_REACH_MARGIN_DAYS))
+                if day < date_from:
+                    date_from = day
+    return {"date_from": date_from, "date_to": today, "index": dict(state.get("index") or {}), "cfg": rules,
             "excluded": sla_excluder(ctx, cfg), "seconds": history_seconds(cfg, getattr(ctx, "general", None))}
 
 
@@ -1780,7 +1794,8 @@ def fold_history_result(store, sink, now_iso, system_team=None):
         if sink.get("error") and not items:
             d["history_error"] = {"at": now_iso, "message": sink["error"]}
             return
-        index, records, loaded_from, days = d["index"], dict(d["open"]), {}, {}
+        # records read under older status rules are brought up to the current ones first (sla_history.rederive)
+        index, records, loaded_from, days = d["index"], {k: sla_history.rederive(r, cfg) for k, r in d["open"].items()}, {}, {}
         for it in items:                                  # a closed request read again: load it from its day file
             rid, day = it.get("id"), ((index.get((it.get("grid") or {}).get("key")) or {}).get("day"))
             if it.get("history") is not None and rid and day and rid not in records:

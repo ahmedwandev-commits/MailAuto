@@ -318,11 +318,12 @@
     if (!s.requests.length) return OPS.card("My tickets", {}, tiles, OPS.emptyState({ title: "Nothing waiting for you", icon: "check", text: "No ticket is open under your name." }));
     const rows = s.requests.map((r) => {
       const fields = r.fields || {};
-      const since = r.assigned_at || r.sent_at;          // the last assignment when the scan knows it, else the sent date
+      const since = r.assigned_at || r.sent_at;          // the first «اسناد لمستخدم السرية» when known, else the sent date
       return h("tr", { "data-sent": since || "" },
         h("td", {}, OPS.statusChip(r.status)),
         h("td", { class: "nowrap my-age", "data-age": "", "data-since": r.assigned_at ? "assignment" : "sent",
-          title: r.assigned_at ? "Since it was assigned to you" : "Since it was sent to the security team" },
+          title: r.assigned_at ? "Since it was first assigned to a security user" + (r.holder_since ? " (with you since " + r.holder_since.slice(11, 16) + ")" : "")
+            : "Since it was sent to the security team" },
         OPS.fmtDuration(liveMinutes(since, r.age_minutes))),
         ...["اسم الموظف", "النظام", "نوع الطلب"].map((k) => h("td", { dir: "auto" }, bidi(fields[k] || "—"))));
     });
@@ -351,11 +352,12 @@
     const open = (s.open_now || []).map((o) => h("tr", {},
       h("td", {}, o.id || "—"), h("td", { dir: "auto" }, bidi(o.system || "—")), h("td", { dir: "auto" }, bidi(o.requester || "—")),
       h("td", { class: "nowrap" }, o.minutes == null ? h("span", { class: "hint" }, "not read yet") : o.breached ? OPS.chip(fmtMin(o.minutes), "danger") : fmtMin(o.minutes)),
+      h("td", { class: "nowrap" }, o.holder_minutes == null ? "—" : fmtMin(o.holder_minutes)),
       h("td", {}, o.on_hold ? OPS.chip("on hold", "warn") : "")));
     const table = (caption, heads, body) => h("div", { class: "table-wrap" }, h("table", { class: "data" },
       h("caption", { class: "sr-only" }, caption), h("thead", {}, h("tr", {}, heads.map((c) => h("th", { scope: "col" }, c)))), h("tbody", {}, body)));
     return OPS.card("My SLA", { hint: `from the portal's status history${(s.numbers || []).length ? ` · employee no. ${s.numbers.join(", ")}` : ""}` }, tiles,
-      open.length ? table("Requests open with me", ["Request", "System", "Requester", "Waiting", ""], open) : null,
+      open.length ? table("Requests open with me", ["Request", "System", "Requester", "Request age", "With me", ""], open) : null,
       table("My last 7 days", ["Day", "Executed", "Not executed", "Median time"], days));
   }
 
