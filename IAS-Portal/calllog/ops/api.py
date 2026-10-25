@@ -918,11 +918,11 @@ def overview():
 
 # ----------------------------------------------------------------------------- module answers
 def people_directory(scope_team=None):
-    """[{email, name, team}] of the people an e-mail can be assigned to: every active account with a mailbox (named and
-    teamed from the account, linked to them by their employee account), then the Settings team-member addresses that
-    have no account. ``scope_team`` = None (everybody) or the team names to keep."""
+    """[{email, name, team, user_id}] of the people an e-mail can be assigned to: the active accounts created in
+    Admin › Users (employees and managers) that have an e-mail address - the Settings team-member addresses without an
+    account are not offered. ``scope_team`` = None (an administrator: everybody) or a manager's team names: only the
+    people of those teams."""
     scope = overlay.as_scope(scope_team)
-    email_cfg = hub_cfg()["email"]
     seen, out = set(), []
     users = auth.store().users()
     for u in (users.values() if isinstance(users, dict) else users or []):
@@ -933,18 +933,9 @@ def people_directory(scope_team=None):
         if scope is not None and not any(overlay.team_in(scope, t) for t in mine):
             continue
         seen.add(addr)
+        in_scope = [t for t in mine if scope is None or overlay.team_in(scope, t)]
         out.append({"email": addr, "name": u.get("name") or overlay.display_name_from_email(addr),
-                    "team": mine[0] if mine else "", "user_id": u.get("user_id", "")})
-    pairs = [(team, addr) for team, addrs in (email_cfg.get("team_members_by_team") or {}).items() for addr in addrs]
-    pairs += [("", addr) for addr in email_cfg.get("team_members") or []]
-    for team, addr in pairs:
-        addr = overlay.normalize_email(addr)
-        if not addr or addr in seen:
-            continue
-        if scope is not None and not overlay.team_in(scope, team):
-            continue
-        seen.add(addr)
-        out.append({"email": addr, "name": overlay.display_name_from_email(addr), "team": team})
+                    "team": (in_scope or mine or [""])[0], "user_id": u.get("user_id", "")})
     out.sort(key=lambda p: (p["name"].casefold(), p["email"]))
     return out
 
@@ -979,9 +970,9 @@ def email_options(scope_team=None):
     email_cfg = hub_cfg()["email"]
     cls = email_cfg["classification"]
     rules = {k: v for k, v in cls["system_team_map"].items() if overlay.team_in(scope, v)}
-    # a manager may hand a mail to a member of ANY team (their own team listed first by the page's grouping)
+    # a manager assigns a mail only to the people of their own team(s) - the accounts of Admin › Users
     return {"teams": list(email_cfg["teams"]), "quality_reasons": list(QUALITY_REASONS), "ratings": list(RATINGS),
-            "people": people_directory(None), "unclassified_team": cls["unclassified_team"],
+            "people": people_directory(scope), "unclassified_team": cls["unclassified_team"],
             "system_team_map": rules, "scope": overlay.scope_label(scope),
             "scope_teams": None if scope is None else list(scope)}
 
@@ -1656,10 +1647,14 @@ def email_assign():
     message_id = clean_message_id(body.get("message_id"))
     address = overlay.normalize_email(body.get("assigned_to_email"))
     if not overlay.valid_email(address):
-        raise ApiError("Enter a valid e-mail address to assign to.")
-    name = clean_text(body.get("assigned_to_name"), "Name", 80) or overlay.display_name_from_email(address)
+        raise ApiError("Choose a person to assign to.")
     note = clean_text(body.get("note"), "Note", 300, multiline=True)
     rows = current_rows(message_id)
+    person = next((p for p in people_directory(auth.team_scope()) if p["email"] == address), None)
+    if person is None:                                    # only an account of Admin › Users - of the manager's own team
+        raise ApiError("Choose a person from the list: an e-mail is assigned to an account in Admin › Users"
+                       + (" of your own team." if auth.team_scope() is not None else "."), 403)
+    name = person["name"]
     team = _row_team(rows)
     seen = {}
 

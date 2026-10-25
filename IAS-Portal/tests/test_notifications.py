@@ -208,9 +208,10 @@ def test_a_new_note_for_the_same_person_is_not_a_new_notification(scene):
     assert len(poll(scene.alice)["items"]) == 1
 
 
-def test_assigning_to_somebody_without_an_account_notifies_nobody_and_still_works(scene):
+def test_assigning_to_somebody_without_an_account_is_refused_and_notifies_nobody(scene):
+    """A mail is assigned only to an account of Admin › Users (of the manager's own team)."""
     r = scene.fadi.post("/api/ops/email/assign", {"message_id": scene.mails["free_flex"], "assigned_to_email": "ghost@example.test"})
-    assert r.status_code == 200
+    assert r.status_code == 403
     assert all(poll(w)["items"] == [] for w in (scene.alice, scene.bob, scene.carol, scene.mona))
 
 

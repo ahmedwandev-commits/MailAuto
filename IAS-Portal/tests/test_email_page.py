@@ -209,3 +209,27 @@ def test_the_team_table_counts_todays_mails_like_the_tile(admin, demo_data, tab)
     assert shown == {team: n for team, n in want.items() if team in shown} and len(shown) == min(len(want), 10)
     assert sum(want.values()) == stats["business_emails"]                       # the column adds up to the tile
     assert t.later_problems(*not_yet_written()) == [], t.problems
+
+
+def test_a_manager_assigns_a_mail_only_to_the_accounts_of_their_team(app, ops_store, demo_data, tab):
+    """The Assign dialog lists the accounts of Admin › Users of the manager's own team, nobody else."""
+    t = tab(demo.MANAGER_ID, demo_data["password"])
+    page = t.open("/email", '.em-tab:has-text("Pending")')
+    page.click('.em-tab:has-text("Pending")')
+    assign = page.locator(f"{panel(page)} .op-table tbody tr button").filter(has_text=re.compile(r"^Assign$")).first
+    assign.wait_for()
+    assign.click()
+    page.wait_for_selector("dialog.dlg select[aria-label='Assign to']")
+    groups = page.locator("dialog.dlg select[aria-label='Assign to'] optgroup").evaluate_all("gs => gs.map(g => g.label)")
+    offered = page.locator("dialog.dlg select[aria-label='Assign to'] option").evaluate_all("os => os.map(o => o.value).filter(Boolean)")
+    users = app.extensions["store"].users()
+    flex = {str(u.get("email") or "").lower() for u in users.values()
+            if u.get("active", True) and "Flex Cube" in ([u.get("team")] + list(u.get("teams") or []))}
+    assert groups == ["Flex Cube"] and offered and set(offered) <= flex
+    page.select_option("dialog.dlg select[aria-label='Assign to']", offered[0])
+    before = set(ops_store.overrides("assignments"))
+    page.click("dialog.dlg button:has-text('Assign')")
+    page.wait_for_selector("#toast .toast-msg")
+    added = [v for k, v in ops_store.overrides("assignments").items() if k not in before or v["assigned_to_email"] == offered[0]]
+    assert any(v["assigned_to_email"] == offered[0] for v in added)
+    assert t.later_problems(*not_yet_written()) == [], t.problems

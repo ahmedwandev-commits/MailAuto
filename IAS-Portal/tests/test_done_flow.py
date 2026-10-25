@@ -9,7 +9,7 @@ from urllib.parse import quote
 import pytest
 
 from calllog.ops import overlay
-from mailkit import ALICE, BOB, assignment, email_data, email_row, put_snapshot, replied_row, scene  # noqa: F401
+from mailkit import ALICE, BOB, CARA, assignment, email_data, email_row, put_snapshot, replied_row, scene  # noqa: F401
 from test_ops_api import audit_actions, make_account, ops  # noqa: F401
 
 NOT_AVAILABLE = {"error": "That e-mail is not available."}
@@ -220,7 +220,9 @@ def test_a_new_note_for_the_same_person_keeps_what_they_already_did(scene):
 def test_the_assignment_remembers_the_team_of_the_mail(scene):
     scene.fadi.post("/api/ops/email/assign", {"message_id": scene.mails["free_flex"], "assigned_to_email": BOB})
     assert entry(scene, "free_flex")["team"] == "Flex Cube"
-    scene.cara.post("/api/ops/email/assign", {"message_id": scene.mails["free_card"], "assigned_to_email": BOB})
+    # a manager assigns only to an account of their own team: Bob is Flex Cube's
+    assert scene.cara.post("/api/ops/email/assign", {"message_id": scene.mails["free_card"], "assigned_to_email": BOB}).status_code == 403
+    scene.cara.post("/api/ops/email/assign", {"message_id": scene.mails["free_card"], "assigned_to_email": CARA})
     assert entry(scene, "free_card")["team"] == "Card Management"
 
 
@@ -232,7 +234,7 @@ def test_a_mail_sent_to_two_teams_is_filed_under_the_team_of_the_manager_who_ass
                      teams_pending=["Card Management"], is_split_child=True, row_id="<two@x>|Card Management",
                      split_sibling_teams=["Flex Cube"])
     put_snapshot(ops, "email", email_data([flex, card]))
-    assert scene.cara.post("/api/ops/email/assign", {"message_id": "<two@x>", "assigned_to_email": BOB}).status_code == 200
+    assert scene.cara.post("/api/ops/email/assign", {"message_id": "<two@x>", "assigned_to_email": CARA}).status_code == 200
     assert ops.overrides("assignments")["<two@x>"]["team"] == "Card Management"
     scene.cara.api("DELETE", "/api/ops/email/assign?message_id=" + quote("<two@x>", safe=""))
     assert scene.fadi.post("/api/ops/email/assign", {"message_id": "<two@x>", "assigned_to_email": BOB}).status_code == 200

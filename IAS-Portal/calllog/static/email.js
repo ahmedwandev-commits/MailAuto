@@ -70,7 +70,7 @@
   const stats = () => (state.data && state.data.stats) || {};
   const rows = () => (state.data && state.data.rows) || [];
   const teams = () => (state.options && state.options.teams) || (state.data && state.data.teams) || [];
-  const peopleByTeam = () => {                          // every team's people; the signed-in manager's own teams first
+  const peopleByTeam = () => {                          // the accounts of Admin › Users a mail may go to: a manager's own team(s) only
     const groups = new Map();
     for (const p of (state.options && state.options.people) || []) {
       const key = p.team || "—";
@@ -89,6 +89,11 @@
 
   async function assignDialog(row) {
     const byTeam = peopleByTeam();
+    if (!byTeam.size) {
+      toast(ROLE === "admin" ? "No account has an e-mail address yet: add it in Admin › Users."
+        : "No account of your team has an e-mail address yet: ask the administrator to add it in Admin › Users.", "error");
+      return;
+    }
     const select = h("select", { "aria-label": "Assign to", required: true },
       h("option", { value: "" }, "Choose a person…"),
       [...byTeam.entries()].map(([team, people]) => h("optgroup", { label: team },

@@ -137,6 +137,17 @@ def emp(make_account):
 
 
 @pytest.fixture
+def assignees(admin):
+    """Accounts of Admin › Users a mail can be assigned to: Bob and Dina of Flex Cube, Carol of Card Management."""
+    for uid, name, email, team in (("2101", "Bob B", "bob@example.test", "Flex Cube"),
+                                   ("2102", "Carol C", "carol@example.test", "Card Management"),
+                                   ("2103", "Dina Dev", "dina.dev@example.test", "Flex Cube")):
+        r = admin.post("/api/admin/users", {"user_id": uid, "name": name, "department": "IT", "role": "user",
+                                            "password": "TempPass123", "email": email, "team": team})
+        assert r.status_code == 201, r.get_json()
+
+
+@pytest.fixture
 def hub(ops):
     """Email snapshot with one row per situation, plus matching collector heartbeats."""
     rows = [
@@ -438,7 +449,7 @@ def test_display_name_from_email():
 
 
 # ---------------------------------------------------------------------------- e-mail answers with overrides
-def test_email_answer_applies_overrides_and_recounts(admin, hub):
+def test_email_answer_applies_overrides_and_recounts(admin, hub, assignees):
     before = admin.get("/api/ops/email").get_json()["data"]["stats"]
     assert admin.post("/api/ops/email/no-action", {"message_id": "<p1@x>"}).status_code == 200
     assert admin.post("/api/ops/email/assign", {"message_id": "<p2@x>", "assigned_to_email": "Bob@Example.test",
@@ -451,7 +462,7 @@ def test_email_answer_applies_overrides_and_recounts(admin, hub):
     assert after["stats"]["needed_reply"] == before["needed_reply"] - 1
 
 
-def test_manager_sees_only_their_team_with_recounted_stats(admin, flex_mgr, mgr, hub):
+def test_manager_sees_only_their_team_with_recounted_stats(admin, flex_mgr, mgr, hub, assignees):
     full = admin.get("/api/ops/email").get_json()
     mine = flex_mgr.get("/api/ops/email").get_json()
     subjects = {r["subject"] for r in mine["data"]["rows"]}
@@ -463,8 +474,9 @@ def test_manager_sees_only_their_team_with_recounted_stats(admin, flex_mgr, mgr,
     assert stats["business_address_volume"] == {} and stats["trend"] == {}
     assert "Card limit change" not in json.dumps(mine) and "Card limit change" in json.dumps(full)
     assert len(mgr.get("/api/ops/email").get_json()["data"]["rows"]) == 6          # team "__all__" = everything
-    # a manager may hand a mail to anybody (also to another team): the same people as the administrator
-    assert mine["options"]["people"] == full["options"]["people"] and mine["options"]["scope"] == "Flex Cube"
+    # a manager assigns a mail only to the people of their own team; the administrator to anybody
+    assert {p["email"] for p in mine["options"]["people"]} == {"fadi@example.test", "bob@example.test", "dina.dev@example.test"}
+    assert "carol@example.test" in {p["email"] for p in full["options"]["people"]} and mine["options"]["scope"] == "Flex Cube"
 
 
 def test_manager_quality_sections_carry_nothing_about_other_teams(admin, flex_mgr, hub, ops):
@@ -483,9 +495,10 @@ def test_manager_quality_sections_carry_nothing_about_other_teams(admin, flex_mg
     assert len(admin.get("/api/ops/email").get_json()["data"]["quality"]["scorecard"]) == 2
 
 
-def test_options_people_come_from_the_accounts_and_the_settings(admin, flex_mgr, hub):
-    """Every active account with a mailbox (named and teamed from the account), then the Settings team-member
-    addresses without an account. A manager gets the same list: a mail can be handed to another team."""
+def test_options_people_are_the_accounts_of_admin_users_and_a_manager_gets_only_their_team(admin, flex_mgr, hub, assignees):
+    """The people a mail can be assigned to are the active accounts of Admin › Users with an e-mail address (named and
+    teamed from the account) - never the Settings team-member addresses without an account. A manager gets only the
+    people of their own team."""
     cfg = admin.get("/api/ops/settings").get_json()["settings"]
     cfg["email"]["team_members_by_team"] = {"Flex Cube": ["flexcube.Alice.Smith2@example.test"],
                                            "Card Management": ["carla.cardholder@example.test"]}
@@ -493,16 +506,25 @@ def test_options_people_come_from_the_accounts_and_the_settings(admin, flex_mgr,
     assert admin.put("/api/ops/settings", cfg).status_code == 200
     people = admin.get("/api/ops/email").get_json()["options"]["people"]
     assert {p["email"]: (p["name"], p["team"]) for p in people} == {
-        "fadi@example.test": ("Fadi Flex", "Flex Cube"),
-        "flexcube.alice.smith2@example.test": ("Alice Smith2", "Flex Cube"),
-        "carla.cardholder@example.test": ("Carla Cardholder", "Card Management"),
-        "solo.person@example.test": ("Solo Person", "")}
+        "fadi@example.test": ("Fadi Flex", "Flex Cube"), "bob@example.test": ("Bob B", "Flex Cube"),
+        "carol@example.test": ("Carol C", "Card Management"), "dina.dev@example.test": ("Dina Dev", "Flex Cube")}
     mine = flex_mgr.get("/api/ops/email").get_json()["options"]["people"]
-    assert mine == people
+    assert [p["email"] for p in mine] == ["bob@example.test", "dina.dev@example.test", "fadi@example.test"]
+
+
+def test_a_manager_assigns_only_to_an_account_of_their_own_team(flex_mgr, hub, ops, assignees):
+    ok = flex_mgr.post("/api/ops/email/assign", {"message_id": "<p1@x>", "assigned_to_email": "Bob@Example.test",
+                                                 "assigned_to_name": "Somebody Else"})
+    assert ok.status_code == 200
+    assert ops.overrides("assignments")["<p1@x>"]["assigned_to_name"] == "Bob B"          # the account's own name
+    for address in ("carol@example.test", "ghost@example.test"):                           # another team / no account
+        r = flex_mgr.post("/api/ops/email/assign", {"message_id": "<p1@x>", "assigned_to_email": address})
+        assert r.status_code == 403 and "your own team" in r.get_json()["error"], address
+    assert ops.overrides("assignments")["<p1@x>"]["assigned_to_email"] == "bob@example.test"
 
 
 # ---------------------------------------------------------------------------- e-mail actions
-def test_assign_validates_and_audits(app, admin, hub, ops, clock):
+def test_assign_validates_and_audits(app, admin, hub, ops, clock, assignees):
     ok = admin.post("/api/ops/email/assign", {"message_id": "<p1@x>", "assigned_to_email": "Bob@Example.test",
                                               "assigned_to_name": "Bob B", "note": "today please"})
     assert ok.status_code == 200
@@ -511,7 +533,7 @@ def test_assign_validates_and_audits(app, admin, hub, ops, clock):
     assert stored["note"] == "today please" and stored["notified"] is False and stored["marked_by"] == "Administrator"
     assert stored["subject"] == "Reset Flexcube password" and stored["marked_at"] == "2026-10-11T09:00:00"
     assert ("ops_assign", "<p1@x>", "admin") in audit_actions(app, clock)
-    # name defaults to something readable
+    # the name is the account's
     admin.post("/api/ops/email/assign", {"message_id": "<p2@x>", "assigned_to_email": "dina.dev@example.test"})
     assert ops.overrides("assignments")["<p2@x>"]["assigned_to_name"] == "Dina Dev"
     bad = [({"message_id": "<p1@x>", "assigned_to_email": "nope"}, 400),
@@ -519,7 +541,7 @@ def test_assign_validates_and_audits(app, admin, hub, ops, clock):
            ({"message_id": "<missing@x>", "assigned_to_email": "bob@example.test"}, 404),
            ({"message_id": "", "assigned_to_email": "bob@example.test"}, 400),
            ({"message_id": "<p1@x>", "assigned_to_email": "bob@example.test", "note": "x" * 301}, 400),
-           ({"message_id": "<p1@x>", "assigned_to_email": "bob@example.test", "assigned_to_name": "n" * 81}, 400)]
+           ({"message_id": "<p1@x>", "assigned_to_email": "no.account@example.test"}, 403)]
     for body, status in bad:
         r = admin.post("/api/ops/email/assign", body)
         assert r.status_code == status, (body, r.get_json())
@@ -527,7 +549,7 @@ def test_assign_validates_and_audits(app, admin, hub, ops, clock):
     assert admin.post("/api/ops/email/assign", [1, 2]).status_code == 400
 
 
-def test_assign_keeps_notified_flag_only_for_the_same_assignee(admin, hub, ops):
+def test_assign_keeps_notified_flag_only_for_the_same_assignee(admin, hub, ops, assignees):
     admin.post("/api/ops/email/assign", {"message_id": "<p1@x>", "assigned_to_email": "bob@example.test", "note": "a"})
     entry = ops.overrides("assignments")["<p1@x>"]
     ops.set_override("assignments", "<p1@x>", {**entry, "notified": True})
@@ -537,7 +559,7 @@ def test_assign_keeps_notified_flag_only_for_the_same_assignee(admin, hub, ops):
     assert ops.overrides("assignments")["<p1@x>"]["notified"] is False
 
 
-def test_unassign(admin, hub, ops):
+def test_unassign(admin, hub, ops, assignees):
     admin.post("/api/ops/email/assign", {"message_id": "<p1@x>", "assigned_to_email": "bob@example.test"})
     assert admin.delete("/api/ops/email/assign", json={"message_id": "<p1@x>"}).status_code == 200
     assert ops.overrides("assignments") == {}
@@ -680,7 +702,7 @@ def test_a_second_team_manager_keeps_handling_a_shared_mail(admin, make_account,
     bob = make_account("1002", "user", "Bob Employee", email="bob@example.test", team="Card Management")
     shared = replied_row("<s1@x>", "bob@example.test", all_teams=["Flex Cube", "Card Management"])
     put_snapshot(ops, "email", email_data([shared]))
-    r = cara.post("/api/ops/email/assign", {"message_id": "<s1@x>", "assigned_to_email": "dan@example.test"})
+    r = cara.post("/api/ops/email/assign", {"message_id": "<s1@x>", "assigned_to_email": "bob@example.test"})
     assert r.status_code == 200 and r.get_json()["assignment"]["team"] == "Card Management"
     assert cara.post("/api/ops/email/quality", {"message_id": "<s1@x>", "rating": "Needs Improvement"}).status_code == 200
     assert ops.overrides("quality")["<s1@x>"]["team"] == "Card Management"

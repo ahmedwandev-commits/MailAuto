@@ -215,6 +215,14 @@ HOW TO UPDATE (your data is kept)
      version had no daily summary): switch "Send the daily summary" on, type the To addresses, Save - then
      press Run now to try it. Run now refuses unsaved changes and an empty recipient list, and says so.
 
+21. E-MAIL: A MANAGER ASSIGNS ONLY TO THE ACCOUNTS OF THEIR OWN TEAM
+   - "Assign" on the E-mail page lists the accounts created in Admin > Users that have an e-mail address -
+     a manager sees only the people of their own team(s); an administrator sees everybody. The addresses typed
+     in Settings > E-mail team members without an account are no longer offered.
+   - The server checks it too: assigning to another team's person, or to an address with no account, is
+     refused. The assignee's name is the account's name. An employee without an e-mail address in Admin > Users
+     cannot be picked - add it there.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -375,3 +383,10 @@ IAS PORTAL - الجديد في هذا التحديث
    - الإعدادات اللي جت من NBE OpsHub فيها الملخص اليومي مقفول ومن غير مستلمين (النسخة القديمة ماكانش فيها ملخص
      يومي): فعّل "Send the daily summary" واكتب عناوين To واعمل Save - وبعدين دوس Run now علشان تجربه. Run now
      مش بيشتغل لو فيه تعديلات مش محفوظة أو مفيش مستلمين، وبيقول كده.
+
+21. الإيميل: المدير بيسند بس لحسابات فريقه
+   - زرار "Assign" في صفحة الإيميل بيعرض الحسابات اللي اتعملت من Admin > Users واللي ليها إيميل - المدير بيشوف
+     ناس فريقه بس، والأدمن بيشوف الكل. العناوين المكتوبة في Settings > E-mail team members ومالهاش حساب مبقتش
+     بتظهر.
+   - السيرفر بيتأكد كمان: الإسناد لحد من فريق تاني أو لعنوان مالوش حساب بيترفض. واسم الشخص بيتاخد من حسابه. الموظف
+     اللي مالوش إيميل في Admin > Users مش بيظهر - ضيف الإيميل بتاعه هناك.
