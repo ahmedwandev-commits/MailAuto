@@ -4,9 +4,10 @@ import re
 SCHEMA_VERSION = 1
 
 MODULES = ("email", "sla", "itsm")                  # things that have a snapshot
-JOBS = ("email", "email_report", "sla", "itsm", "daily_summary")     # things the collector runs
+JOBS = ("email", "email_report", "sla", "itsm", "daily_summary", "best_performer")     # things the collector runs
 # job -> settings section; "summary" has no snapshot of its own, so it is not one of MODULES
-JOB_MODULE = {"email": "email", "email_report": "email", "sla": "sla", "itsm": "itsm", "daily_summary": "summary"}
+JOB_MODULE = {"email": "email", "email_report": "email", "sla": "sla", "itsm": "itsm", "daily_summary": "summary",
+              "best_performer": "summary"}
 OVERRIDES = ("no_action", "team", "assignments", "quality")
 
 # SLA request status codes (the portal script used English labels; the codes are stable, labels are for people)

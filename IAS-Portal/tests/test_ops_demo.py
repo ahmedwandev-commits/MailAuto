@@ -163,7 +163,7 @@ def test_heartbeats_show_one_stale_collector_and_the_failure_variants(tmp_path):
     plain = OpsStore(tmp_path / "a").init()
     demo.seed(plain, NOW)
     states = health.job_states(plain, cfg, NOW)
-    assert [states[j]["online"] for j in schemas.JOBS] == [True, True, True, False, True]  # itsm is the stale one
+    assert [states[j]["online"] for j in schemas.JOBS] == [True, True, True, False, True, True]  # itsm is the stale one
     assert all(states[j]["last_status"] == "ok" for j in schemas.JOBS)
     variants = OpsStore(tmp_path / "b").init()
     demo.seed(variants, NOW, failed_job="email", stale_job="", paused_job="sla")

@@ -93,7 +93,8 @@ REPLY_TEXT = "Dear colleague, the request is done on our side. Please check and 
 
 JOB_ERRORS = {"email": "Cannot connect to Outlook after 5 tries", "email_report": "Could not save the Excel file",
               "sla": "The portal login page did not load within 60 s", "itsm": "Chrome could not be started",
-              "daily_summary": "Outlook did not send the summary"}
+              "daily_summary": "Outlook did not send the summary",
+              "best_performer": "Outlook did not send the best performer e-mail"}
 
 
 def _iso(moment):
@@ -794,7 +795,8 @@ def _write_events(ops, now, events):
 def _heartbeats(ops, now, stale_job, failed_job, stats, paused_job=None):
     summaries = {"email": f"{stats['business_emails']} mails, {stats['pending']} pending",
                  "email_report": "Report sent: 2 e-mails, 3 attachments", "sla": "33 open, 5 breached",
-                 "itsm": "7 open requests", "daily_summary": "summary sent (13:00): calls 41, mails 77, tickets 12, CRs 9"}
+                 "itsm": "7 open requests", "daily_summary": "summary sent (13:00): calls 41, mails 77, tickets 12, CRs 9",
+                 "best_performer": "best performer celebrated - Demo Agent 3: calls 9, e-mails 7, requests 12 = score 51"}
     report_time = now.replace(hour=16, minute=30, second=0)
     report_next = report_time if now < report_time else report_time + timedelta(days=1)
     for job in JOB_NAMES:
@@ -842,6 +844,8 @@ def _logs(ops, now, failed_job, stats, paused_job=None):
         "itsm": ["Started: scoreboard scan", "2 roles read", "Finished OK - 7 open requests (35.9 s)"],
         "daily_summary": ["Started: daily summary (13:00)", "Calls, e-mails, tickets and change requests read",
                           "Finished OK - summary sent (13:00): calls 41, mails 77, tickets 12, CRs 9 (3.2 s)"],
+        "best_performer": ["Started: best performer e-mail (15:30)", "Best performers of the day read: Demo Agent 3 is first",
+                           "Finished OK - best performer celebrated - Demo Agent 3: calls 9, e-mails 7, requests 12 = score 51 (2.1 s)"],
     }
     if failed_job:
         lines[failed_job][-1] = f"FAILED - {JOB_ERRORS[failed_job]} (9.1 s)"

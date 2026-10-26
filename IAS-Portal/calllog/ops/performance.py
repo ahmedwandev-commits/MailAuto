@@ -9,10 +9,15 @@ checkpoint) and Insights › Analysis. Every number comes from the same place as
   the portal's inquiry lists them (``sla_history.status_numbers``: the same counting as the SLA Analysis and the
   daily summary), linked to their account by the number the status history shows, else by their security name.
 
+The day's score is counted in security requests (the owner's rule, ``WEIGHTS``): a call answered counts as 2
+requests, an e-mail replied as 3, a request handled as 1.
+
 A manager gets their own team(s) only (``scope``); Third Party is left out of the tickets as everywhere."""
 from datetime import date, timedelta
 
 from . import overlay, schemas, sla_history, sla_records, teams
+
+WEIGHTS = {"calls": 2, "emails": 3, "tickets": 1}     # one call = 2 security requests, one e-mail replied = 3
 
 
 def _resolver(store, hub, users):
@@ -131,9 +136,10 @@ def _emails(store, day, now):
 
 def people_day(store, calls_store, hub, users, day, now, scope=None, top=None):
     """One day of each employee ``scope`` may see: [{user_id, name, team, calls, emails, executed, not_executed,
-    rejected, tickets, total, exec_median_minutes, rank}] best first (the most work done: calls + e-mails replied +
-    tickets handled; ties by tickets, then calls). ``emails`` is None for every row when that day's e-mails are not
-    known. Employees with nothing that day are left out."""
+    rejected, tickets, total, exec_median_minutes, rank}] best first: ``total`` is the day's score in security
+    requests (``WEIGHTS``: tickets handled + 2 per call + 3 per e-mail replied); ties by tickets, then calls.
+    ``emails`` is None for every row when that day's e-mails are not known. Employees with nothing that day are left
+    out."""
     accounts = _accounts_in(users, scope)
     calls = _calls(calls_store, day)
     emails = _emails(store, day, now)
@@ -159,7 +165,7 @@ def people_day(store, calls_store, hub, users, day, now, scope=None, top=None):
         e = (emails or {}).get(str(u.get("email") or "").strip().lower(), 0) if emails is not None else None
         t = tickets.get(uid) or {"executed": 0, "not_executed": 0, "rejected": 0, "_m": []}
         done = t["executed"] + t["not_executed"] + t["rejected"]
-        total = c + (e or 0) + done
+        total = c * WEIGHTS["calls"] + (e or 0) * WEIGHTS["emails"] + done * WEIGHTS["tickets"]
         if not total:
             continue
         mine = [x for x in overlay.user_teams(u) if teams._real_team(x)]

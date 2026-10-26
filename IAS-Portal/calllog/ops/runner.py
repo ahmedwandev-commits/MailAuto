@@ -1,4 +1,5 @@
-"""The collector's scheduler: runs the jobs (email, email_report, sla, itsm, daily_summary) and feeds the shared folder.
+"""The collector's scheduler: runs the jobs (email, email_report, sla, itsm, daily_summary, best_performer) and feeds
+the shared folder.
 
 ``collector.py`` builds a :class:`Runner` and starts it (docs/HUB-DESIGN.md, sections 6, 10, 12 and 15). One worker thread per
 job, so a long Outlook scan never delays the SLA check. What the runner owns, so that the engines stay simple:
@@ -53,12 +54,13 @@ JOBS = {                       # job -> (module, function); a plain callable is 
     "sla": ("calllog.ops.engines.sla_engine", "run"),
     "itsm": ("calllog.ops.engines.itsm_engine", "run"),
     "daily_summary": ("calllog.ops.engines.daily_summary", "run"),
+    "best_performer": ("calllog.ops.engines.best_performer", "run"),
 }
 OUTLOOK_JOBS = ("email", "email_report")
-# the daily summary waits for a running e-mail scan / report to leave Outlook (a mail sent while one walks the mailbox
-# fails with «Out of memory or system resources»), but a long one must not hold a checkpoint back more than this
-OUTLOOK_WAIT_SECONDS = {"daily_summary": 600}
-DEFAULT_TIMEOUT_MINUTES = {"email": 20, "email_report": 30, "sla": 5, "itsm": 10, "daily_summary": 5}
+# the daily summary and the best performer e-mail wait for a running e-mail scan / report to leave Outlook (a mail sent
+# while one walks the mailbox fails with «Out of memory or system resources»), but a long one holds them back no longer
+OUTLOOK_WAIT_SECONDS = {"daily_summary": 600, "best_performer": 600}
+DEFAULT_TIMEOUT_MINUTES = {"email": 20, "email_report": 30, "sla": 5, "itsm": 10, "daily_summary": 5, "best_performer": 5}
 MAX_TIMEOUT_MINUTES = 240
 
 POLL_SECONDS = 5               # how often a worker looks for work (and for "Run now" requests)
@@ -69,11 +71,13 @@ BACKOFF_CAP_MINUTES = 30
 REPORT_RETRY_MINUTES = 10
 REPORT_STATE = "runner-email_report"
 SUMMARY_STATE = "runner-daily_summary"
+BEST_STATE = "runner-best_performer"
 SUMMARY_CATCH_UP_MINUTES = 45  # default of summary.catch_up_minutes
 # jobs that run at fixed times of the day ("slots") instead of every interval_minutes
 SLOT_JOBS = {
     "email_report": {"module": "email", "state": REPORT_STATE, "within_hours": False},
     "daily_summary": {"module": "summary", "state": SUMMARY_STATE, "within_hours": True},
+    "best_performer": {"module": "summary", "state": BEST_STATE, "within_hours": False},   # at its time, a work day
 }
 HOUSEKEEPING_STATE = "runner-housekeeping"
 ACCOUNT_KINDS = collector_config.ACCOUNT_KINDS
@@ -207,13 +211,22 @@ def summary_enabled(settings):
     return bool(summary.get("enabled") and summary.get("send_times"))
 
 
+def best_performer_enabled(settings):
+    best = (settings.get("summary") or {}).get("best_performer") or {}
+    return bool(best.get("enabled") and best.get("send_times"))
+
+
 def slot_enabled(job, settings):
+    if job == "best_performer":
+        return best_performer_enabled(settings)
     return report_enabled(settings) if job == "email_report" else summary_enabled(settings)
 
 
 def slot_times(job, settings):
     if job == "email_report":
         return list((settings["email"].get("report") or {}).get("send_times") or [])
+    if job == "best_performer":                          # once a day: its one time
+        return list(((settings.get("summary") or {}).get("best_performer") or {}).get("send_times") or [])[:1]
     return list((settings.get("summary") or {}).get("send_times") or [])
 
 
@@ -799,7 +812,7 @@ class Runner:
                 slots = slots_due(job, settings, now, self._slots_done(now, job))
                 if not slots:
                     return "idle"
-                if job == "daily_summary":                     # one mail for the latest due checkpoint; all due are done
+                if job in ("daily_summary", "best_performer"):  # one mail for the latest due time; all due are done
                     options["slot"] = slots[-1]
             self._execute(job, settings, options, slots)
         return "ran"
@@ -1059,7 +1072,7 @@ class Runner:
             self.store.prune_history(module, keep)
 
     def _job_event(self, job, ts, ok, previous_ok, error):
-        if self.dry_run or job == "daily_summary":      # a summary mail is not a module's scan: no timeline item
+        if self.dry_run or job in ("daily_summary", "best_performer"):  # a mail, not a module's scan: no timeline item
             return
         try:
             event = events.job_event(job, ts, ok, previous_ok, self.scrub(error) if error else error)

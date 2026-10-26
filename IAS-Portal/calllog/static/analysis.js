@@ -189,8 +189,8 @@
   }
 
   // ------------------------------------------------------------------ best performers: who did the most work in a day
-  //   GET /api/ops/performance?day= - calls answered + e-mails replied + security requests handled, per employee
-  //   (a manager: their own team(s) only)
+  //   GET /api/ops/performance?day= - calls answered, e-mails replied and security requests handled, per employee, and
+  //   the day's score in security requests (a call = 2, an e-mail = 3) - a manager: their own team(s) only
   const perf = { day: "", seq: 0 };
   function performersTable(d) {
     const rows = d.rows || [];
@@ -205,7 +205,7 @@
         { key: "calls", label: "Calls answered", num: true, sort: true, render: (r) => fmtNum(r.calls) },
         { key: "emails", label: "E-mails replied", num: true, sort: true, render: (r) => (r.emails == null ? h("span", { class: "hint", title: "That day's e-mails are not known" }, "—") : fmtNum(r.emails)) },
         { key: "tickets", label: "Tickets handled", num: true, sort: true, render: (r) => h("span", { title: `${r.executed} executed · ${r.not_executed} not executed · ${r.rejected} rejected` }, fmtNum(r.tickets)) },
-        { key: "total", label: "Total", num: true, sort: true, render: (r) => h("strong", {}, fmtNum(r.total)) },
+        { key: "total", label: "Score", num: true, sort: true, render: (r) => h("strong", {}, fmtNum(r.total)) },
       ], rows,
     }).el;
   }
@@ -224,7 +224,7 @@
     }
     dayI.addEventListener("change", load);
     load();
-    return OPS.card("Best performers", { hint: "calls answered + e-mails replied + security requests handled (executed, not executed, rejected)",
+    return OPS.card("Best performers", { hint: "Score in security requests: requests handled (executed, not executed, rejected) + 2 per call answered + 3 per e-mail replied",
       actions: h("label", { class: "sx-filter-f" }, h("span", {}, "Day"), dayI) }, body);
   }
 

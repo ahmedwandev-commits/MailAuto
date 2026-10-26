@@ -1131,6 +1131,34 @@ def test_max_per_run_is_set_on_the_page_saved_and_shown_before_a_run(app, demo_d
     assert t.later_problems(*not_yet_written()) == [], t.problems
 
 
+def test_the_best_performer_card_is_on_at_15_30_saves_its_cc_and_words_and_runs_now(app, ops, demo_data, tab):
+    """Settings › Daily summary › Best performer e-mail: on by default at 15:30, To = the day's best performer; the Cc
+    and the owner's own words are saved; Run now asks the collector to send it."""
+    from calllog.ops import settings as hub_settings
+    t = tab()
+    page = open_system(t, "settings")
+    page.click('#tab-settings .op-subtabs button:has-text("Daily summary")')
+    page.wait_for_function("() => { const s = document.querySelector('[data-run-status=\"best_performer\"]');"
+                           " return s && !s.textContent.startsWith('Checking'); }")
+    text = page.locator('[data-run-status="best_performer"]').inner_text()
+    assert "goes to the day's best performer" in text and "Off:" not in text and "Demo Agent 3" in text
+    assert page.locator('.op-field[data-path="summary.best_performer.send_times"] input').input_value() == "15:30"
+    page.locator('.op-field[data-path="summary.best_performer.cc"] textarea').fill("boss@example.test")
+    page.locator('.op-field[data-path="summary.best_performer.messages"] textarea').fill("Bravo {name}!\nألف مبروك يا {name}")
+    page.locator(".op-savebar button.btn-primary").click()
+    page.wait_for_function("() => document.querySelector('.op-savebar .op-dirty').textContent.startsWith('No unsaved')")
+    best = hub_settings.load(ops)["summary"]["best_performer"]
+    assert best["cc"] == ["boss@example.test"] and best["messages"] == ["Bravo {name}!", "ألف مبروك يا {name}"]
+    page.wait_for_function("() => document.querySelector('[data-run-status=\"best_performer\"]').textContent.includes('Cc 1 address')")
+    page.click('[data-run-now="best_performer"]')
+    page.wait_for_selector("dialog.dlg")
+    assert "Today's best performer so far" in text_of(page, "dialog.dlg") and ops.pending_run_requests("best_performer") == []
+    page.click("dialog.dlg button[type=submit]")
+    page.wait_for_function("() => document.querySelector('[data-run-status=\"best_performer\"]').textContent.includes('Run now requested')")
+    assert len(ops.pending_run_requests("best_performer")) == 1
+    assert t.later_problems() == [], t.problems
+
+
 def test_the_daily_summary_card_says_why_it_does_not_send_and_runs_now(app, ops, demo_data, tab):
     """Settings › Daily summary has its own "Run now": switched off with no recipient (as NBE OpsHub's settings arrive)
     it says so and sends nothing; once it has a saved recipient, Run now asks the collector to send it."""

@@ -36,8 +36,23 @@ def test_each_employee_counts_calls_emails_and_tickets_best_first(tmp_path):
     _, hub, users = _hub_and_users(ops, data)
     rows = performance.people_day(ops, Store(str(data)), hub, users, DAY, NOW)
     got = [(r["rank"], r["user_id"], r["calls"], r["emails"], r["tickets"], r["total"]) for r in rows]
-    assert got == [(1, "7001", 2, 1, 1, 4), (2, "7002", 1, 0, 1, 2)]
+    assert got == [(1, "7001", 2, 1, 1, 8), (2, "7002", 1, 0, 1, 3)]                 # 2x2 + 1x3 + 1 ; 1x2 + 1
     assert rows[0]["executed"] == 1 and rows[1]["rejected"] == 1 and rows[0]["team"] == "Flex Cube"
+
+
+def test_the_score_counts_a_call_as_two_requests_and_an_e_mail_as_three(tmp_path):
+    """The owner's rule: one call answered = 2 security requests, one e-mail replied = 3: three calls (6) beat five
+    requests (5), two e-mails (6) beat five requests too, and a request is worth one."""
+    ops, data = world(tmp_path)
+    assert performance.WEIGHTS == {"calls": 2, "emails": 3, "tickets": 1}
+    calls = Store(str(data))
+    reason = calls.reasons()[0]["key"]
+    calls.add_record({"id": "r9", "date": DAY, "user_id": "7002", "time": f"{DAY}T10:00:00", "reason": reason})
+    calls.add_record({"id": "r8", "date": DAY, "user_id": "7002", "time": f"{DAY}T10:05:00", "reason": reason})
+    _, hub, users = _hub_and_users(ops, data)
+    rows = performance.people_day(ops, Store(str(data)), hub, users, DAY, NOW)
+    assert [(r["user_id"], r["calls"], r["emails"], r["tickets"], r["total"]) for r in rows] == [
+        ("7001", 2, 1, 0, 7), ("7002", 3, 0, 0, 6)]                                      # 2x2 + 1x3 = 7 ; 3x2 = 6
 
 
 def test_a_manager_sees_only_their_own_teams_people(tmp_path):
@@ -81,7 +96,7 @@ def test_every_scan_keeps_the_days_numbers_and_each_scope_reads_its_own(tmp_path
     assert (ops.read_history("sla", DAY) or {}).get("day_log", {}).get("at") == "2026-10-11T13:05:00"
     every = performance.read_day_logs(ops, "", "", None)
     assert [(d["day"], d["executed"], d["rejected"]) for d in every] == [(DAY, 1, 1)]
-    assert every[0]["best"] == {"name": "Person 7001", "total": 4}
+    assert every[0]["best"] == {"name": "Person 7001", "total": 8}
     card = performance.read_day_logs(ops, "", "", ("Card Management",))
     assert (card[0]["executed"], card[0]["rejected"]) == (0, 1) and card[0]["best"]["name"] == "Person 7002"
     one = performance.read_day_logs(ops, "", "", None, person="Person 7001")

@@ -342,6 +342,20 @@ HOW TO UPDATE (your data is kept)
    - A mail Outlook refuses is discarded, never left in Drafts. "Outlook is busy" is no longer mistaken for "no data
      file" (no more advice to change the default data file for it).
 
+32. A CELEBRATION E-MAIL FOR THE DAY'S BEST PERFORMER (System > Settings > Daily summary > Best performer e-mail)
+   - Every working day at 15:30 (you can change the time) the collector e-mails the day's best performer: the first
+     of "Best performers" (calls answered + e-mails replied + requests handled). It goes to the e-mail of their
+     account, with the Cc you set there (managers, the team...). Once a day.
+   - The e-mail is a celebration: confetti, a trophy, their name and team, their numbers of the day and a word of
+     encouragement in English and Arabic - a different one each day. Write your own words under "Your words of
+     encouragement" (one per line, used in turn; {name} becomes their name). The subject can be changed too.
+   - It is ON from this update. Switch it off, or press "Run now" to send it at once to today's best performer so
+     far, on the same card. System > Collectors shows it as "Best performer e-mail".
+   - If the best performer has no e-mail in their account, it goes to the Cc only (Admin > Users to add one).
+   - The best performers are ranked by a SCORE counted in security requests: a call answered counts as 2 requests,
+     an e-mail replied as 3, a request handled (executed, not executed, rejected) as 1. The same score everywhere:
+     Insights > Analysis > "Best performers" (column "Score"), the daily summary and this e-mail.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -620,3 +634,17 @@ IAS PORTAL - الجديد في هذا التحديث
      إعادة تشغيل الـ Outlook على جهاز الـ collector بتحل المشكلة.
    - الإيميل اللي الـ Outlook يرفضه بيتمسح، عمره ما بيفضل في الـ Drafts. و"الـ Outlook مشغول" مبقاش بيتفهم إنه "مفيش
      data file" (مفيش نصيحة بتغيير الـ data file الافتراضي علشانه).
+
+32. إيميل احتفال لأحسن أداء في اليوم (System > Settings > Daily summary > Best performer e-mail)
+   - كل يوم شغل الساعة 3:30 العصر (وتقدر تغير الوقت) الـ collector بيبعت إيميل لأحسن أداء في اليوم: الأول في
+     "Best performers" (المكالمات اللي اترد عليها + الإيميلات اللي اترد عليها + الطلبات اللي اتعملت). بيروح على إيميل
+     الأكونت بتاعه، والـ Cc اللي إنت بتحدده هناك (المديرين، الفريق...). مرة واحدة في اليوم.
+   - الإيميل احتفال: confetti وكأس واسمه وفريقه وأرقامه في اليوم، وكلمة تشجيع بالعربي والإنجليزي - كل يوم كلمة
+     مختلفة. وتقدر تكتب كلامك إنت في "Your words of encouragement" (سطر لكل كلمة، بيتاخدوا بالدور؛ {name} بيتحط مكانها
+     اسمه). وتقدر تغير الـ subject كمان.
+   - شغال من التحديث ده. تقدر تقفله، أو تدوس "Run now" علشان يتبعت على طول لأحسن أداء لحد دلوقتي، من نفس الكارت.
+     وفي System > Collectors بيظهر باسم "Best performer e-mail".
+   - لو أحسن أداء ملوش إيميل في الأكونت، الإيميل بيروح للـ Cc بس (من Admin > Users تضيف له إيميل).
+   - ترتيب أحسن أداء بقى بـ SCORE محسوب بالـ security requests: المكالمة = 2 طلب، الإيميل اللي اترد عليه = 3 طلبات،
+     والطلب اللي اتعمل (اتنفذ، متنفذش، اترفض) = 1. نفس الـ score في كل مكان: Insights > Analysis > "Best performers"
+     (عمود "Score")، والملخص اليومي، والإيميل ده.

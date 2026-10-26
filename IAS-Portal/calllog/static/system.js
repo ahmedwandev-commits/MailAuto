@@ -25,6 +25,8 @@
     itsm: { what: "Reads the ITSM scoreboard and updates the ITSM page.", sends: true, warn: "It may send the ITSM status e-mail." },
     daily_summary: { what: "Today's calls, e-mails, tickets and change requests as one dashboard e-mail.", sends: true,
       warn: "Running it now SENDS the summary e-mail." },
+    best_performer: { what: "Celebrates the day's best performer (calls + e-mails + requests) with an e-mail, once a day.", sends: true,
+      warn: "Running it now SENDS the celebration e-mail to today's best performer so far." },
   };
   const views = {};
   const when = (iso, now) => (iso ? OPS.fmtWhen(iso, now) : "—");
@@ -269,7 +271,7 @@
     async function runNow(job) {
       const meta = JOB_INFO[job] || {}, label = OPS.JOB_LABELS[job] || job;
       const ok = await OPS.confirm({ title: `Run "${label}" now?`, message: `${meta.what || ""} It starts within a minute and ignores the working days and hours. ${meta.warn || ""}`.trim(),
-        confirmLabel: "Run now", danger: !!meta.sends && (job === "email_report" || job === "daily_summary") });
+        confirmLabel: "Run now", danger: !!meta.sends && ["email_report", "daily_summary", "best_performer"].includes(job) });
       if (!ok) return;
       try {
         const r = await api("POST", `/api/ops/jobs/${encodeURIComponent(job)}/run`);
@@ -555,7 +557,14 @@
         { path: "summary.per_team", type: "switch", label: "Add a table by team" },
         { path: "summary.catch_up_minutes", type: "number", min: 5, max: 180, label: "Send a missed checkpoint up to (minutes) late", hint: "If the collector was restarting at 13:00, the 13:00 summary still goes until this many minutes later." },
         { path: "summary.display_only", type: "switch", label: "Show instead of sending", hint: "Opens the e-mail on the collector PC without sending it." },
-        SCHEDULE("summary.schedule", "Daily summary")] }] },
+        SCHEDULE("summary.schedule", "Daily summary")] },
+      { title: "Best performer e-mail", runNow: "best_performer", text: "Once a day, at the time below on a working day, the day's best performer (calls answered + e-mails replied + requests handled, as Insights › Analysis ranks them) gets a celebration e-mail with a word of encouragement, at the e-mail address of their account, with the Cc below. “Run now” sends it at once to today's best performer so far.", fields: [
+        { path: "summary.best_performer.enabled", type: "switch", label: "Send the best performer e-mail" },
+        { path: "summary.best_performer.send_times", type: "times", label: "Send at", hint: "One 24-hour time, like 15:30: it goes once a day, on the working days above." },
+        { path: "summary.best_performer.cc", type: "lines", kind: "email", label: "Cc", hint: "One address per line (managers, the team…). The best performer is the To." },
+        { path: "summary.best_performer.subject", type: "text", max: 150, label: "Subject", hint: "{name} is replaced by their name." },
+        { path: "summary.best_performer.messages", type: "lines", kind: "text", label: "Your words of encouragement (optional)", hint: "One per line, used in turn: a different one each day. {name} is replaced by their name. Empty: a built-in one in English and Arabic, a different one each day." },
+        { path: "summary.best_performer.display_only", type: "switch", label: "Show instead of sending", hint: "Opens the e-mail on the collector PC without sending it." }] }] },
   ];
   const ALL_FIELDS = SECTIONS.flatMap((s) => s.cards.flatMap((c) => c.fields.map((f) => ({ ...f, section: s.id }))));
   const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -825,14 +834,16 @@
     }
 
     // ------------------------------------------------------------------ "Run now" inside a settings card
-    /** The daily summary's own "Run now": what stops it from sending (switched off, no recipient, unsaved changes),
-        the last run and the next checkpoint, from the collector's heartbeat; a request is followed until it ran. */
+    /** The daily summary's (and the best performer e-mail's) own "Run now": what stops it from sending (switched off,
+        no recipient, unsaved changes), the last run and the next time, from the collector's heartbeat; a request is
+        followed until it ran. */
     function runNowPanel(job) {
       const status = h("p", { class: "op-note op-t-info op-block", role: "status", "data-run-status": job }, "Checking the collector…");
-      const saved = () => (st.base || {}).summary || {};
-      const teamLists = () => Object.values(saved().team_recipients || {}).filter((r) => r && ((r.to || []).length || (r.cc || []).length)).length;
-      const recipients = () => (saved().to || []).length + (saved().cc || []).length + teamLists();
-      const unsaved = () => changed().some((f) => f.section === "summary");
+      const best = job === "best_performer";
+      const saved = () => (best ? ((st.base || {}).summary || {}).best_performer : (st.base || {}).summary) || {};
+      const teamLists = () => (best ? 0 : Object.values(saved().team_recipients || {}).filter((r) => r && ((r.to || []).length || (r.cc || []).length)).length);
+      const recipients = () => (best ? 1 : (saved().to || []).length + (saved().cc || []).length + teamLists());
+      const unsaved = () => changed().some((f) => (best ? f.path.startsWith("summary.best_performer") : f.section === "summary"));
       let timer = null;
       function show(tone, text) {
         status.className = `op-note op-t-${tone} op-block`;
@@ -844,14 +855,16 @@
         const j = d && d.jobs ? d.jobs[job] : null;
         const pending = !!(d && (d.pending || []).some((p) => p.job === job));
         const now = d && d.server_time, parts = [];
-        if (!recipients()) parts.push("No recipient: add an address in To / Cc, or a team summary, and save. Nothing is sent until then, not even by Run now.");
+        if (best) parts.push(`It goes to the day's best performer (the e-mail of their account)${(saved().cc || []).length ? `, Cc ${(saved().cc || []).length} address(es)` : ""}.`);
+        else if (!recipients()) parts.push("No recipient: add an address in To / Cc, or a team summary, and save. Nothing is sent until then, not even by Run now.");
         else if (teamLists()) parts.push(`${teamLists()} team summar${teamLists() === 1 ? "y" : "ies"} too, each with its own numbers only.`);
-        if (!saved().enabled) parts.push("Off: the collector does not send it at the checkpoints (switch “Send the daily summary” on and save).");
+        if (!saved().enabled) parts.push(best ? "Off: the collector does not send it (switch “Send the best performer e-mail” on and save)."
+          : "Off: the collector does not send it at the checkpoints (switch “Send the daily summary” on and save).");
         if (pending) parts.push("Run now requested: the collector sends it within a minute.");
         else if (j && j.present && j.last_run_at) {
           parts.push(`Last run ${OPS.fmtWhen(j.last_run_at, now)}: ${j.last_status === "error" ? (j.last_error || "failed") : (j.last_summary || "done")}.`);
         } else if (!j || !j.present) parts.push("The collector has not reported yet: is collector.py running on the Outlook PC?");
-        if (saved().enabled && j && j.next_run_at) parts.push(`Next checkpoint ${OPS.fmtWhen(j.next_run_at, now)}.`);
+        if (saved().enabled && j && j.next_run_at) parts.push(`${best ? "Next" : "Next checkpoint"} ${OPS.fmtWhen(j.next_run_at, now)}.`);
         const failed = j && j.last_status === "error";
         show(!recipients() || failed ? "danger" : !saved().enabled || pending ? "warn" : "ok", parts.join(" "));
         return pending;
@@ -860,8 +873,11 @@
         if (unsaved()) { toast("Save the settings first: Run now sends with the saved settings.", "error"); return; }
         if (!recipients()) { toast("Add at least one address in To or Cc, or a team summary, and save first.", "error"); return; }
         const everyTeam = (saved().to || []).length + (saved().cc || []).length;
-        const ok = await OPS.confirm({ title: "Send the daily summary now?", confirmLabel: "Send now", danger: true,
-          message: `${everyTeam ? `Every team's summary goes to the ${everyTeam} saved recipient(s)` : "No every-team summary (To / Cc are empty)"}${teamLists() ? `, and ${teamLists()} team${teamLists() === 1 ? "" : "s"} get their own` : ""} - within a minute, whatever the time and day.` });
+        const ok = best
+          ? await OPS.confirm({ title: "Send the best performer e-mail now?", confirmLabel: "Send now", danger: true,
+            message: `Today's best performer so far gets the celebration e-mail${(saved().cc || []).length ? `, Cc ${(saved().cc || []).length} saved address(es)` : ""} - within a minute, whatever the time and day.` })
+          : await OPS.confirm({ title: "Send the daily summary now?", confirmLabel: "Send now", danger: true,
+            message: `${everyTeam ? `Every team's summary goes to the ${everyTeam} saved recipient(s)` : "No every-team summary (To / Cc are empty)"}${teamLists() ? `, and ${teamLists()} team${teamLists() === 1 ? "" : "s"} get their own` : ""} - within a minute, whatever the time and day.` });
         if (!ok) return;
         try {
           const r = await api("POST", `/api/ops/jobs/${encodeURIComponent(job)}/run`);

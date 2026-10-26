@@ -424,13 +424,13 @@ def build_html(data, cfg, slot, now, next_slot=None):
     if people.get("available") and people.get("rows"):
         point = slot if slot != "manual" else now.strftime("%H:%M")
         inner += er._heading(f"Best performers - {point} checkpoint")
-        inner += er._table(["", "Employee", "Team", "Calls answered", "E-mails replied", "Tickets handled", "Total"], [
+        inner += er._table(["", "Employee", "Team", "Calls answered", "E-mails replied", "Tickets handled", "Score"], [
             er._tr(er._td(f'#{p["rank"]}', bold=True), er._td(p["name"], bold=True), er._td(p["team"] or "-"),
                    er._td(p["calls"], align="right"), er._td("-" if p["emails"] is None else p["emails"], align="right"),
                    er._td(p["tickets"], align="right"), er._td(p["total"], bold=True, align="right"))
             for p in people["rows"]])
-        inner += _sub(f'Today so far, of {people["people"]} employee(s) with work: calls logged + e-mails replied + '
-                      'security requests executed, not executed or rejected.')
+        inner += _sub(f'Today so far, of {people["people"]} employee(s) with work. Score in security requests: '
+                      'requests executed, not executed or rejected + 2 per call answered + 3 per e-mail replied.')
     if cfg.get("per_team", True) and not data.get("team"):
         team_rows = _team_rows(data)
         if team_rows:
@@ -501,7 +501,7 @@ def _counts(data):
         ("CRs pending", _n(data.get("crs"), "pending"))))
 
 
-def _send(mailer, log, label, retry, **mail):
+def send_retrying(mailer, log, label, retry, **mail):
     """``mailer.send(**mail)``, tried again after each pause of ``SEND_RETRY_SECONDS`` while Outlook answers that it is
     too busy. ``retry["on"]`` goes off once a mail used up its tries: Outlook is stuck, the next mails try once."""
     pauses = list(SEND_RETRY_SECONDS) if retry["on"] else []
@@ -518,7 +518,7 @@ def _send(mailer, log, label, retry, **mail):
                                        f"{len(SEND_RETRY_SECONDS) + 1} tries over {sum(SEND_RETRY_SECONDS)} s; "
                                        "restarting Outlook on the collector PC frees its memory)") from exc
                 raise
-            log(f"daily summary ({label}): Outlook is busy ({outlook_error_text(exc)}) - trying again in {pauses[0]} s")
+            log(f"{label}: Outlook is busy ({outlook_error_text(exc)}) - trying again in {pauses[0]} s")
             _sleep(pauses.pop(0))
 
 
@@ -564,8 +564,9 @@ def _run(ctx):
             continue
         mailer = mailer or ctx.mailer or OutlookMailer()
         try:
-            _send(mailer, ctx.log, label, retry, to=to, cc=cc, subject=subject, html_body=html,
-                  inline_images=er.mail_images() or None, display_only=bool(cfg.get("display_only")))
+            send_retrying(mailer, ctx.log, f"daily summary ({label})", retry, to=to, cc=cc, subject=subject,
+                          html_body=html, inline_images=er.mail_images() or None,
+                          display_only=bool(cfg.get("display_only")))
         except Exception as exc:                            # noqa: BLE001 - built, not sent: say which of the two
             ctx.log(f"daily summary ({label}) built ({slot}: {_counts(data)}) but Outlook could not send it: "
                     f"{outlook_error_text(exc)}")

@@ -1,7 +1,7 @@
 """NBE Operations Hub - the collector. Runs on the Windows PC that has Outlook and Chrome (or Edge) and feeds the shared folder.
 
     python collector.py                    run every enabled job in this window (Ctrl+C stops it)
-    python collector.py --jobs sla,itsm    only these jobs (email, email_report, sla, itsm, daily_summary)
+    python collector.py --jobs sla,itsm    only these jobs (email, email_report, sla, itsm, daily_summary, best_performer)
     python collector.py --once sla         run one job now, print the result, exit (0 = good, 1 = failed)
                                            add --dry-run (write/send nothing) --no-email --debug --headed --force --send-mail
     python collector.py --check            what is configured, what is missing (never prints a password)
@@ -40,7 +40,7 @@ HERE = bootstrap.HERE
 SCRIPT = Path(__file__).resolve()
 REQUIREMENTS = HERE / "requirements-collector.txt"
 OPTIONAL_PACKAGES = (("matplotlib", "matplotlib>=3.7"),)      # charts in the e-mail report; the report works without them
-JOB_NAMES = ("email", "email_report", "sla", "itsm", "daily_summary")    # same as calllog.ops.schemas.JOBS (a test keeps them equal)
+JOB_NAMES = ("email", "email_report", "sla", "itsm", "daily_summary", "best_performer")    # same as calllog.ops.schemas.JOBS (a test keeps them equal)
 ACCOUNTS = {"sla": "SLA portal", "itsm": "ITSM"}
 PACKAGES = [("flask", "Flask"), ("openpyxl", "openpyxl"), ("keyring", "keyring")] + (
     [("win32com", "pywin32")] if os.name == "nt" else [])
@@ -94,7 +94,7 @@ def pause():
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description="NBE Operations Hub collector", epilog=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--jobs", help="only these jobs, comma separated (email, email_report, sla, itsm, daily_summary)")
+    ap.add_argument("--jobs", help="only these jobs, comma separated (email, email_report, sla, itsm, daily_summary, best_performer)")
     ap.add_argument("--once", metavar="JOB", choices=JOB_NAMES, help="run one job now, print the result and exit")
     ap.add_argument("--no-email", action="store_true", help="do not send e-mail")
     ap.add_argument("--dry-run", action="store_true", help="scan, but write and send nothing")
