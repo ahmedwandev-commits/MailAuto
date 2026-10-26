@@ -492,7 +492,7 @@ def _read_item(item, cfg, root, folder, received, seen_ids, keep_mail_items, sto
         "to_cc": all_to_cc,
         "business_addresses_in_to": business_to,
         "is_team_member": is_team_member,
-        # a live COM object per mail makes Outlook unresponsive: only the daily report (it saves .msg files) keeps them
+        # a live COM object per mail runs Outlook out of memory: kept only when asked (the report fetches each again)
         "mail_item": item if keep_mail_items else None,
     }
 
@@ -916,7 +916,7 @@ def build_report(ctx, cfg, included_emails, all_emails, now=None):
 # ---------------------------------------------------------------------------------------------------------------------
 # Saved copies of the mails people open on the web pages (docs/FEATURES-V2.md B1; files and rules: calllog/ops/mailbox.py)
 # ---------------------------------------------------------------------------------------------------------------------
-def _fetch_item(namespace, row):
+def fetch_item(namespace, row):
     """The Outlook item of one row, fetched again by EntryID (with the store it lives in when we know it). The caller
     must drop it as soon as it has saved it: a live COM object per mail makes Outlook unresponsive."""
     entry_id, store_id = row.get("entry_id"), row.get("store_id")
@@ -976,7 +976,7 @@ def _preview_of(item, row, message_id):
 def _save_one(namespace, cfg, directory, tmp_dir, row, message_id, key):
     """Save one mail. Returns "ready" or "too_large". Raises on any COM / file problem (the caller logs and moves on).
     Every COM object lives only inside this function."""
-    item = _fetch_item(namespace, row)
+    item = fetch_item(namespace, row)
     try:
         preview = _preview_of(item, row, message_id)
         if _item_size(item) > cfg.copies_max_bytes:

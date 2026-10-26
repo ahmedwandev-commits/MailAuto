@@ -21,15 +21,19 @@ The numbers are the ones the pages show for every team:
 Counts and team names only: never a person, a subject or a customer. Never raises: a module that cannot be read says so
 in its card and the mail still goes.
 """
+import time
 from datetime import datetime, timedelta
 
 from .. import itsm_records, overlay, performance, schemas, sla_history, teams
 from ..settings import DEFAULTS, deep_merge
-from .common import FONT_STACK, NBE_GOLD, NBE_GREEN, JobResult, OutlookMailer, esc, outlook_error_text
+from .common import FONT_STACK, NBE_GOLD, NBE_GREEN, JobResult, OutlookMailer, esc, outlook_busy, outlook_error_text
 from . import email_report as er
 
 STATE_NAME = "daily_summary"                 # {"day": "YYYY-MM-DD", "sent": {slot: iso time}}
 STALE_FACTOR = 3                             # a module's data older than 3 scan intervals is shown as stale
+# Outlook too busy for a summary («Out of memory or system resources», busy): it is tried again after these pauses
+SEND_RETRY_SECONDS = (20, 60)
+_sleep = time.sleep
 
 
 # ------------------------------------------------------------------------------------------------ helpers
@@ -497,6 +501,27 @@ def _counts(data):
         ("CRs pending", _n(data.get("crs"), "pending"))))
 
 
+def _send(mailer, log, label, retry, **mail):
+    """``mailer.send(**mail)``, tried again after each pause of ``SEND_RETRY_SECONDS`` while Outlook answers that it is
+    too busy. ``retry["on"]`` goes off once a mail used up its tries: Outlook is stuck, the next mails try once."""
+    pauses = list(SEND_RETRY_SECONDS) if retry["on"] else []
+    while True:
+        try:
+            return mailer.send(**mail)
+        except Exception as exc:                            # noqa: BLE001 - raised again when it is not worth a try
+            if not outlook_busy(exc):
+                raise
+            if not pauses:
+                if retry["on"]:
+                    retry["on"] = False
+                    raise RuntimeError(f"{outlook_error_text(exc)} (Outlook said so at each of "
+                                       f"{len(SEND_RETRY_SECONDS) + 1} tries over {sum(SEND_RETRY_SECONDS)} s; "
+                                       "restarting Outlook on the collector PC frees its memory)") from exc
+                raise
+            log(f"daily summary ({label}): Outlook is busy ({outlook_error_text(exc)}) - trying again in {pauses[0]} s")
+            _sleep(pauses.pop(0))
+
+
 def _run(ctx):
     cfg = deep_merge(DEFAULTS["summary"], ctx.settings or {})
     now = ctx.now()
@@ -520,7 +545,7 @@ def _run(ctx):
                          summary="no recipient - add one (To / Cc, or a team) in System › Settings › Daily summary")
     already = set() if (force or slot == "manual") else set(done.get(slot) or [])
     mailer = None
-    built, mailed, errors = [], 0, []
+    built, mailed, errors, retry = [], 0, [], {"on": True}
 
     def remember():
         try:
@@ -539,8 +564,8 @@ def _run(ctx):
             continue
         mailer = mailer or ctx.mailer or OutlookMailer()
         try:
-            mailer.send(to, cc=cc, subject=subject, html_body=html, inline_images=er.mail_images() or None,
-                        display_only=bool(cfg.get("display_only")))
+            _send(mailer, ctx.log, label, retry, to=to, cc=cc, subject=subject, html_body=html,
+                  inline_images=er.mail_images() or None, display_only=bool(cfg.get("display_only")))
         except Exception as exc:                            # noqa: BLE001 - built, not sent: say which of the two
             ctx.log(f"daily summary ({label}) built ({slot}: {_counts(data)}) but Outlook could not send it: "
                     f"{outlook_error_text(exc)}")

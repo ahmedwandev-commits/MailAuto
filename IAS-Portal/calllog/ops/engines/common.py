@@ -138,6 +138,7 @@ def _norm_text(text):
 
 # --------------------------------------------------------------------- Outlook
 OL_FOLDER_DRAFTS = 16                    # Outlook's olFolderDrafts
+OL_DISCARD = 1                           # Outlook's olDiscard (MailItem.Close)
 _SEND_USING_ACCOUNT = 64209              # the DISPID of MailItem.SendUsingAccount (pywin32 cannot always set it by name)
 
 
@@ -165,6 +166,23 @@ def outlook_error_text(exc):
     detail = args[2] if len(args) > 2 and isinstance(args[2], tuple) else ()
     text = detail[2] if len(detail) > 2 and detail[2] else (args[1] if len(args) > 1 and isinstance(args[1], str) else str(exc))
     return " ".join(str(text).split())[:300]
+
+
+# Outlook's answers that mean "not now" rather than "not this mail": out of memory or resources (it says so while
+# another program - the e-mail scan or report - holds many of its items), busy, a call it rejected.
+OUTLOOK_BUSY_CODES = {-2147024882,                   # E_OUTOFMEMORY = MAPI_E_NOT_ENOUGH_MEMORY (0x8007000E)
+                      -2147418111,                   # RPC_E_CALL_REJECTED (0x80010001)
+                      -2147417846}                   # RPC_E_SERVERCALL_RETRYLATER (0x8001010A)
+OUTLOOK_BUSY_WORDS = ("out of memory", "system resources", "server busy", "call was rejected", "retry later")
+
+
+def outlook_busy(exc):
+    """Is ``exc`` Outlook saying it cannot do it right now (out of memory or resources, busy) - worth another try?"""
+    args = getattr(exc, "args", ()) or ()
+    detail = args[2] if len(args) > 2 and isinstance(args[2], tuple) else ()
+    codes = {args[0] if args else None, detail[5] if len(detail) > 5 else None}
+    text = outlook_error_text(exc).lower()
+    return bool(codes & OUTLOOK_BUSY_CODES) or any(word in text for word in OUTLOOK_BUSY_WORDS)
 
 
 class OutlookMailer:
@@ -201,6 +219,8 @@ class OutlookMailer:
         try:
             return outlook.CreateItem(0)
         except Exception as first:                       # noqa: BLE001 - tried in the account's own mailbox below
+            if outlook_busy(first):
+                raise                                    # Outlook is busy, not missing a data file: tried again later
             ns = outlook.GetNamespace("MAPI")
             accounts = []
             with _suppress():
@@ -230,26 +250,33 @@ class OutlookMailer:
         with OUTLOOK_LOCK:
             outlook = self._outlook()
             mail = self._new_mail(outlook)
-            mail.To = "; ".join(to)
-            if cc:
-                mail.CC = "; ".join(cc)
-            if bcc:
-                mail.BCC = "; ".join(bcc)
-            mail.Subject = subject
-            for cid, path in (inline_images or {}).items():
-                if path and os.path.exists(path):
-                    att = mail.Attachments.Add(path, 1, 0)
-                    pa = att.PropertyAccessor
-                    pa.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", cid)
-                    pa.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x7FFE000B", True)
-            mail.HTMLBody = html_body
-            for path in attachments:
-                if path and os.path.exists(path):
-                    mail.Attachments.Add(str(path))
-            if display:
-                mail.Display()
-            else:
-                mail.Send()
+            try:
+                mail.To = "; ".join(to)
+                if cc:
+                    mail.CC = "; ".join(cc)
+                if bcc:
+                    mail.BCC = "; ".join(bcc)
+                mail.Subject = subject
+                for cid, path in (inline_images or {}).items():
+                    if path and os.path.exists(path):
+                        att = mail.Attachments.Add(path, 1, 0)
+                        pa = att.PropertyAccessor
+                        pa.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", cid)
+                        pa.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x7FFE000B", True)
+                mail.HTMLBody = html_body
+                for path in attachments:
+                    if path and os.path.exists(path):
+                        mail.Attachments.Add(str(path))
+                if display:
+                    mail.Display()
+                else:
+                    mail.Send()
+            except Exception:
+                with _suppress():                        # never leave the half-made mail behind (in Drafts)
+                    mail.Close(OL_DISCARD)
+                raise
+            finally:
+                att = pa = mail = outlook = None         # noqa: F841 - drop the COM references now
 
 
 class FakeMailer:

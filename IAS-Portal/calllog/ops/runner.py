@@ -54,8 +54,10 @@ JOBS = {                       # job -> (module, function); a plain callable is 
     "itsm": ("calllog.ops.engines.itsm_engine", "run"),
     "daily_summary": ("calllog.ops.engines.daily_summary", "run"),
 }
-# the daily summary only sends one mail (like the sla / itsm mails), so a long e-mail scan must not delay a checkpoint
 OUTLOOK_JOBS = ("email", "email_report")
+# the daily summary waits for a running e-mail scan / report to leave Outlook (a mail sent while one walks the mailbox
+# fails with «Out of memory or system resources»), but a long one must not hold a checkpoint back more than this
+OUTLOOK_WAIT_SECONDS = {"daily_summary": 600}
 DEFAULT_TIMEOUT_MINUTES = {"email": 20, "email_report": 30, "sla": 5, "itsm": 10, "daily_summary": 5}
 MAX_TIMEOUT_MINUTES = 240
 
@@ -824,7 +826,7 @@ class Runner:
         self._beat(job, running=True, state="running", started_at=now_iso(started), enabled=self._enabled(job, settings))
         log(f"Started ({options.get('trigger', 'schedule')}{who}){' - dry run' if self.dry_run else ''}")
         try:
-            with self._outlook_turn(job) as have_turn:
+            with self._outlook_turn(job, log) as have_turn:
                 result = self._run(job, settings, options, log) if have_turn else stopped_result()
         except Exception as exc:                                 # e.g. the job process could not even be started
             log(self.scrub(traceback.format_exc()))
@@ -837,15 +839,25 @@ class Runner:
         return result
 
     @contextlib.contextmanager
-    def _outlook_turn(self, job):
-        """Outlook automation is one conversation at a time: the e-mail jobs wait for each other here."""
-        if job not in OUTLOOK_JOBS:
+    def _outlook_turn(self, job, log=None):
+        """Outlook automation is one conversation at a time: the e-mail jobs wait for each other here; the daily summary
+        waits for them too, at most ``OUTLOOK_WAIT_SECONDS`` (then it goes anyway)."""
+        limit = OUTLOOK_WAIT_SECONDS.get(job)
+        if job not in OUTLOOK_JOBS and limit is None:
             yield True
             return
+        waited = time.monotonic()
         while not common.OUTLOOK_LOCK.acquire(timeout=1):
             if self._stop.is_set():
                 yield False
                 return
+            if limit is not None and time.monotonic() - waited >= limit:
+                if log:
+                    log(f"Outlook is still busy with the e-mail scan after {limit // 60} min - sending anyway")
+                yield True
+                return
+        if log and time.monotonic() - waited >= 5:
+            log(f"Waited {round(time.monotonic() - waited)} s for the e-mail scan to finish with Outlook")
         try:
             yield True
         finally:

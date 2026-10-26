@@ -1070,28 +1070,30 @@ def _can_save(item):
     return item is not None and callable(getattr(item, "SaveAs", None))
 
 
-def save_pending_msgs(rows, folder, log):
-    """Save every unanswered mail that still has an Outlook item as ``.msg`` under ``folder/<team>/``.
+def save_pending_msgs(rows, folder, log, fetch=None):
+    """Save every unanswered mail as ``.msg`` under ``folder/<team>/``. Each mail is fetched again (``fetch(row)``:
+    Outlook's GetItemFromID by its EntryID) only while it is saved, then let go: a live Outlook item kept for every mail
+    of the day runs Outlook out of memory («Out of memory or system resources») for every other mail sent meanwhile.
 
-    Returns ``({id(row): path}, failed_count)``. Rows without a usable item (a scan that did not keep them, a fake
-    Outlook, a machine without Outlook) are skipped quietly with one log line - the follow-up e-mails then carry the
-    list without a zip. A mail addressed to two teams is saved once and listed for both.
+    Returns ``({id(row): path}, failed_count)``. Rows without a usable item (no EntryID, a fake Outlook, a machine
+    without Outlook) are skipped quietly with one log line - the follow-up e-mails then carry the list without a zip. A
+    mail addressed to two teams is saved once and listed for both.
     """
     wanted = [r for r in rows if r.get("teams_pending") and r.get("status") != "No Action Needed"]
-    usable = [r for r in wanted if _can_save(r.get("mail_item"))]
-    if not usable:
-        if wanted:
-            log("No Outlook items are available to save as .msg files - the follow-up e-mails carry the list only.")
-        return {}, 0
-    files, saved, failed = {}, {}, 0
+    files, saved, failed, number = {}, {}, 0, 0
     with OUTLOOK_LOCK:                                 # COM objects belong to the one Outlook conversation
-        for number, row in enumerate(usable, 1):
-            item = row["mail_item"]
-            key = row.get("message_id") or id(item)
+        for row in wanted:
+            key = row.get("message_id") or row.get("entry_id") or id(row)
             if key in saved:
                 files[id(row)] = saved[key]
                 continue
+            item = row.get("mail_item")
             try:
+                if item is None and fetch is not None and row.get("entry_id"):
+                    item = fetch(row)
+                if not _can_save(item):
+                    continue
+                number += 1
                 team_folder = Path(folder) / safe_name(row.get("team") or UNCLASSIFIED, 30, UNCLASSIFIED)
                 team_folder.mkdir(parents=True, exist_ok=True)
                 name = f"{number:03d}_{safe_name(row.get('customer_name'), 25)}_{safe_name(row.get('subject'), 45)}.msg"
@@ -1104,6 +1106,10 @@ def save_pending_msgs(rows, folder, log):
             except Exception as exc:
                 failed += 1
                 log(f"Could not save a pending e-mail as .msg: {type(exc).__name__}: {exc}")
+            finally:
+                item = None                            # release the COM object before the next mail
+    if wanted and not files and not failed:
+        log("No Outlook items are available to save as .msg files - the follow-up e-mails carry the list only.")
     return files, failed
 
 
@@ -1250,6 +1256,7 @@ class Run:
         self.excel = None
         self.charts = {}
         self.parts = {}
+        self.namespace = None                           # Outlook's MAPI namespace (tests pass the fake one)
 
     def log(self, text):
         self.ctx.log(text)
@@ -1394,7 +1401,15 @@ def _pending_step(run):
     """[5] .msg files + zips per team. Without Outlook items it still builds the (zip-less) parts for the follow-ups."""
     files, failed = {}, 0
     if _msgs_wanted(run):
-        files, failed = save_pending_msgs(run.rows, Path(run.work) / "msg", run.log)
+        namespace = run.namespace
+        if namespace is None:
+            try:
+                namespace = eng.connect_outlook(run.ctx)[1]
+            except Exception as exc:                   # noqa: BLE001 - the follow-ups still go, with the list only
+                run.log(f"Outlook could not be opened to save the pending e-mails as .msg: {exc}")
+        if namespace is not None:
+            files, failed = save_pending_msgs(run.rows, Path(run.work) / "msg", run.log,
+                                              lambda row: eng.fetch_item(namespace, row))
     run.parts = build_team_parts(run.rows, files, run.cfg.max_per_zip, Path(run.work) / "zips")
     attached = sum(p["count"] for parts in run.parts.values() for p in parts)
     if attached or failed:
@@ -1650,7 +1665,7 @@ def _run(ctx, namespace):
 
     ctx.log("[1] Scanning Outlook and analysing the day...")
     try:
-        outcome = eng.scan_and_analyze(ctx, namespace, keep_mail_items=cfg.send and cfg.attach_msg and ctx.can_email())
+        outcome = eng.scan_and_analyze(ctx, namespace)  # no live Outlook item kept: the .msg step fetches each one
     except (eng.ConfigProblem, eng.OutlookUnavailable) as exc:
         ctx.log(f"E-mail report cannot run: {exc}")
         return JobResult(ok=False, error=str(exc))
@@ -1662,6 +1677,7 @@ def _run(ctx, namespace):
     work = tempfile.mkdtemp(prefix=WORK_PREFIX)
     try:
         run = Run(ctx, cfg, outcome, work, slot, state, _mailer(ctx) if ctx.can_email() else None)
+        run.namespace = namespace                      # None: the .msg step connects to Outlook itself
         if not ctx.can_email():
             ctx.log("E-mail is switched off for this run: the report is built, nothing is sent.")
         ctx.log("[2] Updating the trend and quality history...")

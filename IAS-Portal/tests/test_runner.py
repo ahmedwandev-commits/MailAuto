@@ -295,6 +295,52 @@ def test_a_slow_job_does_not_delay_the_others(store, clock, monkeypatch):
     assert not any(t.is_alive() for t in r._threads)
 
 
+def _outlook_held_by_another_job(release_after=None):
+    """Hold the Outlook turn in another thread (an e-mail scan walking the mailbox); hand it back after
+    ``release_after`` seconds, or when ``done`` is set. Returns ``(done, released)``."""
+    taken, done, released = threading.Event(), threading.Event(), threading.Event()
+
+    def scan():
+        with common.OUTLOOK_LOCK:
+            taken.set()
+            done.wait(release_after if release_after is not None else 30)
+        released.set()
+    threading.Thread(target=scan, daemon=True).start()
+    assert taken.wait(5)
+    return done, released
+
+
+def test_the_daily_summary_waits_for_the_email_scan_to_leave_outlook(store, clock):
+    """A mail sent while the e-mail scan or report walks the mailbox fails with «Out of memory or system resources»:
+    the summary waits for its turn with Outlook (the sla / itsm jobs do not)."""
+    r, logs = make_runner(store, clock), []
+    _, released = _outlook_held_by_another_job(release_after=0.4)
+    started = time.monotonic()
+    with r._outlook_turn("daily_summary", logs.append) as turn:
+        assert turn and time.monotonic() - started >= 0.3 and released.is_set()
+        assert common.OUTLOOK_LOCK.acquire(blocking=False)          # it holds the turn now (an RLock: re-entered)
+        common.OUTLOOK_LOCK.release()
+    held, _ = _outlook_held_by_another_job()
+    started = time.monotonic()
+    with r._outlook_turn("sla", logs.append) as turn:                  # never waits
+        assert turn and time.monotonic() - started < 0.5
+    held.set()
+
+
+def test_a_long_email_scan_holds_the_daily_summary_back_only_so_long(store, clock, monkeypatch):
+    monkeypatch.setitem(runner.OUTLOOK_WAIT_SECONDS, "daily_summary", 1)
+    r, logs = make_runner(store, clock), []
+    held, released = _outlook_held_by_another_job()
+    started = time.monotonic()
+    try:
+        with r._outlook_turn("daily_summary", logs.append) as turn:
+            assert turn and 0.9 <= time.monotonic() - started < 5
+        assert any("sending anyway" in line for line in logs)
+        assert not released.is_set()                                   # the scan's turn was never taken from it
+    finally:
+        held.set()
+
+
 # -------------------------------------------------------------------------- results, failures, events
 def test_failed_scan_never_overwrites_the_snapshot(store, clock, monkeypatch):
     monkeypatch.setitem(runner.JOBS, "sla", good_sla)

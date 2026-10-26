@@ -396,6 +396,30 @@ def test_a_team_without_recipients_falls_back_to_the_report_recipients_when_a_zi
     assert "2</b> unanswered e-mail(s) are attached" in mailer.sent[0]["html"]
 
 
+def test_the_report_keeps_no_outlook_item_open_and_fetches_each_pending_mail_only_while_saving_it(store, tmp_path,
+                                                                                               monkeypatch):
+    """A live Outlook item kept for every mail of the day ran Outlook out of memory («Out of memory or system
+    resources») for the daily summary sent meanwhile: the scan keeps none; the .msg step fetches each pending mail
+    again by its EntryID, saves it and lets it go before the next."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    items, named = busy_day(cls=SavingItem)
+    namespace, seen = archive(*items), {}
+    real = er.save_pending_msgs
+
+    def spy(rows, *a, **kw):
+        seen["items"] = [r.get("mail_item") for r in rows]
+        return real(rows, *a, **kw)
+    monkeypatch.setattr(er, "save_pending_msgs", spy)
+    mailer = CheckingMailer()
+    result = er.run_report(make_ctx(store, mailer, email=team_settings()), namespace)
+    assert result.ok, result.error
+    assert seen["items"] and all(item is None for item in seen["items"])          # no live item came out of the scan
+    assert sorted(e for e, _ in namespace.fetched) == sorted([named["flex"].EntryID, named["mfa"].EntryID])
+    assert namespace.max_live_handles == 1 and namespace.live_handles == 0         # one at a time, none kept
+    assert [fmt for item in (named["flex"], named["mfa"]) for _, fmt in item.saved] == [9, 9]
+    assert list(sent_to(mailer, FLEX_TEAM)[0]["zips"]) == ["Flex_Cube_Pending.zip"]
+
+
 def test_a_big_team_list_is_split_into_numbered_parts(store, tmp_path, monkeypatch):
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     mailer = CheckingMailer()

@@ -332,6 +332,16 @@ HOW TO UPDATE (your data is kept)
    - The previous versions dated requests by when the scans saw them change, which gave impossible numbers
      (8,740 executed for 2,416 that came). That is gone. Today's line of "Day by day" is rewritten at the next scan.
 
+31. THE DAILY SUMMARY NO LONGER FAILS WITH «OUT OF MEMORY OR SYSTEM RESOURCES»
+   - The e-mail report kept every mail of the day open in Outlook while it ran (to save the pending ones as .msg),
+     which ran Outlook out of memory: a summary sent meanwhile failed with "Out of memory or system resources". The
+     report now opens each pending mail only while it saves it, one at a time.
+   - The daily summary waits for a running e-mail scan or report to finish with Outlook (10 minutes at most), and a
+     mail Outlook is too busy for is tried again after 20 s and 60 s. If Outlook stays out of memory, the error says
+     so: restarting Outlook on the collector PC frees it.
+   - A mail Outlook refuses is discarded, never left in Drafts. "Outlook is busy" is no longer mistaken for "no data
+     file" (no more advice to change the default data file for it).
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -600,3 +610,13 @@ IAS PORTAL - الجديد في هذا التحديث
      لحد ما يتقري - عمرها ما بتكون ساعة متخمنة. والصفحة بتقول آخر scan قرا كام ولسه كام مستني.
    - النسخ اللي فاتت كانت بتأرخ الطلبات بإمتى الـ scans شافتها بتتغير، وده كان بيطلع أرقام مستحيلة (8,740 اتنفذ من
      2,416 جه). ده اتشال. وسطر النهارده في "Day by day" بيتكتب من جديد في الـ scan الجاي.
+
+31. الملخص اليومي مبقاش بيفشل بـ «Out of memory or system resources»
+   - تقرير الإيميل كان بيسيب كل إيميلات اليوم مفتوحة في الـ Outlook طول ما هو شغال (علشان يحفظ اللي مستني رد كـ
+     .msg)، وده كان بيخلص ذاكرة الـ Outlook: والملخص اللي يتبعت في الوقت ده كان بيفشل بـ "Out of memory or system
+     resources". دلوقتي التقرير بيفتح كل إيميل مستني رد بس وهو بيحفظه، واحد واحد.
+   - الملخص اليومي بيستنى الـ scan أو التقرير اللي شغال يخلص من الـ Outlook (10 دقايق بالكتير)، والإيميل اللي الـ
+     Outlook مشغول عنه بيتجرب تاني بعد 20 ثانية و60 ثانية. ولو الـ Outlook فضل مفيهوش ذاكرة، الرسالة بتقول كده:
+     إعادة تشغيل الـ Outlook على جهاز الـ collector بتحل المشكلة.
+   - الإيميل اللي الـ Outlook يرفضه بيتمسح، عمره ما بيفضل في الـ Drafts. و"الـ Outlook مشغول" مبقاش بيتفهم إنه "مفيش
+     data file" (مفيش نصيحة بتغيير الـ data file الافتراضي علشانه).
