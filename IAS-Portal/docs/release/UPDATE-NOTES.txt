@@ -356,6 +356,16 @@ HOW TO UPDATE (your data is kept)
      an e-mail replied as 3, a request handled (executed, not executed, rejected) as 1. The same score everywhere:
      Insights > Analysis > "Best performers" (column "Score"), the daily summary and this e-mail.
 
+33. THE BEST PERFORMANCE E-MAIL: THE TOP 3, IN ENGLISH - AND NO LONGER IN THE DAILY SUMMARY
+   - The daily summary no longer lists the best performers. They are celebrated once a day, by the Best Performance
+     e-mail only (System > Settings > Daily summary > "Best Performance e-mail").
+   - It celebrates the day's TOP 3 in one e-mail: To the three (the e-mails of their accounts), Cc what you set. A
+     podium (gold, silver, bronze), their names and teams, a table of their calls, e-mails, requests and score, and a
+     word of encouragement - all in English. "How many are celebrated" can be set from 1 to 5 (3 by default).
+   - Subject and your own words: {names} becomes their names ("A, B and C"). Default subject: "Best Performance of
+     the day: {names}".
+   - The score is the same: a call = 2 security requests, an e-mail replied = 3, a request handled = 1.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -648,3 +658,13 @@ IAS PORTAL - الجديد في هذا التحديث
    - ترتيب أحسن أداء بقى بـ SCORE محسوب بالـ security requests: المكالمة = 2 طلب، الإيميل اللي اترد عليه = 3 طلبات،
      والطلب اللي اتعمل (اتنفذ، متنفذش، اترفض) = 1. نفس الـ score في كل مكان: Insights > Analysis > "Best performers"
      (عمود "Score")، والملخص اليومي، والإيميل ده.
+
+33. إيميل الـ Best Performance: الـ top 3، بالإنجليزي - ومبقاش في الملخص اليومي
+   - الملخص اليومي مبقاش بيعرض أحسن أداء. الاحتفال بيهم بقى مرة واحدة في اليوم، بإيميل الـ Best Performance بس
+     (System > Settings > Daily summary > "Best Performance e-mail").
+   - بيحتفل بالـ TOP 3 في اليوم في إيميل واحد: To التلاتة (إيميلات الأكونتات بتاعتهم)، والـ Cc اللي إنت بتحدده. فيه
+     منصة تتويج (دهبي، فضي، برونزي)، أساميهم وفرقهم، جدول بالمكالمات والإيميلات والطلبات والـ score، وكلمة تشجيع -
+     كله بالإنجليزي. وتقدر تغير "How many are celebrated" من 1 لـ 5 (3 افتراضي).
+   - الـ subject وكلامك: {names} بيتحط مكانها أساميهم ("A, B and C"). الـ subject الافتراضي: "Best Performance of
+     the day: {names}".
+   - الـ score زي ما هو: المكالمة = 2 طلب، الإيميل اللي اترد عليه = 3، الطلب = 1.

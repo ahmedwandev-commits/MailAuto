@@ -170,7 +170,7 @@
     return chip(label, tone);
   }
   const JOB_LABELS = { email: "E-mail scan", email_report: "E-mail daily report", sla: "Ticketing", itsm: "ITSM",
-    daily_summary: "Daily summary", best_performer: "Best performer e-mail" };
+    daily_summary: "Daily summary", best_performer: "Best Performance e-mail" };
   /** Chip for one collector job (an entry of `collectors` in /api/ops/overview or `jobs` in /api/ops/jobs). */
   function jobChip(job) {
     if (!job || !job.present) return chip("Not started", "na", "dash");

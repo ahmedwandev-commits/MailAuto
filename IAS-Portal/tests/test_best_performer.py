@@ -1,10 +1,8 @@
-"""The best performer e-mail (calllog/ops/engines/best_performer.py): once a day, at its time on a working day, the
-day's best performer (calls answered + e-mails replied + requests handled, as Insights › Analysis ranks them) gets a
-celebration e-mail with the Cc of the settings. Made-up people and data only."""
+"""The Best Performance e-mail (calllog/ops/engines/best_performer.py): once a day, at its time on a working day, the
+day's top 3 (score in security requests: requests handled + 2 per call answered + 3 per e-mail replied, as Insights ›
+Analysis ranks them) get one celebration e-mail in English, with the Cc of the settings. Made-up people and data only."""
 import re
 from datetime import datetime
-
-import pytest
 
 from calllog.ops import runner, settings as hub_settings
 from calllog.ops.engines import best_performer as bp, common, daily_summary as ds
@@ -12,10 +10,20 @@ from calllog.storage import Store
 from test_daily_summary import DAY, Mailer, ctx_for, world
 from test_performance import _sla_day
 
+ARABIC = re.compile(r"[؀-ۿ]")
 
-def make_ctx(tmp_path, mailer, best=None, options=None, edit_users=None):
+
+def third_person(store, email="c3@example.test"):
+    """Person 7003 (Card Management): one call = score 2."""
+    store.create_user({"user_id": "7003", "name": "Person 7003", "role": "user", "active": True, "team": "Card Management",
+                       "email": email})
+    store.add_record({"id": "r7003", "date": DAY, "user_id": "7003", "time": f"{DAY}T11:00:00",
+                      "reason": store.reasons()[0]["key"]})
+
+
+def make_ctx(tmp_path, mailer, best=None, options=None, edit_users=third_person):
     """Person 7001 (Flex Cube): 2 calls, 1 e-mail replied, 1 request executed = score 8 (2x2 + 1x3 + 1); Person
-    7002: 1 call, 1 rejected = score 3."""
+    7002 (Card Management): 1 call, 1 rejected = score 3; Person 7003: 1 call = score 2."""
     ops, data = world(tmp_path)
     _sla_day(ops)
     if edit_users:
@@ -23,54 +31,80 @@ def make_ctx(tmp_path, mailer, best=None, options=None, edit_users=None):
     return ctx_for(ops, data, {"enabled": False, "best_performer": best or {}}, mailer, options or {"slot": "15:30"})
 
 
-def kpi(html, label):
-    m = re.search(re.escape(label) + r"</div><div[^>]*>([^<]*)</div>", html)
-    return m.group(1) if m else None
+def cells(html):
+    """The "Today's work" rows: [(employee, score)]."""
+    return re.findall(r'<td[^>]*font-weight:700;">(Person \d+)</td>(?:<td[^>]*>[^<]*</td>){4}<td[^>]*>(\d+)</td>', html)
 
 
-def test_the_days_best_performer_is_celebrated_with_the_cc_of_the_settings(tmp_path):
+def test_the_days_top_3_get_one_celebration_e_mail_in_english_with_the_cc(tmp_path):
     mailer = Mailer()
-    res = ds_run = bp.run(make_ctx(tmp_path, mailer, {"cc": ["boss@example.test", "F1@example.test"]}))
-    assert ds_run.ok and res.emails_sent == 1, res.error
+    res = bp.run(make_ctx(tmp_path, mailer, {"cc": ["boss@example.test", "F1@example.test"]}))
+    assert res.ok and res.emails_sent == 1, res.error
     (mail,) = mailer.sent
-    assert mail["to"] == ["f1@example.test"] and mail["cc"] == ["boss@example.test"]      # never in their own Cc
-    assert mail["subject"] == "\U0001F3C6 Today's best performer: Person 7001"
+    assert mail["to"] == ["f1@example.test", "c1@example.test", "c3@example.test"]           # best first
+    assert mail["cc"] == ["boss@example.test"]                                                  # never one of them
+    assert mail["subject"] == "\U0001F3C6 Best Performance of the day: Person 7001, Person 7002 and Person 7003"
     html = mail["html"]
-    assert "Person 7001" in html and "Flex Cube" in html and "CONGRATULATIONS" in html and "ألف مبروك" in html
-    assert "&#127942;" in html and "★" in html and "#1 today &middot; score 8" in html             # trophy, confetti
-    assert [kpi(html, k) for k in ("Calls answered", "E-mails replied", "Requests handled", "Score")] == ["2", "1", "1", "8"]
-    assert "a call counts as 2, an e-mail replied as 3" in html
-    assert "Person 7002" not in html
-    assert "Person 7001: calls 2, e-mails 1, requests 1 = score 8" in res.summary and "to f1@example.test, cc 1" in res.summary
+    assert "Best Performance" in html and "TODAY'S TOP 3" in html
+    assert "&#127942;" in html and "★" in html and "CONGRATULATIONS" in html                    # trophy, confetti
+    assert all(m in html for m in ("&#129351;", "&#129352;", "&#129353;"))                      # gold, silver, bronze
+    assert cells(html) == [("Person 7001", "8"), ("Person 7002", "3"), ("Person 7003", "2")]
+    assert "score 8" in html and "a call counts as 2, an e-mail replied as 3" in html
+    assert not ARABIC.search(html)                                                              # English only
+    assert res.summary.startswith("top 3 celebrated - #1 Person 7001: calls 2, e-mails 1, requests 1 = score 8; #2")
+    assert res.summary.endswith("to 3 address(es), cc 1")
 
 
-def test_a_different_built_in_word_each_day_in_english_and_arabic_never_assuming_gender():
-    days = [f"2026-10-{d:02d}" for d in range(1, len(bp.MESSAGES) + 1)]
-    seen = [tuple(bp.message_of({}, d, "Person 7001")) for d in days]
-    assert len(set(seen)) == len(bp.MESSAGES) and all(len(pair) == 2 for pair in seen)
-    gendered = {"إنت", "انت", "انتي", "إنتي", "بيك", "بيكي", "معاك", "معاكي", "ليك", "ليكي", "عملت", "عملتي"}
-    assert not [ar for _, ar in bp.MESSAGES if gendered & set(re.findall(r"[؀-ۿ]+", ar))]
-
-
-def test_the_owners_own_words_go_in_turn_one_a_day_with_the_name(tmp_path):
-    words = ["Well done {name}!", "", "Bravo {name}, keep going"]
-    one, two = bp.message_of({"messages": words}, "2026-10-11", "P"), bp.message_of({"messages": words}, "2026-10-12", "P")
-    assert {one[0], two[0]} == {"Well done P!", "Bravo P, keep going"}
+def test_how_many_are_celebrated_is_a_setting(tmp_path):
     mailer = Mailer()
-    assert bp.run(make_ctx(tmp_path, mailer, {"messages": ["Well done {name}!"], "subject": "Star: {name}"})).ok
-    assert "Well done Person 7001!" in mailer.sent[0]["html"] and mailer.sent[0]["subject"] == "Star: Person 7001"
+    assert bp.run(make_ctx(tmp_path, mailer, {"top": 1})).ok
+    (mail,) = mailer.sent
+    assert mail["to"] == ["f1@example.test"] and "TODAY'S BEST" in mail["html"]
+    assert cells(mail["html"]) == [("Person 7001", "8")] and "Person 7002" not in mail["html"]
 
 
-def test_without_an_address_it_goes_to_the_cc_and_without_either_it_says_what_to_add(tmp_path):
+def test_fewer_than_three_with_work_are_the_top_of_the_day(tmp_path):
+    mailer = Mailer()
+    assert bp.run(make_ctx(tmp_path, mailer, edit_users=None)).ok
+    assert mailer.sent[0]["to"] == ["f1@example.test", "c1@example.test"] and "TOP 2" in mailer.sent[0]["html"]
+
+
+def test_a_different_built_in_word_each_day_all_in_english(tmp_path):
+    days = [f"2026-10-{d:02d}" for d in range(1, len(bp.MESSAGES) + 1)]
+    seen = [bp.message_of({}, d, "A, B and C") for d in days]
+    assert len(set(seen)) == len(bp.MESSAGES) and not [m for m in bp.MESSAGES if ARABIC.search(m)]
+
+
+def test_the_owners_own_words_go_in_turn_one_a_day_with_the_names(tmp_path):
+    words = ["Well done {names}!", "", "Bravo {name}, keep going"]
+    one, two = bp.message_of({"messages": words}, "2026-10-11", "A and B"), bp.message_of({"messages": words}, "2026-10-12", "A and B")
+    assert {one, two} == {"Well done A and B!", "Bravo A and B, keep going"}
+    mailer = Mailer()
+    assert bp.run(make_ctx(tmp_path, mailer, {"messages": ["Well done {names}!"], "subject": "Stars: {names}"})).ok
+    assert "Well done Person 7001, Person 7002 and Person 7003!" in mailer.sent[0]["html"]
+    assert mailer.sent[0]["subject"] == "Stars: Person 7001, Person 7002 and Person 7003"
+
+
+def test_one_without_an_address_is_celebrated_but_not_mailed_and_none_at_all_needs_a_cc(tmp_path):
     def no_address(store):
-        store.update_user("7001", {"email": ""})
+        third_person(store)
+        store.update_user("7002", {"email": ""})
     mailer = Mailer()
     res = bp.run(make_ctx(tmp_path, mailer, {"cc": ["boss@example.test"]}, edit_users=no_address))
-    assert res.ok and mailer.sent[0]["to"] == ["boss@example.test"] and mailer.sent[0]["cc"] == []
-    assert "to the Cc only (no e-mail address in their account)" in res.summary
+    assert res.ok and mailer.sent[0]["to"] == ["f1@example.test", "c3@example.test"] and "Person 7002" in mailer.sent[0]["html"]
+    assert "(Person 7002: no e-mail address in their account)" in res.summary
+
+    def nobody_has_one(store):
+        third_person(store, email="")
+        for uid in ("7001", "7002"):
+            store.update_user(uid, {"email": ""})
     mailer = Mailer()
-    res = bp.run(make_ctx(tmp_path / "b", mailer, {}, edit_users=no_address))
-    assert not res.ok and mailer.sent == [] and "has no e-mail address in their account and no Cc is set" in res.error
+    res = bp.run(make_ctx(tmp_path / "b", mailer, {"cc": ["boss@example.test"]}, edit_users=nobody_has_one))
+    assert res.ok and mailer.sent[0]["to"] == ["boss@example.test"] and mailer.sent[0]["cc"] == []
+    assert "to the Cc only" in res.summary
+    mailer = Mailer()
+    res = bp.run(make_ctx(tmp_path / "c", mailer, {}, edit_users=nobody_has_one))
+    assert not res.ok and mailer.sent == [] and "no e-mail address in their accounts and no Cc is set" in res.error
 
 
 def test_nobody_with_work_yet_sends_nothing(tmp_path):
@@ -117,9 +151,10 @@ def settings_with(**best):
     return hub
 
 
-def test_it_is_on_by_default_once_a_day_at_15_30_on_working_days():
+def test_it_is_on_by_default_once_a_day_at_15_30_on_working_days_for_the_top_3():
     hub = settings_with()
-    assert hub["summary"]["best_performer"]["enabled"] is True and hub["summary"]["best_performer"]["send_times"] == ["15:30"]
+    best = hub["summary"]["best_performer"]
+    assert best["enabled"] is True and best["send_times"] == ["15:30"] and best["top"] == 3
     monday = datetime(2026, 10, 12, 15, 31)
     assert runner.slots_due("best_performer", hub, monday, set()) == ["15:30"]
     assert runner.slots_due("best_performer", hub, monday.replace(hour=15, minute=29), set()) == []
@@ -132,9 +167,11 @@ def test_it_is_on_by_default_once_a_day_at_15_30_on_working_days():
                             set()) == ["09:45"]
 
 
-def test_one_time_only_it_is_sent_once_a_day():
+def test_one_time_only_it_is_sent_once_a_day_and_at_most_the_top_5():
     _, errors = hub_settings.validate({"summary": {"best_performer": {"send_times": ["15:30", "16:00"]}}})
     assert [e for e in errors if "best_performer.send_times" in str(e)]
+    _, errors = hub_settings.validate({"summary": {"best_performer": {"top": 9}}})
+    assert [e for e in errors if "best_performer.top" in str(e)]
 
 
 def test_the_runner_knows_the_job_and_it_waits_for_outlook_like_the_summary():

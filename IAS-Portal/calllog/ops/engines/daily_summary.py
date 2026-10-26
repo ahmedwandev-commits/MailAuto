@@ -165,18 +165,6 @@ def tickets_block(store, hub, users, day, now, team=None):
     return out
 
 
-def people_block(store, data_dir, hub, users, day, now, team=None):
-    """Best performers of the day (``performance.people_day``): the five employees who did the most - calls answered,
-    e-mails replied, security requests handled - every team's, or (``team``) that team's."""
-    from ...storage import Store
-    rows = performance.people_day(store, Store(data_dir), hub, users, day, now, (team,) if team else None)
-    return {"available": True, "rows": rows[:PEOPLE_TOP], "people": len(rows),
-            "emails_known": any(r["emails"] is not None for r in rows) or not rows}
-
-
-PEOPLE_TOP = 5
-
-
 def crs_block(store, hub, day, now, team=None, users=None):
     """The change requests (ITSM): every role's, or (``team``) only the roles of that team. ``pending`` = every
     implementation request waiting on the board, whatever day it came; ``completed_today`` = the implementations
@@ -225,9 +213,8 @@ def collect(ctx, now, team=None):
     jobs = (("calls", lambda: calls_block(ctx.data_dir, users, day, team)),
             ("email", lambda: email_block(ctx.store, hub, day, now, team)),
             ("tickets", lambda: tickets_block(ctx.store, hub, users, day, now, team)),
-            ("crs", lambda: crs_block(ctx.store, hub, day, now, team, users)),
-            ("people", lambda: people_block(ctx.store, ctx.data_dir, hub, users, day, now, team)))
-    module_of = {"calls": None, "email": "email", "tickets": "sla", "crs": "itsm", "people": None}
+            ("crs", lambda: crs_block(ctx.store, hub, day, now, team, users)))
+    module_of = {"calls": None, "email": "email", "tickets": "sla", "crs": "itsm"}
     out = {"day": day, "at": now.strftime("%Y-%m-%dT%H:%M:%S"), "team": team or ""}
     for key, build in jobs:
         if not want.get(key, True):
@@ -420,17 +407,6 @@ def build_html(data, cfg, slot, now, next_slot=None):
     inner += er._heading("By module")
     inner += ('<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">' + "".join(grid)
               + "</table>")
-    people = data.get("people") or {}
-    if people.get("available") and people.get("rows"):
-        point = slot if slot != "manual" else now.strftime("%H:%M")
-        inner += er._heading(f"Best performers - {point} checkpoint")
-        inner += er._table(["", "Employee", "Team", "Calls answered", "E-mails replied", "Tickets handled", "Score"], [
-            er._tr(er._td(f'#{p["rank"]}', bold=True), er._td(p["name"], bold=True), er._td(p["team"] or "-"),
-                   er._td(p["calls"], align="right"), er._td("-" if p["emails"] is None else p["emails"], align="right"),
-                   er._td(p["tickets"], align="right"), er._td(p["total"], bold=True, align="right"))
-            for p in people["rows"]])
-        inner += _sub(f'Today so far, of {people["people"]} employee(s) with work. Score in security requests: '
-                      'requests executed, not executed or rejected + 2 per call answered + 3 per e-mail replied.')
     if cfg.get("per_team", True) and not data.get("team"):
         team_rows = _team_rows(data)
         if team_rows:

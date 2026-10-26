@@ -1,6 +1,6 @@
 """Best performers (calllog/ops/performance.py): one day of each employee's calls answered, e-mails replied and security
-requests handled, best first - the daily summary's section at each checkpoint, Insights › Analysis' card, a manager's
-own team only. Made-up people and data only."""
+requests handled, best first - Insights › Analysis' card and the Best Performance e-mail (never the daily summary), a
+manager's own team only. Made-up people and data only."""
 from calllog.ops import performance
 from calllog.ops.engines import daily_summary as ds
 from calllog.storage import Store
@@ -73,16 +73,16 @@ def test_an_earlier_days_emails_come_from_the_replies_kept_that_day(tmp_path):
     assert none == []                                           # nothing that day: nobody listed
 
 
-def test_the_daily_summary_names_the_best_performers_at_its_checkpoint(tmp_path):
+def test_the_daily_summary_never_lists_the_best_performers(tmp_path):
+    """The best performers are celebrated once a day by the Best Performance e-mail only: the summary - counts and team
+    names only - names nobody, every team's or a team's own."""
     ops, data = world(tmp_path)
     _sla_day(ops)
     ctx, _, _ = _hub_and_users(ops, data)
-    collected = ds.collect(ctx, NOW)
-    assert [r["user_id"] for r in collected["people"]["rows"]] == ["7001", "7002"]
-    html = ds.build_html(collected, ctx.settings, "13:00", NOW)
-    assert "Best performers - 13:00 checkpoint" in html and "Person 7001" in html
-    flex = ds.collect(ctx, NOW, "Flex Cube")
-    assert [r["user_id"] for r in flex["people"]["rows"]] == ["7001"]
+    for team in (None, "Flex Cube"):
+        collected = ds.collect(ctx, NOW, team)
+        html = ds.build_html(collected, ctx.settings, "13:00", NOW)
+        assert "people" not in collected and "Best performers" not in html and "Person 7001" not in html
 
 
 def test_every_scan_keeps_the_days_numbers_and_each_scope_reads_its_own(tmp_path):

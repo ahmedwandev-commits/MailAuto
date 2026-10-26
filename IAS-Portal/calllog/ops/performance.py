@@ -1,6 +1,7 @@
 """Who did what: one day of each employee's work - the calls they logged, the e-mails they replied to and the security
-requests they handled (executed, not executed, rejected) - for the daily summary's "Best performers" (at each
-checkpoint) and Insights › Analysis. Every number comes from the same place as the module's own page:
+requests they handled (executed, not executed, rejected) - for Insights › Analysis' "Best performers", the Best
+Performance e-mail (the top 3, engines/best_performer.py) and the day-by-day log. Every number comes from the same
+place as the module's own page:
 
 * calls - the Call Log (one logged call = one call answered);
 * e-mails - today: the live e-mail view (every override applied), a reply counted on the day it was sent, by the

@@ -135,14 +135,15 @@ DEFAULTS = {
         "modules": {"calls": True, "email": True, "tickets": True, "crs": True},
         "per_team": True,
         "display_only": False,
-        # the day's best performer celebrated by e-mail once a day (calllog/ops/engines/best_performer.py): To them,
-        # Cc these; on a working day of the summary's schedule, at its one time
+        # the Best Performance e-mail: the day's top 3 celebrated once a day (calllog/ops/engines/best_performer.py):
+        # To them, Cc these; on a working day of the summary's schedule, at its one time
         "best_performer": {
             "enabled": True,
             "send_times": ["15:30"],
+            "top": 3,                           # how many are celebrated (the first of "Best performers")
             "cc": [],
-            "subject": "\U0001F3C6 Today's best performer: {name}",
-            "messages": [],                     # the owner's words of encouragement, one a day in turn ({name}); [] = built-in
+            "subject": "\U0001F3C6 Best Performance of the day: {names}",
+            "messages": [],                     # the owner's words of encouragement, one a day in turn ({names}); [] = built-in
             "display_only": False,
         },
     },
@@ -474,8 +475,8 @@ FIELDS = {
         "to": _emails, "cc": _emails, "subject_prefix": _str(120), "team_recipients": _map(_recipients),
         "modules": {"calls": _bool, "email": _bool, "tickets": _bool, "crs": _bool},
         "per_team": _bool, "display_only": _bool,
-        "best_performer": {"enabled": _bool, "send_times": _times, "cc": _emails, "subject": _str(150),
-                           "messages": _strs(500), "display_only": _bool},
+        "best_performer": {"enabled": _bool, "send_times": _times, "top": _int(1, 5), "cc": _emails,
+                           "subject": _str(150), "messages": _strs(500), "display_only": _bool},
     },
     "assign": {
         "enabled": _bool, "base_url": _str(300, False), "login_path": _str(300), "app_url_fragment": _str(100),
@@ -536,7 +537,7 @@ def validate(raw):
             ctx.err(f"summary.team_recipients.{t}", f"'{t}' is not one of the teams")
     best = summary.get("best_performer") or {}
     if len(best.get("send_times") or []) > 1:
-        ctx.err("summary.best_performer.send_times", "one time only: the best performer e-mail goes once a day")
+        ctx.err("summary.best_performer.send_times", "one time only: the Best Performance e-mail goes once a day")
     if best.get("enabled") and not best.get("send_times"):
         ctx.err("summary.best_performer.send_times", "set the time it goes (like 15:30), or switch it off")
     return clean, ctx.errors
