@@ -191,13 +191,14 @@ def test_an_open_request_is_assigned_by_a_reviewer_and_that_line_is_its_assignme
     assert reqs[0]["assigned_at"] == "2026-10-21T10:23:48"
 
 
-def test_requests_with_a_security_user_are_read_first_so_their_assignment_is_known():
-    """When a scan cannot open every row, the requests still with a security user come first (the Live tab shows their
-    assignment line), then the ones awaiting the reviewer, then the closed ones, then the rejected ones; a request still
-    with the branch has no SLA step to read."""
-    order = [sh.detail_priority(s, CFG) for s in ("اسناد لمستخدم السرية", "معلق", "تم التنفيذ",
-                                                  "تم التعزيز على التنفيذ", "رفض", "تسجيل")]
-    assert order[0] == order[1] < order[2] < order[3] < order[4] and order[5] is None
+def test_finished_requests_are_read_first_so_the_days_numbers_are_complete():
+    """When a scan cannot open every row, the CLOSED requests come first (their history completes the day's executed /
+    not executed / SLA numbers), then the ones awaiting the reviewer, then the ones with a security user (the Live tab
+    counts from «تاريخ الارسال للسرية» and needs no history), then the rejected ones; a request still with the branch
+    has no SLA step to read."""
+    order = [sh.detail_priority(s, CFG) for s in ("تم التعزيز على التنفيذ", "تم التنفيذ", "اسناد لمستخدم السرية",
+                                                  "معلق", "رفض", "تسجيل")]
+    assert order[0] < order[1] < order[2] == order[3] < order[4] and order[5] is None
 
 
 # --------------------------------------------------- the first assignment of a live ticket, and since when its holder has it
@@ -302,3 +303,141 @@ def test_right_now_lists_every_live_ticket_even_the_ones_the_inquiry_does_not():
     assert out["now"]["open"] == 2 and out["now"]["live_only"] == 1
     older = next(o for o in out["open_now"] if o["source"] == "live")
     assert older["holder"] == "مستخدم ثان" and older["minutes"] == 10080.0 and older["breached"]
+
+
+# ------------------------------------------------- where a grid row stands: a wording the settings do not name
+def test_a_wording_the_settings_do_not_name_is_with_the_security_team_only_when_a_security_user_holds_it():
+    """«Open with a security user» must never count a registration: a wording the status list does not name (the grid's
+    own words, e.g. «في انتظار اعتماد مشرف الفرع») is open only when the grid names its «مستخدم السرية»."""
+    assert sh.grid_stage("في انتظار اعتماد مشرف الفرع", CFG, "") == "pre"
+    assert sh.grid_stage("في انتظار اعتماد مشرف الفرع", CFG, "مستخدم اول") == "open"
+    assert sh.grid_stage("تحت التنفيذ", CFG, "مستخدم اول") == "open"            # a current-status word, with its holder
+    assert sh.grid_stage("تم التسجيل", CFG, "") == "pre"                          # contains «تسجيل»
+    assert sh.grid_stage("اسناد لمستخدم السرية", CFG, "") == "open"               # an assignment, whoever is named
+    assert sh.grid_stage("تم التعزيز على التنفيذ", CFG, "") == "closed"
+    assert sh.grid_stage("رفض", CFG, "") == "rejected"                            # rejected by the assigner
+    rows = sh.grid_rows(HEAD, [grid_row(status="في انتظار اعتماد مشرف الفرع", executor=""),
+                               grid_row(status="في انتظار اعتماد مشرف الفرع", executor="", system="T24"),
+                               grid_row(status="تسجيل", executor="")])
+    grid = sh.grid_state(rows, {}, "2026-10-20T09:00:00", CFG)
+    assert [g["stage"] for g in grid.values()] == ["pre", "pre", "pre"]
+    assert sh.right_now(grid, {}, {}, CFG, "2026-10-20T09:00:00")["now"]["open"] == 0
+    assert sh.unknown_wordings(grid, CFG) == [("في انتظار اعتماد مشرف الفرع", 2)]
+
+
+def test_the_scans_remember_when_a_row_reached_the_security_team_and_got_its_status():
+    """``since`` / ``entered`` are only taken as the real moment when the scans watched it happen: at the first read
+    nothing is known; a row that moves from the branch to a security user later, or a new row inside the window the
+    previous read covered, is."""
+    first = sh.grid_rows(HEAD, [grid_row(status="تم التعزيز على التنفيذ", date="19-10-2026"),
+                                grid_row(status="تسجيل", executor="", system="T24")])
+    g1 = sh.grid_state(first, {}, "2026-10-20T09:00:00", CFG, None)
+    done, branch = g1[first[0]["key"]], g1[first[1]["key"]]
+    assert done["since_known"] is False and done["entered"] == ""
+    moved = sh.grid_rows(HEAD, [grid_row(status="تم التعزيز على التنفيذ", date="19-10-2026"),
+                                grid_row(status="اسناد لمستخدم السرية", system="T24"),
+                                grid_row(status="اسناد لمستخدم السرية", system="Card", date="20-10-2026")])
+    g2 = sh.grid_state(moved, g1, "2026-10-20T11:00:00", CFG, "2026-10-18")
+    assert g2[moved[0]["key"]]["since_known"] is False                            # still the first read's status
+    t24 = g2[moved[1]["key"]]
+    assert t24["since"] == t24["entered"] == "2026-10-20T11:00:00" and t24["since_known"] is True
+    new = g2[moved[2]["key"]]
+    assert new["entered"] == "2026-10-20T11:00:00" and new["since_known"] is True
+    older = sh.grid_rows(HEAD, [grid_row(status="اسناد لمستخدم السرية", system="Old", date="10-10-2026")])
+    g3 = sh.grid_state(older, g2, "2026-10-20T12:00:00", CFG, "2026-10-18")      # the window reached back to it
+    assert g3[older[0]["key"]]["entered"] == "" and g3[older[0]["key"]]["since_known"] is False
+    assert branch["stage"] == "pre"
+
+
+# ------------------------------------------------------------- «نموذج (7)»: the clocks start at «الفترة من»
+def test_a_period_moves_the_clocks_to_its_start_and_keeps_the_real_assignment():
+    lc = {"first_assigned_at": "2026-10-19T09:45:00", "assigned_at": "2026-10-19T09:45:00", "pool_at": "2026-10-19T09:20:00",
+          "executed_at": "2026-10-21T08:40:00", "confirmed_at": "2026-10-21T09:05:00"}
+    got = sh.apply_period(dict(lc), "2026-10-21T08:00:00")
+    assert got["first_assigned_at"] == got["assigned_at"] == "2026-10-21T08:00:00"
+    assert got["first_assigned_real_at"] == "2026-10-19T09:45:00" and got["pool_at"] == "2026-10-21T08:00:00"
+    assert sh.apply_period(dict(lc), "2026-10-18T08:00:00")["first_assigned_at"] == "2026-10-19T09:45:00"   # started before
+    early = sh.apply_period(dict(lc, executed_at="2026-10-20T10:00:00"), "2026-10-21T08:00:00")
+    assert early["assigned_at"] == "2026-10-19T09:45:00"                         # executed before it: never past it
+    assert sh.period_start("21/10/2026", "08:30") == "2026-10-21T08:30:00"
+    assert sh.period_start("21/10/2026 10:15") == "2026-10-21T10:15:00" and sh.period_start("") == ""
+    assert sh.is_period_form("نموذج (7)") and sh.is_period_form("نموذج (٧)") and not sh.is_period_form("نموذج (17)")
+
+
+def test_a_form_7_row_read_before_periods_were_taken_is_read_once_more():
+    item = sh.grid_rows(HEAD, [grid_row(status="تم التعزيز على التنفيذ")])[0]
+    item["form"] = "نموذج (7)"
+    entry = {"id": "R7", "status": "تم التعزيز على التنفيذ", "day": "2026-10-20", "checked": "تم التعزيز على التنفيذ"}
+    assert sh.needs_details(item, {item["key"]: entry}) is True
+    assert sh.needs_details(item, {item["key"]: entry}, period=False) is False
+    assert sh.needs_details(item, {item["key"]: dict(entry, pv=sh.PERIOD_VERSION)}) is False
+    item["form"] = "نموذج 5"
+    assert sh.needs_details(item, {item["key"]: entry}) is False
+
+
+def test_rederive_keeps_the_period():
+    rec = {"id": "R7", "period_from": "2026-10-21T08:00:00", "trail": [
+        ["2026-10-19T09:45:00", "assigned", "اسناد لمستخدم السرية", "", "", ""],
+        ["2026-10-21T08:40:00", "assigned", "قيد الإجراء", "", "", ""],         # read under old rules: not a step
+        ["2026-10-21T08:50:00", "executed", "تم التنفيذ", "", "", ""]]}
+    got = sh.rederive(rec, CFG)
+    assert got["assigned_at"] == "2026-10-21T08:00:00" and got["assigned_real_at"] == "2026-10-19T09:45:00"
+
+
+# ------------------------------------------------------------------- one day, the way the daily summary counts it
+def _day_world():
+    """Today 2026-10-21. Read: R1 assigned and executed today, confirmed today; R2 «لم يتم التنفيذ» today, awaiting the
+    reviewer; R3 read while open yesterday, confirmed «على عدم التنفيذ» today (not read again yet); R4 assigned
+    yesterday, still open. Not read: a row confirmed today, one rejected today by the assigner, and 3034-like branch
+    rows registered today."""
+    rows = [grid_row(status="تم التعزيز على التنفيذ", system="A", date="21-10-2026"),
+            grid_row(status="لم يتم التنفيذ", system="B", date="19-10-2026"),
+            grid_row(status="تم التعزيز على عدم التنفيذ", system="C", date="20-10-2026"),
+            grid_row(status="اسناد لمستخدم السرية", system="D", date="20-10-2026"),
+            grid_row(status="تم التعزيز على التنفيذ", system="E", date="21-10-2026"),
+            grid_row(status="رفض", executor="", system="F", date="21-10-2026")]
+    rows += [grid_row(status="في انتظار اعتماد مشرف الفرع", executor="", system=f"X{i}", date="21-10-2026")
+             for i in range(6)]
+    items = sh.grid_rows(HEAD, rows)
+    prev = sh.grid_state(items[:4] + items[6:], {}, "2026-10-20T08:00:00", CFG, None)
+    prev[items[2]["key"]].update(status="اسناد لمستخدم السرية", stage="open")    # R3 was open when read
+    grid = sh.grid_state(items, prev, "2026-10-21T13:00:00", CFG, "2026-10-19")
+    for k in (items[0]["key"], items[1]["key"]):                                   # A and B changed today
+        grid[k].update(since="2026-10-21T10:00:00", since_known=True)
+    index = {items[0]["key"]: {"id": "R1", "status": "تم التعزيز على التنفيذ", "day": "2026-10-21"},
+             items[1]["key"]: {"id": "R2", "status": "لم يتم التنفيذ"},
+             items[2]["key"]: {"id": "R3", "status": "اسناد لمستخدم السرية"},
+             items[3]["key"]: {"id": "R4", "status": "اسناد لمستخدم السرية"}}
+    records = {
+        "R1": {"id": "R1", "source": sh.SOURCE, "stage": "closed", "outcome": "completed", "final_outcome": "executed",
+               "first_assigned_at": "2026-10-21T09:00:00", "assigned_at": "2026-10-21T09:00:00",
+               "executed_at": "2026-10-21T09:40:00", "exec_outcome": "executed", "confirmed_at": "2026-10-21T10:00:00"},
+        "R2": {"id": "R2", "source": sh.SOURCE, "stage": "awaiting", "outcome": "in_progress",
+               "first_assigned_at": "2026-10-21T08:00:00", "assigned_at": "2026-10-21T08:00:00",
+               "executed_at": "2026-10-21T09:00:00", "exec_outcome": "not_executed"},
+        "R3": {"id": "R3", "source": sh.SOURCE, "stage": "open", "outcome": "in_progress",
+               "first_assigned_at": "2026-10-20T15:00:00", "assigned_at": "2026-10-20T15:00:00"},
+        "R4": {"id": "R4", "source": sh.SOURCE, "stage": "open", "outcome": "in_progress",
+               "first_assigned_at": "2026-10-20T16:00:00", "assigned_at": "2026-10-20T16:00:00"}}
+    return records, grid, index
+
+
+def test_a_day_counts_what_reached_the_security_team_and_what_was_done_that_day():
+    records, grid, index = _day_world()
+    n = sh.day_numbers(records, grid, index, CFG, "2026-10-21", "2026-10-21T13:00:00")
+    assert n["arrived"] == 4            # R1, R2 assigned today; the unread confirmed row and the assigner's rejection
+    assert n["executed"] == 2           # R1 «تم التنفيذ» today; the unread row confirmed executed today
+    assert n["not_executed"] == 2       # R2 «لم يتم التنفيذ»; R3 «تم التعزيز على عدم التنفيذ» (not read again yet)
+    assert (n["closed"], n["closed_executed"], n["closed_not"]) == (3, 2, 1)
+    assert n["rejected"] == 1 and n["from_grid"] == 3     # the unread confirmed row, the rejection, R3
+    assert n["now"]["open"] == 1 and n["now"]["awaiting"] == 1 and n["now"]["pre"] == 6
+    assert n["measured"] == 1 and n["sla_pct"] == 100.0
+
+
+def test_the_analysis_counts_a_request_that_moved_on_at_its_new_stage():
+    records, grid, index = _day_world()
+    cur = sh.with_current_stage(records, grid, index, CFG)
+    assert cur["R3"]["stage"] == "closed" and cur["R3"]["moved"] and cur["R3"]["final_outcome"] == "not_executed"
+    assert "moved" not in cur["R4"]
+    a = sh.analyze({"R3": cur["R3"]}, CFG, now="2026-10-21T13:00:00")
+    assert a["buckets"]["closed"] == 1 and a["overall"]["n"] == 1 and a["requests_list"][0]["waiting_minutes"] is None

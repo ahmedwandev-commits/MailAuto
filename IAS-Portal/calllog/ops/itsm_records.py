@@ -77,6 +77,25 @@ def record_scan(records, data, now):
     return records
 
 
+def recording_start(records):
+    """The first scan of the recording (the earliest ``first_seen``), "" when nothing is recorded."""
+    seen = [_clean(r.get("first_seen")) for r in (records or {}).values() if _clean(r.get("first_seen"))]
+    return min(seen) if seen else ""
+
+
+def completed_day(rec, started=""):
+    """The day a CR's implementation was completed, as far as the scans know: the day it was first seen in
+    «Implementation Completed» - "" when it already was there at the recording's very first scan (``started``,
+    ``recording_start``): it was completed some day before, which nobody saw."""
+    at = _clean((rec or {}).get("completed_at"))
+    if not at:
+        return ""
+    first = _clean(rec.get("first_seen"))
+    if started and first and first[:19] <= started[:19] and at[:19] == first[:19]:
+        return ""
+    return at[:10]
+
+
 def seen_numbers(data):
     """{role: {"complete": bool, "numbers": {CR#, ...}}} for one scan's engine snapshot. A role is ``complete`` when it
     was read without error and every category listed all of its rows (``count == len(rows)``) - only then is a CR's

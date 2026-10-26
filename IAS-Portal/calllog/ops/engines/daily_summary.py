@@ -129,19 +129,23 @@ def _resolver(store, hub, users):
 
 
 def tickets_block(store, hub, users, day, now, team=None):
-    """The security requests: every team's, or (``team``) only those the team rule gives to that team (by the
-    application, else the security user's account) - Third Party always left out."""
+    """The security requests of ``day``, counted like Insights › Analysis › SLA (``sla_history.day_numbers``): every
+    team's, or (``team``) only that team's - a request's team is the team of the person who executed or holds it (their
+    account), else its application's (the same rule as the analysis); Third Party always left out. The Live queue
+    (Re-Assign page) is counted from its own scan."""
     sla_cfg = hub.get("sla") or {}
     resolver = _resolver(store, hub, users)
     excluded = teams.sla_exclusion(sla_cfg, resolver) or (lambda system: False)
     scope = (team,) if team else None
-    mine = lambda system, who: teams.in_scope(scope, resolver.sla_team(system, who))   # noqa: E731
+    people = teams.sla_people(users)
+    team_of = lambda system, number="", name="": teams.sla_person_team(system, number, name, people, resolver)  # noqa: E731
     out = {"available": False}
+    live = []
     snap = store.read_snapshot("sla")
     if snap:
         data = snap.get("data") or {}
-        live = [r for r in data.get("requests") or [] if not excluded(teams.sla_system(r))
-                and mine(teams.sla_system(r), r.get("security_user"))]
+        live = [r for r in data.get("requests") or [] if isinstance(r, dict) and not excluded(teams.sla_system(r))
+                and teams.in_scope(scope, resolver.sla_team(teams.sla_system(r), r.get("security_user")))]
         totals = {k: 0 for k in ("open", "within", "reminder", "breached")}
         for r in live:
             totals["open"] += 1
@@ -151,21 +155,39 @@ def tickets_block(store, hub, users, day, now, team=None):
                    stale=_stale(hub, "sla", snap.get("generated_at"), now))
     cfg = sla_records.clean_config((store.read_sla_records() or {}).get("config"))
     state = store.read_sla_history_state() or {}
-    closed = {k: sla_history.rederive(r, cfg) for k, r in (store.read_sla_closed_day(day) or {}).items()
-              if not excluded(r.get("system")) and mine(r.get("system"), r.get("executor") or r.get("holder"))}
-    if state.get("last_history") or closed:
-        a = sla_history.analyze(closed, cfg)["overall"]
-        grid = {k: g for k, g in (state.get("grid") or {}).items()
-                if not excluded(g.get("system")) and mine(g.get("system"), g.get("holder"))}
-        opened = {k: sla_history.rederive(r, cfg) for k, r in (state.get("open") or {}).items()}
-        nowb = sla_history.right_now(grid, opened, state.get("index") or {}, cfg,
-                                     now.strftime("%Y-%m-%dT%H:%M:%S"))["now"]
-        received = sum(1 for g in grid.values() if str(g.get("request_date") or "")[:10] == day)
-        within = a.get("sla_pct") or 0.0
-        out.update(available=True, history=True, closed_today=a.get("n", 0), executed=a.get("executed", 0),
-                   not_executed=a.get("not_executed", 0), sla_pct=within, median_minutes=a.get("median_minutes"),
-                   sla_minutes=cfg["sla_minutes"], received_today=received, now=nowb,
-                   history_as_of=state.get("last_history", ""))
+    raw = dict(store.read_sla_closed_day(day) or {})
+    raw.update(state.get("open") or {})
+    if state.get("last_history") or raw:
+        records = {}
+        for k, r in raw.items():
+            r = sla_history.rederive(r, cfg)
+            if excluded(r.get("system")):
+                continue
+            number = r.get("executor_no") if r.get("executor_no") or r.get("executor") else ""
+            t = team_of(r.get("system"), number, r.get("executor") or r.get("holder"))
+            if teams.in_scope(scope, t):
+                records[k] = {**r, "team": t, "teams": [t]}
+        number_of = {}
+        for r in records.values():
+            for name, no in ((r.get("executor"), r.get("executor_no")), (r.get("checker"), r.get("checker_no"))):
+                if name and no:
+                    number_of.setdefault(sla_history._norm(name), no)
+        grid = {}
+        for key, g in (state.get("grid") or {}).items():
+            if excluded(g.get("system")):
+                continue
+            holder = g.get("holder") or ""
+            t = team_of(g.get("system"), number_of.get(sla_history._norm(holder), ""), holder)
+            if teams.in_scope(scope, t):
+                grid[key] = {**g, "team": t}
+        nums = sla_history.day_numbers(records, grid, state.get("index") or {}, cfg, day,
+                                       now.strftime("%Y-%m-%dT%H:%M:%S"), live=live)
+        out.update(available=True, history=True, received_today=nums["arrived"], closed_today=nums["closed"],
+                   closed_executed=nums["closed_executed"], closed_not=nums["closed_not"],
+                   executed=nums["executed"], not_executed=nums["not_executed"], rejected=nums["rejected"],
+                   from_grid=nums["from_grid"], sla_pct=nums["sla_pct"] if nums["sla_pct"] is not None else 0.0,
+                   measured=nums["measured"], median_minutes=nums["median_minutes"], sla_minutes=cfg["sla_minutes"],
+                   now=nums["now"], history_as_of=state.get("last_history", ""))
     if not out.get("available"):
         out["reason"] = "no ticketing scan yet"
     return out
@@ -194,10 +216,11 @@ def crs_block(store, hub, day, now, team=None, users=None):
     for label, n in board.items():
         buckets[itsm_records.conclusion_for(label)] += n
     names = {str(r.get("role") or "") for r in roles}
-    records = [r for r in ((store.read_itsm_records() or {}).get("records") or {}).values()
-               if not team or str(r.get("role") or "") in names]
-    completed_today = sum(1 for r in records
-                          if r.get("conclusion") == "completed" and str(r.get("completed_at") or "")[:10] == day)
+    every = (store.read_itsm_records() or {}).get("records") or {}
+    started = itsm_records.recording_start(every)
+    records = [r for r in every.values() if not team or str(r.get("role") or "") in names]
+    completed_today = sum(1 for r in records                 # never the ones already completed at the first scan
+                          if r.get("conclusion") == "completed" and itsm_records.completed_day(r, started) == day)
     new_today = sum(1 for r in records if str(r.get("first_seen") or "")[:10] == day)
     failed = sum(1 for r in roles if r.get("error"))
     waiting = {label: n for label, n in board.items() if itsm_records.conclusion_for(label) != "completed"}
@@ -351,25 +374,34 @@ def build_html(data, cfg, slot, now, next_slot=None):
             nowb = tix.get("now") or {}
             if tix.get("history"):
                 value = tix.get("closed_today", 0)
-                sub = (f'closed today &middot; {tix["sla_pct"]}% within {_hours(tix["sla_minutes"])} h'
-                       f' &middot; {nowb.get("open", live.get("open", 0))} open now')
+                within = (f' &middot; {tix["sla_pct"]}% within {_hours(tix["sla_minutes"])} h'
+                          if tix.get("measured") else "")
+                sub = f'confirmed today{within} &middot; {nowb.get("open", live.get("open", 0))} open now'
+
             else:
                 value, sub = live.get("open", 0), f'open now &middot; {live.get("breached", 0)} past the SLA'
             heroes.append(_hero("Tickets", value, _sub(sub), er.AMBER))
             rows = []
             if tix.get("history"):
-                rows += [("Arrived today", tix.get("received_today", 0)), ("Closed today", tix.get("closed_today", 0)),
-                         ("Executed", tix.get("executed", 0)), ("Not executed", tix.get("not_executed", 0)),
-                         ("Within the SLA", f'{tix.get("sla_pct", 0)}%'),
+                rows += [("Reached the security team today", tix.get("received_today", 0)),
+                         ("Executed today (تم التنفيذ)", tix.get("executed", 0)),
+                         ("Not executed today (لم يتم التنفيذ / التعزيز على عدم التنفيذ)", tix.get("not_executed", 0)),
+                         ("Confirmed by the reviewer today", tix.get("closed_today", 0)),
+                         ("Rejected by the assigner today (رفض)", tix.get("rejected", 0)),
+                         ("Within the SLA", f'{tix.get("sla_pct", 0)}%' if tix.get("measured") else "—"),
                          ("Median assignment → confirmation", _minutes_text(tix.get("median_minutes"))),
                          ("Open with a security user now", nowb.get("open", 0)),
-                         ("Awaiting the reviewer now", nowb.get("awaiting", 0)), ("On hold now", nowb.get("on_hold", 0))]
+                         ("Awaiting the reviewer now", nowb.get("awaiting", 0)), ("On hold now", nowb.get("on_hold", 0)),
+                         ("Still with the branch now", nowb.get("pre", 0))]
             if live:
                 rows += [("Live queue (Re-Assign)", live.get("open", 0)), ("Reminder", live.get("reminder", 0)),
                          ("Past the SLA", live.get("breached", 0))]
             inner = _facts(rows)
             if tix.get("history"):
                 inner += er._bar(tix.get("sla_pct", 0), 100, er.GREEN if tix.get("sla_pct", 0) >= 80 else er.AMBER)
+                if tix.get("from_grid"):
+                    inner += _sub(f'{tix["from_grid"]} of today\'s counted from the inquiry\'s status: their details are '
+                                  'read at the next scans (their times follow)')
             cards.append(_card("Tickets (security requests)", inner, er.AMBER))
             if live.get("breached"):
                 attention.append(f'{live["breached"]} ticket(s) open past the SLA')

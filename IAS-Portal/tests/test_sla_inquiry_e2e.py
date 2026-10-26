@@ -189,3 +189,74 @@ def test_show_all_is_used_when_the_grid_holds_one_page(browser, tmp_path):
     with FakeInquiryPortal(reqs, grid="paged_api", dt_len=5) as portal:
         out = read(browser, portal, tmp_path)
     assert out["rows"] == 9 and sorted(recorded(out)) == [r["number"] for r in reqs]
+
+
+# ------------------------------------------------------------------- «نموذج (7)»: a request with a period
+def _early_assigned(user_no="700601"):
+    """Assigned two days before its period starts, executed and confirmed on the period's first day."""
+    return [("700631", "ح موظف فرع", "Maker Branch", datetime(2026, 10, 19, 9, 0), "تسجيل", ""),
+            ("700632", "ط مشرف فرع", "Checker Branch", datetime(2026, 10, 19, 9, 20), "تم التعزيز من قبل مشرف الفرع", ""),
+            (user_no, "ج مستخدم سرية", "Assign_Maker_Security", datetime(2026, 10, 19, 9, 45), "اسناد لمستخدم السرية", ""),
+            (user_no, "ج مستخدم سرية", "Assign_Maker_Security", at(8, 40), "تم التنفيذ", ""),
+            ("700633", "د مراجع سرية", "Checker security", at(9, 5), "تم التعزيز على التنفيذ", "")]
+
+
+@pytest.mark.parametrize("period, expected_to", [(("21/10/2026", "25/10/2026"), "2026-10-25T00:00:00"),
+                                                 ("21/10/2026 - 25/10/2026", "2026-10-25T00:00:00")])
+def test_the_period_of_a_form_7_request_is_read_and_its_clocks_start_there(browser, tmp_path, period, expected_to):
+    """A «نموذج (7)» request registered and assigned on the 19th for a period from the 21st is executed on the 21st:
+    its «الفترة من» (two fields, or one «الفتره من / الى») is read from the details and its clocks start at the
+    period's first working hour - it belongs to the 21st and took 40 minutes, not two days."""
+    reqs = [request(8300001, date(2026, 10, 19), "تم التعزيز على التنفيذ", executor="ج مستخدم سرية",
+                    history=_early_assigned(), period=period, form="نموذج (7)")]
+    with FakeInquiryPortal(reqs) as portal:
+        raw = settings.deep_merge({"sla": {"username": "700101", "base_url": portal.url}}, {})
+        cfg = settings.validate(raw)[0]["sla"]
+        cfg["timeout_seconds"] = 8
+        plan = {"date_from": date(2026, 10, 19), "date_to": DAY, "index": {}, "cfg": CFG, "excluded": None,
+                "seconds": 120, "day_start": "08:00"}
+        out = sla.read_history(browser, cfg, sla.Debug(False, tmp_path / "debug"), plan, lambda m: None)
+    item, = [it for it in out["items"] if it.get("history") is not None]
+    assert item["period_from"] == "2026-10-21T08:00:00" and item["period_to"] == expected_to
+    records, index = {}, {}
+    sla_history.fold_history(records, index, out["items"], CFG, "2026-10-21T12:00:00")
+    rec = records["8300001"]
+    assert rec["first_assigned_at"] == rec["assigned_at"] == "2026-10-21T08:00:00"
+    assert rec["first_assigned_real_at"] == "2026-10-19T09:45:00" and rec["period_from"] == "2026-10-21T08:00:00"
+    assert sla_history.assignment_day(rec) == "2026-10-21"
+    assert round(sla_history.stage_minutes(rec)["work"]) == 40 and round(sla_history.stage_minutes(rec)["sla"]) == 65
+    assert index[item["grid"]["key"]]["pv"] == sla_history.PERIOD_VERSION
+
+
+def test_a_request_without_a_period_keeps_its_assignment(browser, tmp_path):
+    reqs = [request(8300002, DAY, "تم التعزيز على التنفيذ", executor="ج مستخدم سرية", history=six_line_history())]
+    with FakeInquiryPortal(reqs) as portal:
+        out = read(browser, portal, tmp_path)
+    item, = [it for it in out["items"] if it.get("history") is not None]
+    assert "period_from" not in item
+    records = {}
+    sla_history.fold_history(records, {}, out["items"], CFG, "2026-10-21T12:00:00")
+    assert records["8300002"]["first_assigned_at"] == "2026-10-21T08:54:23"
+    assert records["8300002"]["first_assigned_real_at"] == "" and records["8300002"]["period_from"] == ""
+
+
+# ------------------------------------------------------------------- no result page waits scan after scan
+def test_a_scan_that_cannot_read_every_row_starts_the_next_one_where_it_stopped(browser, tmp_path):
+    """12 requests over 4 result pages (3 a page), 10 details a scan: the first scan reads pages 1-3 and one row of page
+    4, and says the next scan starts on page 4; a scan starting there reads page 4 first - so the last pages are not
+    left behind scan after scan while the first ones keep changing."""
+    reqs = _many(12)
+    with FakeInquiryPortal(reqs, server_page=3) as portal:
+        first = read(browser, portal, tmp_path, history_max_details=10)
+    assert first["opened"] == 10 and first["left"] == 2 and first["resume_page"] == 3
+    with FakeInquiryPortal(reqs, server_page=3) as portal:
+        raw = settings.deep_merge({"sla": {"username": "700101", "base_url": portal.url, "history_max_details": 10}}, {})
+        cfg = settings.validate(raw)[0]["sla"]
+        cfg["timeout_seconds"] = 8
+        plan = {"date_from": DAY, "date_to": DAY, "index": {}, "cfg": CFG, "excluded": None, "seconds": 120,
+                "resume_page": first["resume_page"]}
+        second = sla.read_history(browser, cfg, sla.Debug(False, tmp_path / "debug2"), plan, lambda m: None)
+        opened = list(portal.details_opened)
+    last_page = {r["number"] for r in reqs[9:]}
+    assert set(opened[:3]) == last_page                  # page 4 first, then pages 1, 2 ...
+    assert second["opened"] == 10 and second["resume_page"] == 2

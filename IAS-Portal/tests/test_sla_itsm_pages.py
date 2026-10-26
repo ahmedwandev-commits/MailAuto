@@ -1028,7 +1028,7 @@ def test_pages_work_by_keyboard(tab, hub, path, ready):
     t = tab()
     page = t.open(path, ready)
     seen = set()
-    for _ in range(40):
+    for _ in range(60):                     # the ITSM board's two date fields take several stops each
         page.keyboard.press("Tab")
         seen.add(page.evaluate("(document.activeElement.dataset && document.activeElement.dataset.focusId) || document.activeElement.tagName"))
     assert page.evaluate("document.activeElement !== document.body")
@@ -1050,3 +1050,50 @@ def test_screenshots_for_the_docs(chromium, server, accounts, hub, ops):
             page.wait_for_timeout(500)
             page.screenshot(path=str(out / f"ops-{name}-{scheme}.png"))
         t.close()
+
+
+DONE = "Implementation Completed"
+
+
+def test_itsm_completed_implementations_are_shown_by_day_with_a_finished_icon(ops, tab, hub):
+    """«Implementation Completed» lists every CR ever completed: the board shows the ones completed TODAY by default
+    (the day the scans first saw them completed), any days picked, or "All days"; the ones already completed when the
+    recording began have no day and are only in "All days". The list is finished work - a ticked circle, never the
+    amber warning."""
+    data = itsm_snapshot()
+    done_rows = [{"number": n, "summary": f"Done {n}"} for n in ("200001", "200002", "200003", "200004")]
+    data["categories"].append(DONE)
+    data["roles"][0]["categories"][DONE] = {"count": 4, "rows": done_rows, "warning": None, "note": None}
+    data["totals"][DONE] = 4
+    write_itsm(ops, data)
+    first = "2026-10-01T08:00:00"
+    ops.update_itsm_records(lambda d: d.update(records={
+        "200001": {"number": "200001", "role": ROLE_A, "first_seen": "2026-10-09T09:00:00", "conclusion": "completed",
+                   "completed_at": "2026-10-11T08:30:00"},                                # completed today
+        "200002": {"number": "200002", "role": ROLE_A, "first_seen": "2026-10-09T09:00:00", "conclusion": "completed",
+                   "completed_at": "2026-10-10T15:00:00"},                                # yesterday
+        "200003": {"number": "200003", "role": ROLE_A, "first_seen": first, "conclusion": "completed",
+                   "completed_at": first},                                                # already done at the first scan
+        "200004": {"number": "200004", "role": ROLE_A, "first_seen": "2026-10-11T08:45:00", "conclusion": "completed",
+                   "completed_at": "2026-10-11T08:45:00"}}))                              # new today, straight to completed
+    t = tab()
+    page = t.open("/itsm", ".sx-role")
+    assert kpi(page, DONE) == "2"
+    tile = page.locator(f'[data-kpi="{DONE}"]')
+    assert tile.get_attribute("class").endswith("tone-done") and "completed today" in tile.inner_text()
+    assert "1 completed before the recording" in tile.inner_text()
+    cat = category(page, ROLE_A, DONE)
+    assert cat.get_attribute("data-tone") == "done"
+    assert [li.get_attribute("data-number") for li in cat.locator("li").all()] == ["200001", "200004"]
+    assert "already completed when the recording began" in cat.inner_text()
+    assert page.locator(f'.sx-role[data-role="{ROLE_A}"] .sx-role-head .hint').inner_text() == "4 open"   # not finished work
+    page.fill('[data-done="from"]', "2026-10-10")
+    page.fill('[data-done="to"]', "2026-10-10")
+    page.locator('[data-done="to"]').dispatch_event("change")
+    expect(page.locator(f'[data-kpi-value="{DONE}"]')).to_have_text("1")
+    assert [li.get_attribute("data-number") for li in category(page, ROLE_A, DONE).locator("li").all()] == ["200002"]
+    page.click('[data-done="all"]')
+    expect(page.locator(f'[data-kpi-value="{DONE}"]')).to_have_text("4")
+    page.click('[data-done="today"]')
+    expect(page.locator(f'[data-kpi-value="{DONE}"]')).to_have_text("2")
+    t.clean()

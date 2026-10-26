@@ -110,6 +110,34 @@ def sla_exclusion(sla_settings, resolver):
     return excluded
 
 
+def sla_people(users):
+    """(by number, by security name): the accounts by the number the portal shows in its status history («رقم
+    المستخدم»: the account's portal ID, else its user ID) and by their security name - so every step of a request is
+    linked to the person who did it."""
+    users = list(users.values()) if isinstance(users, dict) else list(users or [])
+    by_no, by_name = {}, {}
+    for field in ("portal_id", "user_id"):              # the portal ID wins over the user ID
+        for u in users:
+            ident = str(u.get(field) or "").strip()
+            if ident:
+                by_no.setdefault(ident, u)
+    for u in users:
+        name = norm_arabic(u.get("security_name"))
+        if name:
+            by_name.setdefault(name, u)
+    return by_no, by_name
+
+
+def sla_person_team(system, number, name, people, resolver):
+    """The team of one SLA request in the SLA Analysis (and the daily summary): the team of the PERSON who executed it
+    or holds it (their account, by number, else by security name), else the application's / the security user's team
+    (``Resolver.sla_team``), else ``NO_TEAM``."""
+    by_no, by_name = people
+    acct = (by_no.get(str(number or "").strip()) or by_name.get(norm_arabic(name))) if (number or name) else None
+    mine = [t for t in overlay.user_teams(acct or {}) if _real_team(t)]
+    return (mine[0] if mine else "") or resolver.sla_team(system, name) or NO_TEAM
+
+
 def in_scope(scope, team):
     """Does a row of ``team`` belong to ``scope``? (None = every team; a row with no team only for None.)"""
     return scope is None or (bool(team) and team != NO_TEAM and overlay.team_in(scope, team))

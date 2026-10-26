@@ -727,6 +727,25 @@ def js_detail_snapshot(tokens=()):
       }
     } return ''; };
   out.number = findNo('label, span, b, strong, th, legend') || findNo('td, div');
+  // «الفترة من / الى» (a request with a period, «نموذج (7)»): the details' text and field values in page order (the
+  // history table left out), then the date (and time) right after the label - never a date further on
+  out.period = null;
+  if (scope) {
+    const parts = [], walk = document.createTreeWalker(scope, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    for (let n = walk.currentNode; n; n = walk.nextNode()) {
+      if (n.nodeType === 3) { if (!table.contains(n)) parts.push(n.nodeValue); }
+      else if ((n.tagName === 'INPUT' && n.type !== 'hidden') || n.tagName === 'TEXTAREA') parts.push(n.value || '');
+      else if (n.tagName === 'SELECT') { const o = n.options[n.selectedIndex]; parts.push(o ? o.text : ''); }
+    }
+    const flat = norm(parts.join(' | ')), D = '(\\d{1,2}[/.-]\\d{1,2}[/.-]\\d{4}|\\d{4}[/.-]\\d{1,2}[/.-]\\d{1,2})'
+      + '(?:[\\s|]*(\\d{1,2}:\\d{2}(?::\\d{2})?(?:\\s*(?:am|pm|ص|م))?))?';
+    const pf = new RegExp('الفتره\\s*(?:من)?\\s*(?:[/-]\\s*الي)?\\s*[:：]?[\\s|]*' + D).exec(flat);
+    if (pf) {
+      const rest = flat.slice(pf.index + pf[0].length);
+      const pt = new RegExp('^[\\s|:：-]*(?:(?:الفتره\\s*)?الي\\s*[:：]?[\\s|]*)?' + D).exec(rest);
+      out.period = {from: [pf[1], pf[2]].filter(Boolean).join(' '), to: pt ? [pt[1], pt[2]].filter(Boolean).join(' ') : ''};
+    }
+  }
   const tokens = """ + json.dumps([str(t) for t in tokens if str(t or "").strip()]) + r""";
   if (box && tokens.length) {
     const seen = (box.textContent || '') + ' ' + [...box.querySelectorAll('input, textarea')].map(i => i.value || '').join(' ');
@@ -1057,14 +1076,22 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     # and a request of an excluded application (the Third Party team's by default) is never opened at all
     excluded = plan.get("excluded") or (lambda system: False)
     todo = {it["key"] for it in grid if sla_history.needs_details(it, index, plan["cfg"])
-            and sla_history.detail_priority(it["status"], plan["cfg"]) is not None
+            and sla_history.detail_priority(it["status"], plan["cfg"], it.get("executor") or "") is not None
             and not excluded(it["system"])}
-    # when a scan cannot read them all, the requests still with a security user first (their assignment line is shown
-    # on the Live tab), then the ones awaiting the reviewer, then the closed ones; the oldest request first within each
-    # the result page shown now first (a row's post-back opens it on ITS page only), then the others in order
-    ordered = sorted(grid, key=lambda it: (page_of[it["key"]] != current_page, page_of[it["key"]],
-                                           it["key"] not in todo, sla_history.detail_priority(it["status"], plan["cfg"]) or 0,
+    # a «نموذج (7)» row read before its period was taken from the details: read again, after every other row
+    late = {it["key"] for it in grid if it["key"] in todo
+            and not sla_history.needs_details(it, index, plan["cfg"], period=False)}
+    # a row's post-back opens it on ITS result page only, so the rows are read page by page - starting on the page
+    # where the last scan stopped (``resume_page``), so no page waits for the others scan after scan; on each page the
+    # CLOSED requests first (they complete the day's numbers), then the ones awaiting the reviewer, then the ones with
+    # a security user, then the rejected ones; the oldest request first within each
+    npages = max(1, len(pages))
+    resume = int(plan.get("resume_page") or 0) % npages
+    ordered = sorted(grid, key=lambda it: (it["key"] in late, (page_of[it["key"]] - resume) % npages,
+                                           it["key"] not in todo,
+                                           sla_history.detail_priority(it["status"], plan["cfg"], it.get("executor") or "") or 0,
                                            (sla_history.parse_time(it["date"]) or datetime.max)))
+    resume_next = None
     lost_pages = set()
     items, opened, failed, streak, unverified, partial = [], 0, 0, 0, 0, 0
     read_numbers = {}                                     # request number -> grid key, this scan
@@ -1079,6 +1106,8 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
             if not stopped:
                 stopped = ("time budget" if time.monotonic() >= deadline else "3 failures in a row" if streak >= 3
                            else "detail budget")
+            if resume_next is None and it["key"] not in late:
+                resume_next = page_of[it["key"]]          # the next scan starts here
             items.append({"grid": it, "id": "", "history": None})
             continue
         if page_of[it["key"]] in lost_pages or not goto(page_of[it["key"]]):
@@ -1123,6 +1152,10 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
                     unverified += snap.get("verified") is False
                     got = {"grid": it, "id": number,
                            "history": sla_history.events_from_table(whole["headers"], whole["rows"], plan["cfg"])}
+                    span = snap.get("period") or {}
+                    if span.get("from"):                  # «الفترة من / الى»: its clocks start there
+                        got["period_from"] = sla_history.period_start(span["from"], plan.get("day_start") or "08:00")
+                        got["period_to"] = sla_history.period_start(span.get("to"), "00:00") if span.get("to") else ""
             if snap and snap.get("open") and not in_page:
                 _close_details(browser)
         except Exception as exc:                          # one request must not stop the others
@@ -1163,7 +1196,9 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
         + ")" + (f"; stopped: {stopped}" if stopped and left else "")
         + (f"; {unverified} detail(s) could not be matched to their row by number" if unverified else ""))
     return {"items": items, "rows": len(grid), "opened": opened, "left": left, "failed": failed, "timing": timing,
-            "portal_total": portal_total if isinstance(portal_total, int) else None}
+            "portal_total": portal_total if isinstance(portal_total, int) else None,
+            "resume_page": resume_next if resume_next is not None else 0,
+            "date_from": plan["date_from"].isoformat() if hasattr(plan.get("date_from"), "isoformat") else ""}
 
 
 def scrape(ctx, username, password, history=None, history_sink=None):
@@ -1770,7 +1805,7 @@ def history_plan(ctx, cfg, now):
     rules = sla_records.clean_config((ctx.store.read_sla_records() or {}).get("config"))
     still_open = [r.get("request_date") for r in (state.get("open") or {}).values()]
     still_open += [g.get("request_date") for g in (state.get("grid") or {}).values()   # a branch-only request has no
-                   if sla_history.grid_stage(g.get("status"), rules) not in ("closed", "rejected", "pre")]   # SLA yet
+                   if sla_history.row_stage(g, rules) not in ("closed", "rejected", "pre")]   # SLA yet
     for stamp in still_open:                              # follow every request that is not finished yet
         day = sla_history.parse_time(stamp)
         if day and floor <= day.date() < date_from:
@@ -1786,7 +1821,17 @@ def history_plan(ctx, cfg, now):
                 if day < date_from:
                     date_from = day
     return {"date_from": date_from, "date_to": today, "index": dict(state.get("index") or {}), "cfg": rules,
-            "excluded": sla_excluder(ctx, cfg), "seconds": history_seconds(cfg, getattr(ctx, "general", None))}
+            "excluded": sla_excluder(ctx, cfg), "seconds": history_seconds(cfg, getattr(ctx, "general", None)),
+            "day_start": day_start(cfg, getattr(ctx, "general", None)),
+            "resume_page": int(((state.get("history_stats") or {}).get("resume_page")) or 0)}
+
+
+def day_start(cfg, general=None):
+    """When the working day starts ("08:00"): the SLA's own active hours, else the general ones - where a period
+    («الفترة من») given without a time starts."""
+    hours = ((cfg or {}).get("schedule") or {}).get("active_hours") or (general or {}).get("active_hours") or ""
+    first = str(hours).split("-")[0].strip()
+    return first if re.fullmatch(r"\d{1,2}:\d{2}", first) else "08:00"
 
 
 OPEN_STALE_DAYS = 45            # an open request not listed for this long (cancelled, deleted) leaves the open set
@@ -1847,10 +1892,13 @@ def fold_history_result(store, sink, now_iso, system_team=None):
                       if (v.get("day") and v["day"] >= oldest) or (not v.get("day") and v.get("id") in d["open"])
                       or ((v.get("fail") or {}).get("at") or "") >= oldest}
         if items:
-            d["grid"] = sla_history.grid_state([it["grid"] for it in items], d.get("grid"), now_iso, cfg)
+            watched = d.get("grid_from") if d.get("grid") else None      # the previous read's first request date
+            d["grid"] = sla_history.grid_state([it["grid"] for it in items], d.get("grid"), now_iso, cfg, watched)
+            d["grid_from"] = sink.get("date_from") or d.get("grid_from") or ""
+            out["unknown_wordings"] = sla_history.unknown_wordings(d["grid"], cfg)
         d["last_history"] = now_iso
         d["history_stats"] = {"at": now_iso, "rows": sink.get("rows", 0), "portal_total": sink.get("portal_total"),
-                              "opened": sink.get("opened", 0),
+                              "opened": sink.get("opened", 0), "resume_page": int(sink.get("resume_page") or 0),
                               "left": sink.get("left", 0), "failed": sink.get("failed", 0),
                               "timing": sink.get("timing") or {}, **out}
         d.pop("history_error", None)
@@ -1907,8 +1955,13 @@ def run(ctx, scraper=None):
     if sink and not ctx.dry_run:                          # the SLA Analysis history (exact, live): kept for good
         try:
             from .. import sla_records
-            fold_history_result(ctx.store, sink, now.strftime("%Y-%m-%dT%H:%M:%S"),
-                                sla_records.system_team_map(ctx.store.read_auto_assign()))
+            folded = fold_history_result(ctx.store, sink, now.strftime("%Y-%m-%dT%H:%M:%S"),
+                                         sla_records.system_team_map(ctx.store.read_auto_assign())) or {}
+            odd = folded.get("unknown_wordings") or []
+            if odd:                                       # placed by «مستخدم السرية» until the settings name them
+                ctx.log("SLA history: status wording(s) the settings do not name (System › Settings › SLA statuses): "
+                        + ", ".join(f"«{w}» ×{n}" for w, n in odd)
+                        + " - counted with the security team only when the inquiry names a security user")
         except Exception as exc:
             ctx.log(f"SLA history could not be recorded: {type(exc).__name__}: {scrub(str(exc), secrets)}")
     note_assignments(ctx, cfg, requests, secrets)

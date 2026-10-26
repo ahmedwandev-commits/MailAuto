@@ -107,3 +107,18 @@ def test_housekeep_keeps_pending_drops_old_terminal():
     ir.record_scan(rec, scan({OPEN: [("pending", "y")]}), "2026-01-01T10:00:00")
     removed = ir.housekeep(rec, {"retention_days": 30, "max_records": 1000}, "2026-10-18T10:00:00")
     assert removed == 1 and set(rec) == {"pending"}          # old completed dropped; the pending one is always kept
+
+
+def test_the_day_a_cr_was_completed_is_only_the_day_the_scans_saw_it_complete():
+    """A CR already in «Implementation Completed» at the recording's first scan was completed some earlier day nobody
+    saw: it has no day (never "completed today" on the first day). One that moved there later, or appeared there new
+    after the first scan, has the day it was first seen there."""
+    from calllog.ops import itsm_records as ir
+    recs = {"A": {"first_seen": "2026-10-01T08:00:00", "completed_at": "2026-10-01T08:00:00"},     # at the first scan
+            "B": {"first_seen": "2026-10-01T08:00:00", "completed_at": "2026-10-03T10:00:00"},     # watched it finish
+            "C": {"first_seen": "2026-10-04T09:00:00", "completed_at": "2026-10-04T09:00:00"},     # new, already done
+            "D": {"first_seen": "2026-10-04T09:00:00", "completed_at": ""}}
+    start = ir.recording_start(recs)
+    assert start == "2026-10-01T08:00:00"
+    assert [ir.completed_day(recs[k], start) for k in "ABCD"] == ["", "2026-10-03", "2026-10-04", ""]
+    assert ir.recording_start({}) == ""

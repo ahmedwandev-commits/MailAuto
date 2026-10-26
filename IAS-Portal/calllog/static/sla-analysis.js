@@ -245,6 +245,8 @@
     const r = d.request || {};
     const facts = [["Request", r.id], ["Requester", [r.requester, r.requester_no].filter(Boolean).join(" · ")], ["Branch", r.branch],
       ["Application", r.system], ["Team", r.team], ["Request type", r.request_type], ["Status now", r.grid_status || r.last_status],
+      ["Period («الفترة من / الى»)", r.period_from ? [fmtStamp(r.period_from), r.period_to ? fmtStamp(r.period_to) : ""].filter(Boolean).join(" → ") : ""],
+      ["Assigned (before the period)", r.first_assigned_real_at ? `${fmtStamp(r.first_assigned_real_at)} — the clocks start at the period` : ""],
       ["Outcome", OUTCOME_TEXT[d.outcome] || d.outcome], ["Sent back", r.returned ? `${r.returned} time(s)` : ""],
       ["Re-assigned", r.reassigned ? `${r.reassigned} time(s)` : ""], ["On hold", r.held_minutes ? fmtMin(r.held_minutes) : ""]]
       .filter(([, v]) => v !== "" && v != null);
@@ -546,7 +548,7 @@
     const slaTone = !timed ? null : o.sla_pct >= 80 ? "ok" : o.sla_pct >= 50 ? "warn" : "danger";
     const slaH = Math.round(m.sla_minutes / 60 * 10) / 10;
     const kpis = h("div", { class: "sx-kpis" },
-      OPS.kpi({ key: "an-closed", label: "Closed", value: fmtNum(b.closed || 0), sub: m.unread ? `confirmed · ${fmtNum(m.unread)} request(s) of this period not read yet: counted, times follow` : "confirmed by the reviewer in this period", icon: "check", hero: true }),
+      OPS.kpi({ key: "an-closed", label: "Closed", value: fmtNum(b.closed || 0), sub: m.unread ? `confirmed · ${fmtNum(m.unread)} request(s) of this period not read yet: counted, times follow` : "of this period's requests, confirmed by the reviewer", icon: "check", hero: true }),
       OPS.kpi({ key: "an-within", label: `Within ${slaH} h SLA`, value: timed ? OPS.fmtPct(o.sla_pct) : "—",
         sub: timed ? `median ${fmtMin(o.median_minutes)} · assignment → confirmation` : "no closed request yet", tone: slaTone, icon: "shield" }),
       OPS.kpi({ key: "an-exec", label: "Executed", value: fmtNum(o.executed || 0), sub: b.closed ? `${OPS.fmtPct(o.executed_pct)} of the closed` : "«تم التعزيز على التنفيذ»", tone: "ok", icon: "check" }),

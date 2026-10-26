@@ -1002,8 +1002,35 @@ def module_answer(module):
                 [r for r in overlaid_rows(snap, ovr, rev) if overlay.is_unclassified(r)], scope, person_teams())
     else:
         out["data"] = scoped_data(module, snap.get("data"), scope)
+        if module == "itsm":
+            out["data"] = itsm_dated(out["data"])
     out["meta"] = meta
     return jsonify(out)
+
+
+def itsm_dated(data):
+    """The ITSM board with, on every row of an «Implementation Completed» list, the day the scans saw it completed
+    (``done_day``; "" = already completed at the recording's first scan), so the page can show the completed ones of
+    the days picked; ``completed_categories`` names those lists. A copy: the snapshot read is never changed."""
+    if not isinstance(data, dict):
+        return data
+    records = (ops().read_itsm_records() or {}).get("records") or {}
+    started = itsm_records.recording_start(records)
+    done = [c for c in (data.get("categories") or []) if itsm_records.conclusion_for(c) == "completed"]
+    roles = []
+    for role in data.get("roles") or []:
+        cats = {}
+        for label, cat in (role.get("categories") or {}).items():
+            if isinstance(cat, dict) and itsm_records.conclusion_for(label) == "completed":
+                if label not in done:
+                    done.append(label)
+                rows = [{**r, "done_day": itsm_records.completed_day(records.get(str(r.get("number") or "").strip()) or {},
+                                                                     started)}
+                        for r in cat.get("rows") or [] if isinstance(r, dict)]
+                cat = {**cat, "rows": rows}
+            cats[label] = cat
+        roles.append({**role, "categories": cats})
+    return {**data, "roles": roles, "completed_categories": done}
 
 
 def _thin(points, limit=300):
@@ -1120,8 +1147,10 @@ def sla_period(scope, filt):
     Every request the latest inquiry grid lists with the security team counts, read or not: the ones whose history is
     not read yet come in without times (``sla_history.grid_stubs``), so the numbers match the portal."""
     view = sla_history_view(scope, filt["date_from"], filt["date_to"])
-    stubs = sla_history.grid_stubs(view["grid"], view["index"], view["records"], view["cfg"])
-    return view, sla_history.filter_records({**stubs, **view["records"]}, filt)
+    # a request that moved on since its history was read counts at the stage the inquiry shows now
+    records = sla_history.with_current_stage(view["records"], view["grid"], view["index"], view["cfg"])
+    stubs = sla_history.grid_stubs(view["grid"], view["index"], records, view["cfg"])
+    return view, sla_history.filter_records({**stubs, **records}, filt)
 
 
 @bp.get("/sla-analysis/request")
@@ -1150,6 +1179,7 @@ def sla_analysis_request():
     keep = ("id", "request_date", "branch", "requester", "requester_no", "system", "team", "request_type", "grid_status",
             "registered_at", "branch_confirmed_at", "region_approved_at", "region_by", "pool_at", "first_assigned_at",
             "assigned_at", "assigner", "executed_at", "executor", "exec_outcome", "confirmed_at", "checker",
+            "period_from", "period_to", "first_assigned_real_at", "assigned_real_at", "form",
             "final_outcome", "rejected_at", "rejected_by", "returned", "reassigned", "transferred", "held_minutes",
             "on_hold", "holder", "last_status", "last_seen")
     trail = [{"at": t[0], "step": t[1], "status": t[2], "who": t[3], "number": t[4], "note": t[5]}
@@ -1314,19 +1344,7 @@ def sla_history_people():
     """The accounts by the number the portal shows in its status history («رقم المستخدم»: the account's portal ID,
     else its user ID) and by its security name - so every step of a request is linked to the person who did it."""
     if "sla_history_people" not in g:
-        users = auth.store().users()
-        users = list(users.values()) if isinstance(users, dict) else list(users or [])
-        by_no, by_name = {}, {}
-        for field in ("portal_id", "user_id"):              # the portal ID wins over the user ID
-            for u in users:
-                ident = str(u.get(field) or "").strip()
-                if ident:
-                    by_no.setdefault(ident, u)
-        for u in users:
-            name = sla_history._norm(u.get("security_name"))
-            if name:
-                by_name.setdefault(name, u)
-        g.sla_history_people = (by_no, by_name)
+        g.sla_history_people = teams.sla_people(auth.store().users())
     return g.sla_history_people
 
 
@@ -1352,9 +1370,7 @@ def sla_history_view(scope, date_from="", date_to=""):
     excluded = teams.sla_exclusion(sla_cfg, resolver) or (lambda system: False)
 
     def team_of(system, number="", name=""):
-        acct = sla_history_account(number, name) if (number or name) else None
-        mine = [t for t in overlay.user_teams(acct or {}) if teams._real_team(t)]
-        return (mine[0] if mine else "") or resolver.sla_team(system, name) or teams.NO_TEAM
+        return teams.sla_person_team(system, number, name, sla_history_people(), resolver)
 
     def link(r):
         person_no = r.get("executor_no") if r.get("executor_no") or r.get("executor") else ""

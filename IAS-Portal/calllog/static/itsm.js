@@ -26,8 +26,9 @@
     x: "M18 6 6 18M6 6l12 12", download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
     wifi: "M2 9a15 15 0 0 1 20 0M5.5 12.5a10 10 0 0 1 13 0M9 16a5 5 0 0 1 6 0M12 20h.01",
     copy: "M9 9h11v11H9zM5 15V5a1 1 0 0 1 1-1h10", caret: "M9 18l6-6-6-6",
+    done: "M22 11.1V12a10 10 0 1 1-5.9-9.1M22 4 12 14l-3-3",      // a ticked circle: the work is finished
   };
-  const TONE_ICON = { ok: "check", warn: "alert", danger: "alert", na: "dash" };
+  const TONE_ICON = { ok: "check", warn: "alert", danger: "alert", na: "dash", done: "done" };
 
   const state = {
     snap: null, meta: null, generatedAt: "", history: null, today: "", failure: null, waiting: null,
@@ -36,6 +37,7 @@
     tab: "scoreboard",        // "scoreboard" (live) | "requests" (CR execution + conclusion analysis)
     analysis: null,           // the latest /api/ops/itsm-analysis answer
     crFilter: null,           // {date_from, date_to, role, conclusion} - defaults to today on first open
+    done: null,               // {from, to}: the days whose completed implementations the board shows ("" = every day)
   };
   const el = {};
   let skew = 0;
@@ -200,10 +202,11 @@
       if (typeof v.q === "string") state.q = v.q.slice(0, 100);
       if (v.tab === "requests" || v.tab === "scoreboard") state.tab = v.tab;
       if (v.open && typeof v.open === "object") for (const [k, on] of Object.entries(v.open)) if (typeof on === "boolean") state.open[k] = on;
+      if (v.done && typeof v.done === "object") state.done = { from: String(v.done.from || "").slice(0, 10), to: String(v.done.to || "").slice(0, 10) };
     } catch (e) { /* no storage: fine */ }
   }
   function saveView() {
-    try { sessionStorage.setItem(VIEW_KEY, JSON.stringify({ q: state.q, tab: state.tab, open: state.open })); } catch (e) { /* ignore */ }
+    try { sessionStorage.setItem(VIEW_KEY, JSON.stringify({ q: state.q, tab: state.tab, open: state.open, done: state.done })); } catch (e) { /* ignore */ }
   }
 
   // ================================================================== data helpers
@@ -213,17 +216,44 @@
     for (const role of data.roles || []) for (const c of Object.keys(role.categories || {})) if (!names.includes(c)) names.push(c);
     return names;
   };
-  /** 0 = ok (green), more = warn (amber), rollback requests above 0 = danger (red), null = na (grey). */
+  /** 0 = ok (green), more = warn (amber), rollback requests above 0 = danger (red), null = na (grey); an
+      «Implementation Completed» list is finished work: "done" (green, a ticked circle), never a warning. */
   function tone(category, count) {
     if (count == null) return "na";
+    if (isCompleted(category)) return count === 0 ? "ok" : "done";
     if (count === 0) return "ok";
     return isRollback(category) ? "danger" : "warn";
   }
+  const isCompleted = (category) => ((state.snap && state.snap.data.completed_categories) || []).includes(category)
+    || /completed/i.test(String(category));
+  /** The completed-days filter: {from, to} ("" = open-ended); every day when both are empty. Today by default. */
+  const doneRange = () => state.done || { from: state.today, to: state.today };
+  const doneFiltered = () => { const r = doneRange(); return !!(r.from || r.to); };
+  const inDone = (day) => { const r = doneRange(); return !!day && (!r.from || day >= r.from) && (!r.to || day <= r.to); };
+  /** A list as the board shows it: an «Implementation Completed» list keeps only the CRs completed on the days picked
+      (``done_day`` from the recording); ``undated`` = the ones already completed when the recording began. */
+  function shownEntry(category, entry) {
+    if (!entry || entry.count == null || !isCompleted(category) || !doneFiltered()) return entry;
+    const rows = (entry.rows || []).filter((r) => inDone(r.done_day));
+    return { ...entry, count: rows.length, rows, undated: (entry.rows || []).filter((r) => !r.done_day).length,
+      unread: Math.max(0, (entry.count || 0) - (entry.rows || []).length) };
+  }
+  function doneText() {
+    const r = doneRange();
+    if (!r.from && !r.to) return "every day";
+    const d = (x) => (x === state.today ? "today" : `${x.slice(8, 10)}/${x.slice(5, 7)}`);
+    return r.from === r.to ? d(r.from) : `${r.from ? d(r.from) : "…"} – ${r.to ? d(r.to) : "…"}`;
+  }
   function categoryTotal(data, category) {
+    if (isCompleted(category) && doneFiltered()) {
+      return (data.roles || []).reduce((n, r) => n + ((shownEntry(category, (r.categories || {})[category]) || {}).count || 0), 0);
+    }
     if (data.totals && data.totals[category] != null) return data.totals[category];
     return (data.roles || []).reduce((n, r) => n + (((r.categories || {})[category] || {}).count || 0), 0);
   }
-  const roleTotal = (role) => Object.values(role.categories || {}).reduce((n, c) => n + (c && c.count ? c.count : 0), 0);
+  /** A role's OPEN requests: every list but the completed implementations (finished work). */
+  const roleTotal = (role) => Object.entries(role.categories || {})
+    .reduce((n, [label, c]) => n + (c && c.count && !isCompleted(label) ? c.count : 0), 0);
   const words = () => normAr(state.q).split(/\s+/).filter(Boolean);
 
   function visibleRows(entry) {
@@ -288,7 +318,13 @@
     const data = state.snap.data, roles = data.roles || [];
     const failed = roles.filter((r) => r.error).length;
     const tiles = categoryList(data).map((c) => {
-      const total = categoryTotal(data, c), n = roles.filter((r) => ((r.categories || {})[c] || {}).count > 0).length;
+      const total = categoryTotal(data, c);
+      const n = roles.filter((r) => ((shownEntry(c, (r.categories || {})[c]) || {}).count || 0) > 0).length;
+      if (isCompleted(c)) {
+        const undated = doneFiltered() ? roles.reduce((k, r) => k + ((shownEntry(c, (r.categories || {})[c]) || {}).undated || 0), 0) : 0;
+        return tile(c, fmtNum(total), `completed ${doneText()}${total ? ` · in ${n} role${n === 1 ? "" : "s"}` : ""}`
+          + (undated ? ` · ${fmtNum(undated)} completed before the recording` : ""), tone(c, total), c);
+      }
       return tile(c, fmtNum(total), total === 0 ? "nothing waiting" : `in ${n} role${n === 1 ? "" : "s"}`, tone(c, total), c);
     });
     tiles.push(tile("Roles read", roles.length ? `${roles.length - failed} of ${roles.length}` : "0", failed ? `${failed} could not be read` : roles.length ? "all roles answered" : "no role in this scan", failed ? "danger" : roles.length ? "ok" : "na", "roles"));
@@ -317,7 +353,7 @@
   }
 
   function categoryRow(role, category) {
-    const entry = (role.categories || {})[category];
+    const entry = shownEntry(category, (role.categories || {})[category]);
     const count = entry ? entry.count : null, t = tone(category, count);
     if (count == null) {                // not on this role's scoreboard - or a scoreboard line whose number could not be read
       const why = entry && entry.warning;
@@ -336,6 +372,8 @@
       : h("div", { class: "sx-cat-head" }, h("span", { class: "sx-cat-name" }, category), chipEl);
     const notes = [];
     if (entry.warning) notes.push(h("p", { class: "sx-cat-note warn" }, entry.warning));
+    if (entry.undated) notes.push(h("p", { class: "sx-cat-note" }, `${fmtNum(entry.undated)} more were already completed when the recording began (no day known) - pick "All days" to see them.`));
+    if (entry.unread) notes.push(h("p", { class: "sx-cat-note warn" }, `${fmtNum(entry.unread)} of this list's numbers were not read by the scan, so they cannot be dated.`));
     if (entry.note) notes.push(h("p", { class: "sx-cat-note" }, entry.note));
     let body = null;
     if (expandable && open) {
@@ -573,11 +611,25 @@
     if (!snap) return;
     if (el.content.dataset.rendered !== snap.generated_at) {
       el.content.dataset.rendered = snap.generated_at;
+      syncDoneBar();
       renderTotals();
       renderChanges();
       drawHistory();
       keepFocus(el.cards, renderCards);
     }
+  }
+
+  function syncDoneBar() {
+    const r = doneRange();
+    el.doneFrom.value = r.from || "";
+    el.doneTo.value = r.to || "";
+  }
+  /** The completed days changed: the tiles and the role cards follow at once (no new scan needed). */
+  function rerenderBoard() {
+    if (!state.snap) return;
+    syncDoneBar();
+    renderTotals();
+    keepFocus(el.cards, renderCards);
   }
 
   // ================================================================== Change requests: execution time + conclusion
@@ -705,6 +757,18 @@
     el.runLine = h("p", { class: "sx-runline", role: "status", "aria-live": "polite", hidden: true }, el.runText, " ", el.runTimer);
     el.errorsBanner = h("div", { class: "sx-banner danger", role: "alert", hidden: true });
     el.totals = h("div", { class: "sx-totals", role: "group", "aria-label": "Open requests per category" });
+    el.doneFrom = h("input", { type: "date", "aria-label": "Completed from", "data-done": "from" });
+    el.doneTo = h("input", { type: "date", "aria-label": "Completed to", "data-done": "to" });
+    const setDone = (from, to) => { state.done = { from, to }; saveView(); rerenderBoard(); };
+    el.doneFrom.addEventListener("change", () => setDone(el.doneFrom.value, el.doneTo.value));
+    el.doneTo.addEventListener("change", () => setDone(el.doneFrom.value, el.doneTo.value));
+    el.doneBar = h("div", { class: "sx-filter", role: "group", "aria-label": "Completed implementations: days" },
+      h("span", { class: "sx-filter-f" }, glyph("done"), h("strong", {}, "Implementations completed on")),
+      h("label", { class: "sx-filter-f" }, h("span", {}, "From"), el.doneFrom),
+      h("label", { class: "sx-filter-f" }, h("span", {}, "To"), el.doneTo),
+      h("span", { class: "grow" }),
+      h("button", { type: "button", class: "btn btn-ghost btn-sm", "data-done": "today", onclick: () => setDone(state.today, state.today) }, "Today"),
+      h("button", { type: "button", class: "btn btn-ghost btn-sm", "data-done": "all", onclick: () => setDone("", "") }, "All days"));
 
     el.changes = h("div");
     el.changesCount = h("span", { class: "hint" });
@@ -727,7 +791,7 @@
       h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: () => setAll(true) }, "Expand all"),
       h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: () => setAll(false) }, "Collapse all"));
 
-    el.content = h("div", { class: "sx-stack", hidden: true }, el.errorsBanner, el.totals, h("div", { class: "sx-two" }, el.changesCard, el.chartCard), el.toolbar, el.cards, el.noRoles, el.noData);
+    el.content = h("div", { class: "sx-stack", hidden: true }, el.errorsBanner, el.doneBar, el.totals, h("div", { class: "sx-two" }, el.changesCard, el.chartCard), el.toolbar, el.cards, el.noRoles, el.noData);
     el.empty = h("section", { class: "card sx-calm big", hidden: true }, glyph("clock"),
       h("div", {}, h("strong", {}, "No scan yet"), h("p", { class: "muted" }, "The collector writes the first ITSM scan here as soon as it has run. You can ask for one now with the button above.")));
 

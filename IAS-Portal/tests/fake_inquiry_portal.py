@@ -46,15 +46,16 @@ HISTORY_HEADERS = ["رقم المستخدم", "اسم المستخدم", "نوع
 DATE_ONLY = re.compile(r"^\d{2}-\d{2}-\d{4}$")
 
 
-def request(number, day, status, executor="", checker="", history=(), **grid):
+def request(number, day, status, executor="", checker="", history=(), period=None, **grid):
     """One made-up request row: ``day`` = date of the request, ``history`` = [(user_no, name, user_type, datetime,
-    status, notes)] in any order (the page sorts them by name)."""
+    status, notes)] in any order (the page sorts them by name). ``period`` = a «نموذج (7)» request's period, shown in
+    its details: (from, to) as the two fields «الفترة من» / «الفترة الى», or one text for one field «الفتره من / الى»."""
     row = {"date": day.strftime("%d/%m/%Y"), "form": "أخرى", "branch": "70001", "employee": "موظف اختبار",
            "employee_no": "700201", "tp": "", "user_no": "700201", "title": "وظيفة اختبار", "system": "Flexcube",
            "group": "", "request_type": "اضافة صلاحية", "assigner": executor, "executor": executor, "checker": checker,
            "notes": "", "status": status}
     row.update(grid)
-    return {"number": str(number), "grid": row, "history": list(history)}
+    return {"number": str(number), "grid": row, "history": list(history), "period": period}
 
 
 def _js(value):
@@ -266,6 +267,12 @@ class FakeInquiryPortal:
                          for k, v in (("رقم الطلب", r["number"]), ("تاريخ الطلب", g["date"]), ("النظام", g["system"]),
                                       ("رقم الموظف", g["employee_no"]), ("رقم المستخدم", g["user_no"]),
                                       ("الحالة", g["status"])))
+        period = r.get("period")
+        if isinstance(period, (tuple, list)):
+            fields += "".join(f"<div><span>{html.escape(k)} :</span> <input readonly value='{html.escape(v)}'></div>"
+                              for k, v in (("الفترة من", period[0]), ("الفترة الى", period[1])))
+        elif period:
+            fields += f"<div><label>الفتره من / الى</label><span>{html.escape(period)}</span></div>"
         return ("<div class='modal' role='dialog' style='display:block'><div class='modal-content'>"
                 f"<h4>تفاصيل الطلب</h4>{fields}"
                 + _dt_wrapper(DETAIL_GRID_ID, HISTORY_HEADERS, lengths, 5, "<h5>الحالة التاريخية للطلب</h5>")

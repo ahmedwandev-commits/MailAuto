@@ -31,7 +31,7 @@
 
 .st-breached, .tone-danger { --st: var(--sx-breached); --st-text: var(--sx-breached-text); }
 .st-reminder, .tone-warn { --st: var(--sx-reminder); --st-text: var(--sx-reminder-text); }
-.st-within, .tone-ok { --st: var(--sx-within); --st-text: var(--sx-within-text); }
+.st-within, .tone-ok, .tone-done { --st: var(--sx-within); --st-text: var(--sx-within-text); }
 .st-no_date, .tone-na { --st: var(--sx-nodate); --st-text: var(--sx-nodate-text); }
 
 /* ---------- page frame ---------- */

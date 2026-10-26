@@ -252,6 +252,32 @@ HOW TO UPDATE (your data is kept)
    - Insights > Analysis > SLA is unchanged: the security user's time and the whole request's time still count
      from the assignment (item 19).
 
+25. SLA ANALYSIS AND DAILY SUMMARY: FORM 7 PERIODS, THE RIGHT STAGE, NUMBERS THAT ADD UP
+   - «نموذج (7)» requests carry a period. Their «الفترة من» in the request details is read, and both clocks (the
+     security user's and the whole request's) start there when the request was assigned earlier: a request
+     registered two days ago with a period from today belongs to today and took its real minutes, not two days.
+     A date without a time starts at the SLA's working hours (08:00 by default). Form 7 requests read before this
+     update are read once more, after every other request.
+   - A status wording the settings do not list no longer counts as "open with a security user": it is with the
+     security team only when the inquiry names its «مستخدم السرية»; otherwise it is still with the branch. The
+     collector log names those wordings, so they can be added under System > Settings > SLA statuses.
+   - A request that moved on since its details were read counts at the stage the inquiry shows now (a request
+     read while open and confirmed since is closed, not "open for days").
+   - Daily summary, tickets: "Reached the security team today" (never a request still at the branch, whatever its
+     «تاريخ الطلب»), "Executed today" («تم التنفيذ» / «تم التعزيز على التنفيذ»), "Not executed today" («لم يتم
+     التنفيذ» / «تم التعزيز على عدم التنفيذ»), "Confirmed by the reviewer today", "Rejected by the assigner today
+     («رفض»)", and "Still with the branch now". Requests whose details are not read yet are counted from the
+     inquiry's status (the mail says how many). A team's summary uses the same team rule as the analysis.
+   - The scan reads the finished requests first, and each scan starts on the result page where the last one
+     stopped, so no page («عرض التالي») waits scan after scan.
+
+26. ITSM: COMPLETED IMPLEMENTATIONS BY DAY, A "FINISHED" ICON
+   - The board has "Implementations completed on" From / To (Today by default, or "All days"): the
+     «Implementation Completed» tiles and lists show only the CRs completed on those days (the day the scans first
+     saw them completed). CRs already completed when the recording began have no day; the board says how many.
+   - «Implementation Completed» is finished work: a green ticked circle instead of the amber warning, and a
+     role's "open" count leaves it out. The daily summary's "Implementations completed today" uses the same days.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -444,3 +470,28 @@ IAS PORTAL - الجديد في هذا التحديث
      الإكسيل، للمعلومة بس. وعمود إيميل التنبيه اسمه "Sent to Security".
    - تطبيقات Third Party لسه برة الـ Live SLA وتنبيهاته وإجمالياته زي ما هي.
    - Insights > Analysis > SLA زي ما هو: وقت مستخدم السرية ووقت الطلب كله لسه بيتحسبوا من الإسناد (بند 19).
+
+25. تحليل الـ SLA والملخص اليومي: فترة نموذج 7، المرحلة الصح، وأرقام مظبوطة
+   - طلبات «نموذج (7)» ليها فترة. «الفترة من» اللي في تفاصيل الطلب بتتقري، والعدادين (بتاع مستخدم السرية وبتاع الطلب
+     كله) بيبدأوا منها لو الطلب اتسند قبلها: طلب متسجل من يومين وفترته من النهارده بيتحسب على النهارده وبوقته الحقيقي،
+     مش يومين. التاريخ اللي من غير وقت بيبدأ من بداية ساعات الشغل (08:00 افتراضي). طلبات نموذج 7 اللي اتقرت قبل
+     التحديث ده بتتقري مرة تانية بعد باقي الطلبات.
+   - الحالة اللي مكتوبة بصيغة مش موجودة في الإعدادات مبقتش تتعد "open with a security user": بتتعد مع فريق السرية
+     بس لو الاستعلام كاتب «مستخدم السرية» بتاعها، غير كده هي لسه في الفرع. والـ collector log بيكتب الصيغ دي علشان
+     تضيفها في System > Settings > SLA statuses.
+   - الطلب اللي اتحرك بعد ما تفاصيله اتقرت بيتعد في المرحلة اللي الاستعلام بيقولها دلوقتي (طلب اتقرا وهو مفتوح
+     واتعزز بعدها بيتعد مقفول، مش "مفتوح من أيام").
+   - الملخص اليومي، التيكتات: "Reached the security team today" (عمره ما بيعد طلب لسه في الفرع مهما كان «تاريخ
+     الطلب»)، "Executed today" («تم التنفيذ» / «تم التعزيز على التنفيذ»)، "Not executed today" («لم يتم التنفيذ» /
+     «تم التعزيز على عدم التنفيذ»)، "Confirmed by the reviewer today"، "Rejected by the assigner today («رفض»)"،
+     و"Still with the branch now". الطلبات اللي تفاصيلها لسه ما اتقرتش بتتعد من حالتها في الاستعلام (والإيميل بيقول
+     كام واحد). وملخص الفريق بيستخدم نفس قاعدة الفريق اللي في التحليل.
+   - الـ scan بيقرا الطلبات المنتهية الأول، وكل scan بيبدأ من صفحة النتايج اللي اللي قبله وقف عندها، فمفيش صفحة
+     («عرض التالي») بتستنى scan ورا scan.
+
+26. الـ ITSM: الـ Implementations المنفذة حسب اليوم، وأيقونة "خلص"
+   - في الـ board بقى فيه "Implementations completed on" من / إلى (النهارده افتراضي، أو "All days"): كروت وقوايم
+     «Implementation Completed» بتعرض بس الـ CRs اللي اتنفذت في الأيام دي (اليوم اللي الـ scans شافتها فيه منفذة
+     لأول مرة). الـ CRs اللي كانت منفذة قبل ما التسجيل يبدأ مالهاش يوم، والـ board بيقول كام واحدة.
+   - «Implementation Completed» شغل خلص: دايرة خضرا فيها علامة صح بدل التحذير البرتقاني، وعدد "open" بتاع الـ role
+     مبقاش بيعدها. و"Implementations completed today" في الملخص اليومي بيستخدم نفس الأيام.
