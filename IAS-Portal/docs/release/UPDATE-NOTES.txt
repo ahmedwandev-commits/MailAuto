@@ -317,6 +317,21 @@ HOW TO UPDATE (your data is kept)
      execution time, each team, each employee, the best performer); the SLA tab lists the last 30 days - the team or
      the employee picked in the filter, a manager's own team.
 
+30. THE SLA NUMBERS ARE THE PORTAL'S OWN INQUIRY
+   - The SLA tab, the daily summary, the best performers and the day-by-day log now count the requests of the
+     dates picked («تاريخ الطلب») exactly as «الاستفسار عن الطلبات» lists them, by their status now - you can check
+     every number on the portal by searching the same dates:
+     came = executed + not executed + rejected + still with a security user;
+     executed = «تم التنفيذ» + «تم التعزيز على التنفيذ»; not executed = «لم يتم التنفيذ» + «تم التعزيز على عدم
+     التنفيذ»; waiting for confirmation = «تم التنفيذ» + «لم يتم التنفيذ»; confirmed = the «تم التعزيز» ones.
+     Requests still with the branch are never counted.
+   - "With us now" is the Live tab's number (the Re-Assign page), for every team and employee.
+   - The hours and the times come only from the requests whose status history is read (when each was assigned,
+     executed, confirmed); the others are under "No time yet" until they are read - never a guessed hour. The page
+     says how many the last scan read and how many wait.
+   - The previous versions dated requests by when the scans saw them change, which gave impossible numbers
+     (8,740 executed for 2,416 that came). That is gone. Today's line of "Day by day" is rewritten at the next scan.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -572,3 +587,16 @@ IAS PORTAL - الجديد في هذا التحديث
      بيتحفظ في Auto Assign > Applications.
    - "Day by day": كل scan بيحفظ أرقام اليوم (جه، اتنفذ، متنفذش، اترفض، اتعزز، وقت التنفيذ، كل فريق، كل موظف،
      وأحسن أداء)، وتاب الـ SLA بيعرض آخر 30 يوم - للفريق أو الموظف اللي في الفلتر، والمدير فريقه بس.
+
+30. أرقام الـ SLA هي نفس استعلام البورتال
+   - تاب الـ SLA والملخص اليومي وأفضل أداء وسجل يوم بيوم بقوا بيعدوا طلبات التواريخ اللي تختارها («تاريخ الطلب»)
+     بالظبط زي ما «الاستفسار عن الطلبات» بيعرضها، حسب حالتها دلوقتي - وتقدر تراجع كل رقم على البورتال بنفس التواريخ:
+     جه = اتنفذ + متنفذش + اترفض + لسه مع مستخدم السرية؛
+     اتنفذ = «تم التنفيذ» + «تم التعزيز على التنفيذ»، متنفذش = «لم يتم التنفيذ» + «تم التعزيز على عدم التنفيذ»،
+     مستني التعزيز = «تم التنفيذ» + «لم يتم التنفيذ»، اتعزز = اللي «تم التعزيز». والطلبات اللي لسه في الفرع عمرها
+     ما بتتعد.
+   - "With us now" هو رقم تاب الـ Live (صفحة الـ Re-Assign)، لكل فريق ولكل موظف.
+   - الساعات والأوقات بتيجي بس من الطلبات اللي تاريخها اتقرا (إمتى اتسند واتنفذ واتعزز)، والباقي تحت "No time yet"
+     لحد ما يتقري - عمرها ما بتكون ساعة متخمنة. والصفحة بتقول آخر scan قرا كام ولسه كام مستني.
+   - النسخ اللي فاتت كانت بتأرخ الطلبات بإمتى الـ scans شافتها بتتغير، وده كان بيطلع أرقام مستحيلة (8,740 اتنفذ من
+     2,416 جه). ده اتشال. وسطر النهارده في "Day by day" بيتكتب من جديد في الـ scan الجاي.

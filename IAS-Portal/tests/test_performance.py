@@ -12,12 +12,16 @@ def _sla_day(ops):
     assigner, rejected a CardSys one («رفض»); one request is still with the branch (never anyone's work)."""
     ops.update_sla_closed_day(DAY, lambda d: d.update({
         "R1": {"id": "R1", "source": "history", "stage": "closed", "outcome": "completed", "final_outcome": "executed",
-               "system": "Flexcube", "first_assigned_at": f"{DAY}T09:00:00", "assigned_at": f"{DAY}T09:00:00",
+               "system": "Flexcube", "request_date": DAY, "first_assigned_at": f"{DAY}T09:00:00", "assigned_at": f"{DAY}T09:00:00",
                "executed_at": f"{DAY}T09:40:00", "exec_outcome": "executed", "confirmed_at": f"{DAY}T10:00:00",
                "executor": "Person 7001", "executor_no": "7001"},
-        "R2": {"id": "R2", "source": "history", "stage": "rejected", "outcome": "rejected", "system": "CardSys",
+        "R2": {"id": "R2", "source": "history", "stage": "rejected", "outcome": "rejected", "system": "CardSys", "request_date": DAY,
                "rejected_at": f"{DAY}T11:00:00", "rejected_by": "Person 7002", "pool_at": f"{DAY}T10:30:00"}}))
-    ops.update_sla_history_state(lambda d: d.update(open={}, index={}, last_history=f"{DAY}T13:00:00", grid={
+    ops.update_sla_history_state(lambda d: d.update(open={}, last_history=f"{DAY}T13:00:00", index={
+        "g1": {"id": "R1", "status": "تم التعزيز على التنفيذ", "day": DAY}, "g2": {"id": "R2", "status": "رفض", "day": DAY}},
+        grid={
+        "g1": {"status": "تم التعزيز على التنفيذ", "system": "Flexcube", "holder": "Person 7001", "request_date": f"{DAY}T00:00:00"},
+        "g2": {"status": "رفض", "system": "CardSys", "holder": "", "assigner": "Person 7002", "request_date": f"{DAY}T00:00:00"},
         "g9": {"status": "تسجيل", "stage": "pre", "system": "Flexcube", "holder": "", "request_date": f"{DAY}T00:00:00"}}))
 
 

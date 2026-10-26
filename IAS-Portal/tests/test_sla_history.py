@@ -398,7 +398,7 @@ def _day_world():
     rows += [grid_row(status="في انتظار اعتماد مشرف الفرع", executor="", system=f"X{i}", date="21-10-2026")
              for i in range(6)]
     items = sh.grid_rows(HEAD, rows)
-    prev = sh.grid_state(items[:4] + items[6:], {}, "2026-10-20T08:00:00", CFG, None)
+    prev = sh.grid_state(items[:4] + items[6:], {}, "2026-10-21T08:00:00", CFG, None)     # this morning's read
     prev[items[2]["key"]].update(status="اسناد لمستخدم السرية", stage="open")    # R3 was open when read
     grid = sh.grid_state(items, prev, "2026-10-21T13:00:00", CFG, "2026-10-19")
     for k in (items[0]["key"], items[1]["key"]):                                   # A and B changed today
@@ -421,18 +421,6 @@ def _day_world():
     return records, grid, index
 
 
-def test_a_day_counts_what_reached_the_security_team_and_what_was_done_that_day():
-    records, grid, index = _day_world()
-    n = sh.day_numbers(records, grid, index, CFG, "2026-10-21", "2026-10-21T13:00:00")
-    assert n["arrived"] == 4            # R1, R2 assigned today; the unread confirmed row and the assigner's rejection
-    assert n["executed"] == 2           # R1 «تم التنفيذ» today; the unread row confirmed executed today
-    assert n["not_executed"] == 2       # R2 «لم يتم التنفيذ»; R3 «تم التعزيز على عدم التنفيذ» (not read again yet)
-    assert (n["closed"], n["closed_executed"], n["closed_not"]) == (3, 2, 1)
-    assert n["rejected"] == 1 and n["from_grid"] == 3     # the unread confirmed row, the rejection, R3
-    assert n["now"]["open"] == 1 and n["now"]["awaiting"] == 1 and n["now"]["pre"] == 6
-    assert n["measured"] == 1 and n["sla_pct"] == 100.0
-
-
 def test_the_analysis_counts_a_request_that_moved_on_at_its_new_stage():
     records, grid, index = _day_world()
     cur = sh.with_current_stage(records, grid, index, CFG)
@@ -443,23 +431,6 @@ def test_the_analysis_counts_a_request_that_moved_on_at_its_new_stage():
 
 
 # ------------------------------------------- a request is dated by what the scans WATCHED, never by a first sighting
-def test_a_request_seen_for_the_first_time_is_not_dated_today_unless_it_was_registered_today():
-    """A read reaching a month back sees thousands of old, long-finished requests at once: they are not "confirmed
-    today". Only a status change the scans watched, or a request registered today, is dated today."""
-    old = sh.grid_rows(HEAD, [grid_row(status="تم التعزيز على التنفيذ", date="01-10-2026")])
-    new = sh.grid_rows(HEAD, [grid_row(status="تم التعزيز على التنفيذ", date="21-10-2026", system="T24")])
-    g = sh.grid_state(old + new, {}, "2026-10-21T12:00:00", CFG)
-    assert g[old[0]["key"]]["since_known"] is False and sh.grid_event_day(g[old[0]["key"]]) == "2026-10-01"
-    assert g[new[0]["key"]]["since_known"] is True and sh.grid_event_day(g[new[0]["key"]]) == "2026-10-21"
-    watched = sh.grid_rows(HEAD, [grid_row(status="اسناد لمستخدم السرية", date="01-10-2026", system="Card")])
-    prev = sh.grid_state(watched, {}, "2026-10-21T09:00:00", CFG)
-    moved = sh.grid_rows(HEAD, [grid_row(status="تم التعزيز على التنفيذ", date="01-10-2026", system="Card")])
-    g2 = sh.grid_state(moved, prev, "2026-10-21T12:00:00", CFG)
-    assert g2[moved[0]["key"]]["since_known"] is True and sh.grid_event_day(g2[moved[0]["key"]]) == "2026-10-21"
-    legacy = {"status": "تم التعزيز على التنفيذ", "since": "2026-10-21T08:00:00", "request_date": "2026-10-01T00:00:00"}
-    assert sh.grid_event_day(legacy) == "2026-10-01"                 # an entry kept before: not trusted
-
-
 def test_the_grid_keeps_only_what_still_matters_so_every_page_stays_fast():
     prev = {"a": {"request_date": "2026-10-20T00:00:00", "stage": "closed"},       # recent: kept
             "b": {"request_date": "2026-10-01T00:00:00", "stage": "closed"},       # old and finished: dropped
@@ -468,3 +439,50 @@ def test_the_grid_keeps_only_what_still_matters_so_every_page_stays_fast():
     fresh = {"e": {"request_date": "2026-10-19T00:00:00", "stage": "closed"}}
     got = sh.merge_grid(prev, fresh, {"2026-10-19"}, "2026-10-19")
     assert sorted(got) == ["a", "c", "e"]
+
+
+# ------------------------------------- the security team's numbers: the portal's own inquiry, by «تاريخ الطلب»
+def _inquiry_day():
+    """21/10: two confirmed executed, one confirmed not executed, one executed waiting, one not executed waiting, one
+    rejected by the assigner, two still with a security user, one still at the branch; and one row of another day."""
+    rows = [grid_row(status="تم التعزيز على التنفيذ", system="A1", date="21-10-2026", executor="أ"),
+            grid_row(status="تم التعزيز على التنفيذ", system="A2", date="21-10-2026", executor="ب"),
+            grid_row(status="تم التعزيز على عدم التنفيذ", system="A3", date="21-10-2026", executor="أ"),
+            grid_row(status="تم التنفيذ", system="A4", date="21-10-2026", executor="ب"),
+            grid_row(status="لم يتم التنفيذ", system="A5", date="21-10-2026", executor="أ"),
+            grid_row(status="رفض", system="A6", date="21-10-2026", executor=""),
+            grid_row(status="اسناد لمستخدم السرية", system="A7", date="21-10-2026", executor="أ"),
+            grid_row(status="معلق", system="A8", date="21-10-2026", executor="ب"),
+            grid_row(status="تسجيل", system="A9", date="21-10-2026", executor=""),
+            grid_row(status="تم التعزيز على التنفيذ", system="B1", date="20-10-2026", executor="أ")]
+    items = sh.grid_rows(HEAD, rows)
+    items[5]["assigner"] = "موزع"
+    grid = sh.grid_state(items, {}, "2026-10-21T13:00:00", CFG)
+    for g in grid.values():
+        g["team"] = "Flex Cube"
+    records = {"R1": {"id": "R1", "source": sh.SOURCE, "stage": "closed", "request_date": "2026-10-21", "team": "Flex Cube",
+                      "first_assigned_at": "2026-10-21T09:05:00", "assigned_at": "2026-10-21T09:05:00",
+                      "executed_at": "2026-10-21T09:35:00", "exec_outcome": "executed", "executor": "أ",
+                      "confirmed_at": "2026-10-21T10:15:00", "final_outcome": "executed"}}
+    return grid, records
+
+
+def test_the_security_teams_numbers_are_the_portals_inquiry_of_those_dates_by_status_now():
+    grid, records = _inquiry_day()
+    live = [{"security_user": "أ"}, {"security_user": "ب"}, {"security_user": "ب"}]
+    n = sh.status_numbers(grid, records, CFG, "2026-10-21", "2026-10-21", live=live, live_team=lambda r: "Flex Cube")
+    assert (n["came"], n["executed"], n["not_executed"], n["rejected"], n["open"]) == (8, 3, 2, 1, 2)
+    assert n["came"] == n["executed"] + n["not_executed"] + n["rejected"] + n["open"]
+    assert (n["waiting"], n["confirmed"], n["confirmed_executed"], n["confirmed_not"]) == (2, 3, 2, 1)
+    assert n["pre"] == 1 and n["now"] == 3                    # the registration never counts; Live = 3 now
+    people = {p["person"]: p for p in n["by_person"]}
+    assert (people["أ"]["came"], people["أ"]["executed"], people["أ"]["not_executed"], people["أ"]["open"]) == (4, 1, 2, 1)
+    assert people["موزع"]["rejected"] == 1 and people["ب"]["now"] == 2
+    assert people["أ"]["exec_n"] == 1 and people["أ"]["exec_median_minutes"] == 30.0
+    # the hours come from the read histories only: R1 came 09:05, was executed 09:35 and confirmed 10:15
+    hours = {h["hour"]: h for h in n["hours"]}
+    assert (hours[9]["came"], hours[9]["done"], hours[10]["confirmed"]) == (1, 1, 1)
+    assert n["untimed"] == {"came": 7, "done": 5, "confirmed": 2}
+    assert n["times"]["execution"]["n"] == 1 and n["times"]["whole"]["median_minutes"] == 70.0
+    both = sh.status_numbers(grid, records, CFG, "2026-10-20", "2026-10-21")
+    assert both["came"] == 9 and both["executed"] == 4                                 # the 20th's row too

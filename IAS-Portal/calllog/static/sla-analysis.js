@@ -112,27 +112,32 @@
     return `${f.date_from ? day(f.date_from) : "…"} – ${f.date_to ? day(f.date_to) : "…"}`;
   }
   function glanceKpis(d) {
-    const G = d.glance || {}, N = G.now || {};
+    const G = d.glance || {};
     return h("div", { class: "sx-kpis", "data-glance": "" },
-      OPS.kpi({ key: "g-came", label: "Came to us", value: fmtNum(G.arrived || 0), sub: "reached the security team", icon: "activity", hero: true }),
-      OPS.kpi({ key: "g-exec", label: "Executed", value: fmtNum(G.executed || 0), sub: "«تم التنفيذ»", tone: "ok", icon: "check" }),
+      OPS.kpi({ key: "g-came", label: "Came to us", value: fmtNum(G.came || 0), sub: "requests of these dates with the security team", icon: "activity", hero: true }),
+      OPS.kpi({ key: "g-exec", label: "Executed", value: fmtNum(G.executed || 0), sub: "«تم التنفيذ» / «التعزيز على التنفيذ»", tone: "ok", icon: "check" }),
       OPS.kpi({ key: "g-notexec", label: "Not executed", value: fmtNum(G.not_executed || 0), sub: "«لم يتم التنفيذ» / «التعزيز على عدم التنفيذ»", tone: G.not_executed ? "warn" : null, icon: "alert" }),
       OPS.kpi({ key: "g-rejected", label: "Rejected", value: fmtNum(G.rejected || 0), sub: "«رفض» by the assigner", tone: G.rejected ? "warn" : null, icon: "x" }),
-      OPS.kpi({ key: "g-confirmed", label: "Confirmed", value: fmtNum(G.closed || 0), sub: `${fmtNum(G.closed_executed || 0)} executed · ${fmtNum(G.closed_not || 0)} not executed`, icon: "shield" }),
-      OPS.kpi({ key: "g-awaiting", label: "Waiting for confirmation", value: fmtNum(N.awaiting || 0), sub: "now · executed, not confirmed yet", tone: N.awaiting ? "warn" : null, icon: "clock" }),
-      OPS.kpi({ key: "g-open", label: "With us now", value: fmtNum(N.open || 0), sub: "with a security user, not executed yet", icon: "user" }));
+      OPS.kpi({ key: "g-open", label: "Still with a security user", value: fmtNum(G.open || 0), sub: "of these requests, not executed yet", icon: "user" }),
+      OPS.kpi({ key: "g-awaiting", label: "Waiting for confirmation", value: fmtNum(G.waiting || 0), sub: "executed or not, the reviewer has not confirmed yet", tone: G.waiting ? "warn" : null, icon: "clock" }),
+      OPS.kpi({ key: "g-confirmed", label: "Confirmed", value: fmtNum(G.confirmed || 0), sub: `«تم التعزيز» · ${fmtNum(G.confirmed_executed || 0)} executed · ${fmtNum(G.confirmed_not || 0)} not executed`, icon: "shield" }),
+      OPS.kpi({ key: "g-now", label: "With us now", value: fmtNum(G.now || 0), sub: "the Live tickets (Re-Assign page), any date", icon: "user" }));
   }
   function glanceNote(d) {
-    const G = d.glance || {}, N = G.now || {};
-    const bits = [];
-    if (G.from_grid) bits.push(`${fmtNum(G.from_grid)} of these are counted from the inquiry's status: their details are read at the next scans (their times follow)`);
-    if (N.pre) bits.push(`${fmtNum(N.pre)} request(s) still with the branch (registration, supervisor) are not ours yet: not counted`);
-    return bits.length ? h("p", { class: "hint", "data-glance-note": "" }, bits.join(" · ") + ".") : null;
+    const G = d.glance || {}, R = (d.recorder || {}).stats || {}, T = R.timing || {};
+    const bits = ["Counted as the portal's «الاستفسار عن الطلبات» lists the requests of these «تاريخ الطلب» dates, by their status now: came = executed + not executed + rejected + still with a security user"];
+    if (G.pre) bits.push(`${fmtNum(G.pre)} request(s) of these dates still with the branch (registration, supervisor): not counted`);
+    if (R.at) {
+      bits.push(`last scan ${String(R.at).slice(11, 16)}: ${fmtNum(R.opened || 0)} status histor(ies) read, ${fmtNum(R.left || 0)} waiting to be read (times and hours come from them)`
+        + (T.stopped ? ` - stopped: ${T.stopped}` : ""));
+    }
+    if ((G.logged_days || []).length) bits.push(`days before the inquiry window come from the numbers kept those days`);
+    return h("p", { class: "hint", "data-glance-note": "" }, bits.join(" · ") + ".");
   }
   function glanceHours(d) {
     const hours = ((d.glance || {}).hours) || [];
     const active = hours.filter((x) => x.came || x.done || x.confirmed);
-    const hint = "came = reached the security team · done = executed, not executed or rejected";
+    const hint = "from the read status histories: came = first assigned · done = executed, not executed or rejected · the rest under “No time yet”";
     if (!active.length) return OPS.card("Every hour", { hint }, h("p", { class: "hint" }, "Nothing came or was done in this period yet."));
     const lo = Math.min(8, ...active.map((x) => x.hour)), hi = Math.max(16, ...active.map((x) => x.hour));
     const span = hours.slice(lo, hi + 1);
@@ -183,11 +188,11 @@
     if (!rows.length) return h("p", { class: "hint" }, "Nothing in this period.");
     const n = (k) => ({ key: k[0], label: k[1], num: true, sort: true, render: (r) => fmtNum(r[k[0]] || 0) });
     return OPS.table({
-      search: rows.length > 12, copy: true, pageSize: 15, pageSizes: [15, 50, 200], caption, sort: { key: "arrived", desc: true },
+      search: rows.length > 12, copy: true, pageSize: 15, pageSizes: [15, 50, 200], caption, sort: { key: "came", desc: true },
       columns: [
         { key, label, sort: true, render: (r) => h("span", { dir: "auto" }, String(r[key])), text: (r) => String(r[key]) },
-        ...[["arrived", "Came"], ["executed", "Executed"], ["not_executed", "Not executed"], ["rejected", "Rejected"],
-          ["closed", "Confirmed"], ["awaiting_now", "Waiting confirmation now"], ["open_now", "With them now"]].map(n),
+        ...[["came", "Came"], ["executed", "Executed"], ["not_executed", "Not executed"], ["rejected", "Rejected"],
+          ["open", "Still with them"], ["waiting", "Waiting confirmation"], ["confirmed", "Confirmed"], ["now", "With them now (Live)"]].map(n),
         { key: "exec_median_minutes", label: "Execution (median)", num: true, sort: true, render: (r) => fmtMin(r.exec_median_minutes) },
         { key: "exec_within_pct", label: "Within target", num: true, sort: true, render: (r) => (r.exec_n ? pctChip(r.exec_within_pct) : h("span", { class: "hint" }, "—")) },
       ], rows,
@@ -199,7 +204,7 @@
       h("h2", { class: "sx-glance-title" }, `The security team · ${periodText(d)}`),
       glanceKpis(d), glanceNote(d), glanceHours(d), glanceTimes(d),
       OPS.card("Each team", { hint: "the same numbers, team by team" }, glanceTable(G.by_team, "team", "Team", "Each team")),
-      OPS.card("Each employee", { hint: "مستخدم السرية · a rejection counts for the assigner who rejected it" }, glanceTable(G.by_person, "person", "Employee", "Each employee")),
+      OPS.card("Each employee", { hint: "مستخدم السرية of each request · a rejection counts for the assigner who rejected it" }, glanceTable(G.by_person, "person", "Employee", "Each employee")),
     ];
   }
   // ---- day by day: the numbers kept at every scan (performance.read_day_logs) - the team picked, or one employee ----
@@ -216,7 +221,8 @@
         : OPS.table({ search: false, copy: true, pageSize: 15, pageSizes: [15, 31, 90], caption: "Day by day", sort: { key: "day", desc: true },
           columns: [
             { key: "day", label: "Day", sort: true, render: (r) => `${r.day.slice(8, 10)}/${r.day.slice(5, 7)}/${r.day.slice(0, 4)}`, text: (r) => r.day },
-            ...[["arrived", "Came"], ["executed", "Executed"], ["not_executed", "Not executed"], ["rejected", "Rejected"], ["closed", "Confirmed"]]
+            ...[["came", "Came"], ["executed", "Executed"], ["not_executed", "Not executed"], ["rejected", "Rejected"], ["open", "Still open"],
+              ["waiting", "Waiting confirmation"], ["confirmed", "Confirmed"]]
               .map(([k, l]) => ({ key: k, label: l, num: true, sort: true, render: (r) => fmtNum(r[k] || 0) })),
             { key: "exec_average_minutes", label: "Execution (average)", num: true, sort: true, render: (r) => fmtMin(r.exec_average_minutes) },
             { key: "exec_within_pct", label: "Within target", num: true, sort: true, render: (r) => (r.exec_n ? pctChip(r.exec_within_pct) : h("span", { class: "hint" }, "—")) },

@@ -1661,17 +1661,18 @@ def test_best_performers_of_the_day_are_scoped_to_the_managers_team(admin, flex_
 def test_the_day_by_day_numbers_are_scoped_to_the_managers_team(admin, flex_mgr, ops):
     """GET /api/ops/sla-days: the kept days - every team's totals for the administrator, a manager's own team(s)."""
     ops.update_history("sla", "2026-10-10", lambda d: d.update(day_log={
-        "at": "2026-10-10T17:00:00", "totals": {"arrived": 9, "executed": 7, "not_executed": 1, "rejected": 1, "closed": 8},
+        "at": "2026-10-10T17:00:00", "totals": {"came": 9, "executed": 7, "not_executed": 1, "rejected": 1, "open": 0,
+                                                "waiting": 1, "confirmed": 7},
         "times": {"execution": {"n": 7, "average_minutes": 30.0, "within_pct": 70.0}},
-        "by_team": [{"team": "Flex Cube", "arrived": 5, "executed": 4, "not_executed": 1, "rejected": 0, "closed": 5,
-                     "exec_n": 4, "exec_average_minutes": 20.0, "exec_within": 3},
-                    {"team": "Card Management", "arrived": 4, "executed": 3, "not_executed": 0, "rejected": 1,
-                     "closed": 3, "exec_n": 3, "exec_average_minutes": 43.3, "exec_within": 1}],
+        "by_team": [{"team": "Flex Cube", "came": 5, "executed": 4, "not_executed": 1, "rejected": 0, "open": 0,
+                     "waiting": 1, "confirmed": 4, "exec_n": 4, "exec_average_minutes": 20.0, "exec_within": 3},
+                    {"team": "Card Management", "came": 4, "executed": 3, "not_executed": 0, "rejected": 1, "open": 0,
+                     "waiting": 0, "confirmed": 3, "exec_n": 3, "exec_average_minutes": 43.3, "exec_within": 1}],
         "by_person": [], "people": [{"name": "Carol C", "team": "Card Management", "total": 12},
                                     {"name": "Bob B", "team": "Flex Cube", "total": 10}]}))
     every = admin.get("/api/ops/sla-days?from=2026-10-01&to=2026-10-11").get_json()["days"]
-    assert [(d["day"], d["arrived"], d["executed"], d["best"]["name"]) for d in every] == [("2026-10-10", 9, 7, "Carol C")]
+    assert [(d["day"], d["came"], d["executed"], d["best"]["name"]) for d in every] == [("2026-10-10", 9, 7, "Carol C")]
     mine = flex_mgr.get("/api/ops/sla-days?from=2026-10-01&to=2026-10-11").get_json()["days"]
-    assert [(d["arrived"], d["executed"], d["exec_average_minutes"], d["exec_within_pct"], d["best"]["name"])
+    assert [(d["came"], d["executed"], d["exec_average_minutes"], d["exec_within_pct"], d["best"]["name"])
             for d in mine] == [(5, 4, 20.0, 75.0, "Bob B")]
-    assert flex_mgr.get("/api/ops/sla-days?team=Card Management").get_json()["days"][0]["arrived"] == 5   # not theirs
+    assert flex_mgr.get("/api/ops/sla-days?team=Card Management").get_json()["days"][0]["came"] == 5   # not theirs

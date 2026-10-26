@@ -1112,14 +1112,22 @@ def sla_analysis_get():
                 and all(sla_history._norm(text[k]) == v for k, v in grid_text.items()))
     period.update(sla_history.right_now(view["grid"], view["open"], view["index"], cfg, now, keep,
                                         live=[r for r in view["live"] if keep_live(r)]))
-    # the security team's own day at a glance: what reached it, what it did, how long it took - never a request still
-    # with the branch or of another team (the same counting as the daily summary)
+    # the security team's own numbers: the period's requests («تاريخ الطلب») as the portal's inquiry lists them, by
+    # where each stands now - the same counting as the daily summary and the day-by-day log; a day older than the
+    # inquiry window comes from the numbers kept while it was in it
     mine = sla_history.filter_records(view["records"], {**filt, "date_from": "", "date_to": ""})
-    period["glance"] = sla_history.period_numbers(mine, {k: g for k, g in view["grid"].items() if keep(g)},
-                                                  view["index"], cfg, filt["date_from"], filt["date_to"], now,
-                                                  live=[r for r in view["live"] if keep_live(r)],
-                                                  live_team=lambda r: teams.sla_request_team(r, team_resolver(),
-                                                                                             sla_system_header()))
+    window = str(state.get("grid_from") or "")[:10]
+    newer_from = max(filt["date_from"] or "", window) if window else filt["date_from"]
+    period["glance"] = sla_history.status_numbers(
+        {k: g for k, g in view["grid"].items() if keep(g)}, mine, cfg, newer_from, filt["date_to"],
+        live=[r for r in view["live"] if keep_live(r)],
+        live_team=lambda r: teams.sla_request_team(r, team_resolver(), sla_system_header()))
+    if window and filt["date_from"] and filt["date_from"] < window and not person and not grid_text.get("system") \
+            and not grid_text.get("request_type"):
+        older_to = (date.fromisoformat(window) - timedelta(days=1)).isoformat()
+        older_to = min(older_to, filt["date_to"]) if filt["date_to"] else older_to
+        team_scope = (filt["team"],) if filt.get("team") else scope
+        performance.add_logged_status(period["glance"], ops(), filt["date_from"], older_to, team_scope)
     # the portal's own «الاستفسار عن الطلبات» rows of the period's request dates, next to what the history holds
     period["portal"] = {**sla_history.portal_comparison(view["grid"], view["index"], filt["date_from"], filt["date_to"],
                                                         cfg),

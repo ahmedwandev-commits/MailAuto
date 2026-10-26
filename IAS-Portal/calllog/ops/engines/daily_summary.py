@@ -129,7 +129,7 @@ def _resolver(store, hub, users):
 
 
 def tickets_block(store, hub, users, day, now, team=None):
-    """The security requests of ``day``, counted like Insights › Analysis › SLA (``sla_history.period_numbers`` over
+    """The security requests of ``day``, counted like Insights › Analysis › SLA (``sla_history.status_numbers`` over
     ``performance.sla_scope``): every team's, or (``team``) only that team's - a request's team is the team of the person
     who executed or holds it (their account), else its application's; Third Party always left out. The Live queue
     (Re-Assign page) is counted from its own scan."""
@@ -147,15 +147,14 @@ def tickets_block(store, hub, users, day, now, team=None):
                    stale=_stale(hub, "sla", snap.get("generated_at"), now))
     if sc["available"]:
         resolver = sc["resolver"]
-        nums = sla_history.period_numbers(sc["records"], sc["grid"], sc["index"], sc["cfg"], day, day,
-                                          now.strftime("%Y-%m-%dT%H:%M:%S"), live=sc["live"],
+        nums = sla_history.status_numbers(sc["grid"], sc["records"], sc["cfg"], day, day, live=sc["live"],
                                           live_team=lambda r: resolver.sla_team(teams.sla_system(r), r.get("security_user")))
-        out.update(available=True, history=True, received_today=nums["arrived"], closed_today=nums["closed"],
-                   closed_executed=nums["closed_executed"], closed_not=nums["closed_not"],
-                   executed=nums["executed"], not_executed=nums["not_executed"], rejected=nums["rejected"],
-                   from_grid=nums["from_grid"], sla_pct=nums["sla_pct"] if nums["sla_pct"] is not None else 0.0,
-                   measured=nums["measured"], median_minutes=nums["median_minutes"], sla_minutes=sc["cfg"]["sla_minutes"],
-                   now=nums["now"], times=nums["times"], by_team=nums["by_team"], by_person=nums["by_person"],
+        whole = nums["times"]["whole"]
+        out.update(available=True, history=True, **{k: nums[k] for k in (
+                       "came", "executed", "not_executed", "rejected", "waiting", "confirmed", "confirmed_executed",
+                       "confirmed_not", "open", "now", "pre", "times", "by_team", "by_person")},
+                   sla_pct=whole["within_pct"] if whole["within_pct"] is not None else 0.0, measured=whole["n"],
+                   median_minutes=whole["median_minutes"], sla_minutes=sc["cfg"]["sla_minutes"],
                    history_as_of=sc["last_history"])
     if not out.get("available"):
         out["reason"] = "no ticketing scan yet"
@@ -249,7 +248,7 @@ def _n(block, key):
 def build_subject(cfg, now, slot, data):
     parts = []
     for key, label, field in (("calls", "Calls", "total"), ("email", "Mails", "business_emails"),
-                              ("tickets", "Tickets", "closed_today"), ("crs", "CRs pending", "pending")):
+                              ("tickets", "Tickets", "came"), ("crs", "CRs pending", "pending")):
         block = data.get(key)
         if block is not None:
             parts.append(f"{label} {_n(block, field) if block.get('available') else '-'}")
@@ -353,42 +352,38 @@ def build_html(data, cfg, slot, now, next_slot=None):
     if tix is not None:
         if tix.get("available"):
             live = tix.get("live") or {}
-            nowb = tix.get("now") or {}
             if tix.get("history"):
-                value = tix.get("closed_today", 0)
+                value = tix.get("came", 0)
                 within = (f' &middot; {tix["sla_pct"]}% within {_hours(tix["sla_minutes"])} h'
                           if tix.get("measured") else "")
-                sub = f'confirmed today{within} &middot; {nowb.get("open", live.get("open", 0))} open now'
-
+                sub = (f'requests of today &middot; {tix.get("executed", 0)} executed{within} &middot; '
+                       f'{live.get("open", 0)} with us now')
             else:
                 value, sub = live.get("open", 0), f'open now &middot; {live.get("breached", 0)} past the SLA'
             heroes.append(_hero("Tickets", value, _sub(sub), er.AMBER))
             rows = []
             if tix.get("history"):
-                rows += [("Reached the security team today", tix.get("received_today", 0)),
-                         ("Executed today (تم التنفيذ)", tix.get("executed", 0)),
-                         ("Not executed today (لم يتم التنفيذ / التعزيز على عدم التنفيذ)", tix.get("not_executed", 0)),
-                         ("Confirmed by the reviewer today", tix.get("closed_today", 0)),
-                         ("Rejected by the assigner today (رفض)", tix.get("rejected", 0)),
+                rows += [("Requests of today with the security team («تاريخ الطلب»)", tix.get("came", 0)),
+                         ("Executed (تم التنفيذ / التعزيز على التنفيذ)", tix.get("executed", 0)),
+                         ("Not executed (لم يتم التنفيذ / التعزيز على عدم التنفيذ)", tix.get("not_executed", 0)),
+                         ("Rejected by the assigner (رفض)", tix.get("rejected", 0)),
+                         ("Still with a security user", tix.get("open", 0)),
+                         ("Waiting for the reviewer's confirmation", tix.get("waiting", 0)),
+                         ("Confirmed (تم التعزيز)", tix.get("confirmed", 0)),
                          ("Within the SLA", f'{tix.get("sla_pct", 0)}%' if tix.get("measured") else "—"),
                          ("Median assignment → confirmation", _minutes_text(tix.get("median_minutes"))),
-                         ("Open with a security user now", nowb.get("open", 0)),
-                         ("Awaiting the reviewer now", nowb.get("awaiting", 0)), ("On hold now", nowb.get("on_hold", 0)),
-                         ("Still with the branch now", nowb.get("pre", 0))]
+                         ("Requests of today still with the branch (not counted)", tix.get("pre", 0))]
             if live:
                 rows += [("Live queue (Re-Assign)", live.get("open", 0)), ("Reminder", live.get("reminder", 0)),
                          ("Past the SLA", live.get("breached", 0))]
             inner = _facts(rows)
             if tix.get("history"):
                 inner += er._bar(tix.get("sla_pct", 0), 100, er.GREEN if tix.get("sla_pct", 0) >= 80 else er.AMBER)
-                if tix.get("from_grid"):
-                    inner += _sub(f'{tix["from_grid"]} of today\'s counted from the inquiry\'s status: their details are '
-                                  'read at the next scans (their times follow)')
+                inner += _sub("Counted as the portal's «الاستفسار عن الطلبات» lists the requests of today: "
+                              "came = executed + not executed + rejected + still with a security user.")
             cards.append(_card("Tickets (security requests)", inner, er.AMBER))
             if live.get("breached"):
                 attention.append(f'{live["breached"]} ticket(s) open past the SLA')
-            if nowb.get("breached"):
-                attention.append(f'{nowb["breached"]} request(s) with a security user longer than the SLA target')
         else:
             heroes.append(_hero("Tickets", "—", _sub(esc(tix.get("reason", ""))), er.AMBER))
     if crs is not None:
@@ -498,7 +493,7 @@ def _parts(cfg):
 def _counts(data):
     return ", ".join(f"{k} {v}" for k, v in (
         ("calls", _n(data.get("calls"), "total")), ("mails", _n(data.get("email"), "business_emails")),
-        ("tickets", _n(data.get("tickets"), "closed_today") or _n((data.get("tickets") or {}).get("live"), "open")),
+        ("tickets", _n(data.get("tickets"), "came") or _n((data.get("tickets") or {}).get("live"), "open")),
         ("CRs pending", _n(data.get("crs"), "pending"))))
 
 

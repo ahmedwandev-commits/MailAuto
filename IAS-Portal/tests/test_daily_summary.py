@@ -143,9 +143,9 @@ def test_team_summaries_alone_are_enough_to_switch_it_on_and_a_team_must_exist()
 
 def test_tickets_count_what_reached_the_security_team_not_every_row_registered_today(tmp_path):
     """The owner's summary said «Arrived today 3034, closed 0, executed 0, not executed 0» and counted registrations as
-    open with a security user. Now: rows still with the branch are never arrived nor open; a request confirmed today
-    whose details are not read yet still counts (from the inquiry's status); «لم يتم التنفيذ» and «تم التعزيز على عدم
-    التنفيذ» are both not executed."""
+    open with a security user. Now today's requests are counted as the portal's inquiry lists them, by their status:
+    rows still with the branch never count; «لم يتم التنفيذ» and «تم التعزيز على عدم التنفيذ» are both not executed;
+    came = executed + not executed + rejected + still with a security user."""
     from calllog.ops import sla_history as sh
     ops, data = world(tmp_path)
     head = list(sh.GRID_COLUMNS.values())
@@ -163,11 +163,11 @@ def test_tickets_count_what_reached_the_security_team_not_every_row_registered_t
     ops.update_sla_history_state(lambda d: d.update(grid=grid, index={}, open={}, last_history=f"{DAY}T13:00:00"))
     ctx = ctx_for(ops, data, {"to": ["boss@example.test"]}, Mailer())
     tix = ds.collect(ctx, NOW)["tickets"]
-    assert tix["received_today"] == 4                     # the four with the security team - not the 40 at the branch
-    assert tix["now"]["pre"] == 40 and tix["now"]["awaiting"] == 1
-    assert tix["now"]["open"] == 4 and tix["now"]["live_only"] == 3     # the grid's one + the 3 Live tickets it lacks
-    assert tix["closed_today"] == 2 and tix["closed_executed"] == 1 and tix["closed_not"] == 1
-    assert tix["executed"] == 1 and tix["not_executed"] == 2 and tix["from_grid"] == 3
+    assert tix["came"] == 4                                # the four with the security team - not the 40 at the branch
+    assert tix["came"] == tix["executed"] + tix["not_executed"] + tix["rejected"] + tix["open"]
+    assert (tix["executed"], tix["not_executed"], tix["rejected"], tix["open"]) == (1, 2, 0, 1)
+    assert (tix["waiting"], tix["confirmed"], tix["pre"]) == (1, 2, 40)
+    assert tix["now"] == 3                                 # the Live tickets
     html = ds.build_html(ds.collect(ctx, NOW), ctx.settings, "13:00", NOW)
-    assert "Reached the security team today" in html and "Still with the branch now" in html
-    assert "Arrived today" not in html and "counted from the inquiry" in html
+    assert "Requests of today with the security team" in html and "still with the branch (not counted)" in html
+    assert "Arrived today" not in html and "«الاستفسار عن الطلبات»" in html

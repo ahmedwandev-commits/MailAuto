@@ -550,14 +550,22 @@ def detail_priority(status, cfg, holder=None):
 SECURITY_STAGES = ("open", "awaiting", "closed", "rejected")
 
 
+SINCE_VERSION = 2                    # grid entries dated by this rule ("sv"); older ones are never trusted
+SINCE_HOUR_GAP = 60                  # minutes: a change seen between two scans this close gets its hour
+
+
 def grid_state(grid, previous, now, cfg, watched_from=None):
     """The latest inquiry rows as {key: {status, stage, system, holder, checker, employee, form, request_date, since,
-    since_known, entered, known}}: what is open / awaiting the reviewer RIGHT NOW (complete even before a row's details
-    are read). ``since`` = when the row was first seen in its current status (kept across scans); ``since_known`` =
-    that moment is when it GOT that status: the scans watched the status change (the row was in the previous read with
-    another status), or the request was registered that day - never because a row is seen for the first time (a read
-    reaching further back sees thousands of old requests at once). ``entered`` = when the scans watched it reach the
-    security team ("" = not known). ``known`` = the settings name its wording. (``watched_from`` is no longer used.)"""
+    since_known, since_gap, entered, entered_gap, seen, sv, known}}: what is open / awaiting the reviewer RIGHT NOW
+    (complete even before a row's details are read).
+
+    A row's status is DATED only when the day is certain: the request was registered that day, or the scans watched
+    the status change between two reads of the SAME day (``seen`` = when a row was last read). Then ``since_known`` is
+    true and ``since`` is that read; ``since_gap`` = minutes since the read before (its hour is only taken when the
+    two reads are close, ``SINCE_HOUR_GAP``). Never because a row is seen for the first time, never across a gap of
+    days (a scan after hours or days without one would date every change "today"), and never from an entry an older
+    version wrote (no ``sv``). ``entered`` = when the scans watched it reach the security team, same rules.
+    ``known`` = the settings name its wording. (``watched_from`` is no longer used.)"""
     out = {}
     today = _day(now)
     for g in grid or []:
@@ -565,23 +573,29 @@ def grid_state(grid, previous, now, cfg, watched_from=None):
         day = parse_time(g.get("date"))
         born_today = bool(day) and day.strftime("%Y-%m-%d") == today
         stage = row_stage(g, cfg)
-        if prev:
-            same = _norm(prev.get("status")) == _norm(g.get("status"))
-            since = prev.get("since") if same and prev.get("since") else now
-            since_known = bool(prev.get("since_known")) if same else True
-            entered = prev.get("entered") or ""
-            if not entered and stage in SECURITY_STAGES and (prev.get("stage") == "pre" or born_today):
-                entered = now                             # watched it reach the security team
+        trusted = bool(prev) and prev.get("sv") == SINCE_VERSION
+        same_day = trusted and _day(prev.get("seen")) == today
+        gap = _minutes(prev.get("seen"), now) if same_day else None
+        if trusted and _norm(prev.get("status")) == _norm(g.get("status")):
+            since, since_known, since_gap = prev.get("since") or now, bool(prev.get("since_known")), prev.get("since_gap")
+        elif same_day:                                    # watched it change since this morning's read
+            since, since_known, since_gap = now, True, gap
         else:
-            since, since_known = now, born_today
-            entered = now if born_today and stage in SECURITY_STAGES else ""
+            since, since_known, since_gap = now, born_today, None
+        entered, entered_gap = (prev.get("entered") or "", prev.get("entered_gap")) if trusted else ("", None)
+        if not entered and stage in SECURITY_STAGES:
+            if same_day and prev.get("stage") == "pre":
+                entered, entered_gap = now, gap           # watched it reach the security team
+            elif born_today:
+                entered, entered_gap = now, None          # today's request: the day is certain, the hour is not
         out[g["key"]] = {"status": _clean(g.get("status")), "stage": stage,
                          "system": _clean(g.get("system")), "holder": _clean(g.get("executor")),
                          "checker": _clean(g.get("checker")), "employee": _clean(g.get("employee")),
                          "request_type": _clean(g.get("request_type")), "user_no": _clean(g.get("user_no")),
                          "assigner": _clean(g.get("assigner")), "form": _clean(g.get("form")),
                          "request_date": day.strftime(_FMT) if day else "",
-                         "since": since, "since_known": since_known, "entered": entered,
+                         "since": since, "since_known": since_known, "since_gap": since_gap,
+                         "entered": entered, "entered_gap": entered_gap, "seen": now, "sv": SINCE_VERSION,
                          "known": known_status(g.get("status"), cfg)}
     return out
 
@@ -815,7 +829,10 @@ def grid_stubs(grid, index, records, cfg=None):
         out[f"grid:{key}"] = {
             "id": f"grid:{key}", "source": SOURCE, "unread": True, "stage": stage, "outcome": outcome,
             "final_outcome": ("not_executed" if step == "confirmed_not" else "executed") if stage == "closed" else "",
-            "request_date": _day(g.get("request_date")), "entered_at": g.get("entered") or "",
+            "request_date": _day(g.get("request_date")),
+            "entered_at": g.get("entered") if g.get("sv") == SINCE_VERSION and g.get("entered_gap") is not None
+            and g["entered_gap"] <= SINCE_HOUR_GAP else "",
+            "entered_day": _day(g.get("entered")) if g.get("sv") == SINCE_VERSION else "",
             "system": g.get("system") or "", "team": g.get("team") or "",
             "teams": [g.get("team")] if g.get("team") else [], "holder": g.get("holder") or "",
             "checker": g.get("checker") or "", "requester": g.get("employee") or "",
@@ -848,28 +865,6 @@ def with_current_stage(records, grid, index, cfg):
     return out
 
 
-def grid_event_day(g):
-    """The day this grid row got its CURRENT status: when the scans watched the status change (``since``), else its
-    request date (a request registered that day did everything that day). ``grid_event_at``: the moment, "" when only
-    the day is known."""
-    if g.get("since_known") and _clean(g.get("since")):
-        return _day(g.get("since"))
-    return _day(g.get("request_date"))
-
-
-def grid_event_at(g):
-    return _clean(g.get("since")) if g.get("since_known") and _clean(g.get("since")) else ""
-
-
-def grid_day(g, day):
-    """Did this grid row get its CURRENT status on ``day``? (``grid_event_day``)"""
-    return grid_event_day(g) == day
-
-
-EXECUTED_STEPS = ("executed", "confirmed_executed")
-NOT_EXECUTED_STEPS = ("not_executed", "confirmed_not")
-
-
 def _times(values, target):
     vals = [v for v in values if v is not None]
     return {"n": len(vals), "average_minutes": round(sum(vals) / len(vals), 1) if vals else None,
@@ -877,18 +872,19 @@ def _times(values, target):
             "within_pct": _pct(sum(1 for v in vals if v <= target), len(vals)) if vals and target else None}
 
 
-_TALLY_KEYS = ("arrived", "executed", "not_executed", "rejected", "closed", "closed_executed", "closed_not",
-               "open_now", "awaiting_now")
+STATUS_KEYS = ("came", "open", "awaiting_executed", "awaiting_not", "confirmed_executed", "confirmed_not", "rejected",
+               "now")
 
 
-def _tally():
-    return {**{k: 0 for k in _TALLY_KEYS}, "_exec": [], "_confirm": [], "_whole": []}
+def _status_tally():
+    return {**{k: 0 for k in STATUS_KEYS}, "_exec": []}
 
 
-def _tally_out(t, targets):
-    out = {k: t[k] for k in _TALLY_KEYS}
-    ex = _times(t["_exec"], targets.get("work"))
-    target = targets.get("work")
+def _status_out(t, target):
+    out = {k: t[k] for k in STATUS_KEYS}
+    out.update(executed=t["awaiting_executed"] + t["confirmed_executed"], not_executed=t["awaiting_not"] + t["confirmed_not"],
+               waiting=t["awaiting_executed"] + t["awaiting_not"], confirmed=t["confirmed_executed"] + t["confirmed_not"])
+    ex = _times(t["_exec"], target)
     out.update(exec_n=ex["n"], exec_median_minutes=ex["median_minutes"], exec_average_minutes=ex["average_minutes"],
                exec_within_pct=ex["within_pct"],
                exec_within=sum(1 for v in t["_exec"] if v is not None and target and v <= target))
@@ -897,174 +893,108 @@ def _tally_out(t, targets):
     return out
 
 
-def period_numbers(records, grid, index, cfg, date_from, date_to, now, live=None, live_team=None):
-    """The security team's own work over ``date_from``..``date_to`` (days, "" = open-ended) - what the owner reads
-    first, never a request still with the branch or of another team (``records`` / ``grid`` come scoped):
+def status_numbers(grid, records, cfg, date_from, date_to, live=None, live_team=None):
+    """The security requests of «تاريخ الطلب» ``date_from``..``date_to`` (days, "" = open-ended), exactly as the
+    portal's own «الاستفسار عن الطلبات» lists them for those dates - every number can be checked there - by where
+    each stands NOW; never a request still with the branch (registration, supervisor: ``pre``), of another team or of
+    an application left out (``grid`` / ``records`` / ``live`` come scoped):
 
-    * ``arrived`` - reached the security team: first assigned in the period (a request with a period: its period
-      starts then); never assigned and rejected by the assigner: the rejection; not read yet: the day the scans saw it
-      reach the team, else its request date.
-    * ``executed`` / ``not_executed`` - «تم التنفيذ» (later «تم التعزيز على التنفيذ») / «لم يتم التنفيذ» (later
-      «تم التعزيز على عدم التنفيذ») done in the period; ``rejected`` - «رفض» by the assigner (موظف الاسناد).
-    * ``closed`` (``closed_executed`` / ``closed_not``) - confirmed by the reviewer in the period.
-    * ``from_grid`` - how many of those are counted from the inquiry's status alone (history not read yet).
-    * ``times`` - ``execution`` (assignment → executed / not executed / rejected), ``confirmation`` (execution →
-      confirmation) and ``whole`` (first assignment → confirmation) of the read requests, against their targets.
-    * ``hours`` - per hour of the day: ``came`` (reached the team), ``done`` (executed, not executed or rejected),
-      ``confirmed``; ``untimed`` - those counted whose hour is not known yet (their history is not read).
-    * ``by_team`` / ``by_person`` - the same numbers per team and per security user (who it was assigned to /
-      executed it; a rejection: the assigner who rejected it), with ``open_now`` / ``awaiting_now`` and their
-      execution time.
-    * ``now`` - ``right_now`` (with the Live tickets) plus ``pre``: still with the branch (not counted above).
-    ``live_team(ticket)`` gives a Live ticket its team (else it only counts in the totals)."""
+    * ``came`` = ``executed`` + ``not_executed`` + ``rejected`` + ``open``;
+    * ``executed`` = «تم التنفيذ» (``awaiting_executed``) + «تم التعزيز على التنفيذ» (``confirmed_executed``);
+      ``not_executed`` = «لم يتم التنفيذ» + «تم التعزيز على عدم التنفيذ»; ``waiting`` = waiting for the reviewer's
+      confirmation; ``confirmed``; ``rejected`` = «رفض» by the assigner (موظف الاسناد); ``open`` = still with a
+      security user;
+    * ``now`` = the Live tickets (the Re-Assign page) - with a security user right now, whatever their date;
+    * ``times`` - execution (assignment → executed / not executed / rejected), confirmation (execution → «تم
+      التعزيز»), whole request (first assignment → «تم التعزيز») of the period's requests whose status history is read;
+    * ``hours`` - when they came (first assignment) and were done (executed / rejected) and confirmed, hour by hour,
+      from the read histories; ``untimed`` = the ones whose hour is not read yet;
+    * ``by_team`` / ``by_person`` - the same numbers per team and per security user (a rejection counts for the
+      assigner who rejected it), with ``now`` from the Live tickets and their execution time;
+    * ``pre`` - the period's requests still with the branch (not counted).
+    ``live_team(ticket)`` gives a Live ticket its team."""
     dfrom, dto = _day(date_from), _day(date_to)
     inside = lambda d: bool(d) and (not dfrom or d >= dfrom) and (not dto or d <= dto)   # noqa: E731
-    recs = with_current_stage(records, grid, index, cfg)
-    stubs = grid_stubs(grid, index, recs, cfg)
     targets = stage_targets(cfg)
-    out = {"arrived": 0, "executed": 0, "not_executed": 0, "closed": 0, "closed_executed": 0, "closed_not": 0,
-           "rejected": 0, "from_grid": 0}
-    hours = [{"hour": h, "came": 0, "done": 0, "confirmed": 0} for h in range(24)]
-    untimed = {"came": 0, "done": 0, "confirmed": 0}       # counted, but the hour is not known yet (history not read)
-    exec_m, confirm_m, whole_m = [], [], []
-    teams_, people, names = {}, {}, {}
+    total, teams_, people, names = _status_tally(), {}, {}, {}
+    pre = 0
 
-    def bump(team, person, key, n=1, minutes=None, clock=None):
-        """``key`` += n for the team and the person (a time goes to their ``clock`` list)."""
-        for book, who in ((teams_, _clean(team) or "—"), (people, _clean(person))):
+    def bump(team, person, key, minutes=None):
+        for book, who in ((None, ""), (teams_, _clean(team) or "—"), (people, _clean(person))):
             if book is people and not who:
                 continue
-            k = _norm(who) if book is people else who
+            t = total if book is None else book.setdefault(_norm(who) if book is people else who, _status_tally())
             if book is people:
-                names.setdefault(k, who)
-            t = book.setdefault(k, _tally())
-            if book is people:
+                names.setdefault(_norm(who), who)
                 t.setdefault("_teams", {})
                 t["_teams"][_clean(team) or "—"] = t["_teams"].get(_clean(team) or "—", 0) + 1
             if key:
-                t[key] += n
-            if clock and minutes is not None:
-                t[clock].append(minutes)
+                t[key] += 1
+            if minutes is not None:
+                t["_exec"].append(minutes)
+
+    for g in (grid or {}).values():
+        if not inside(_day(g.get("request_date"))):
+            continue
+        stage = row_stage(g, cfg)
+        if stage == "pre":
+            pre += 1
+            continue
+        step = step_of(g.get("status"), cfg)
+        if stage in ("open", "rejected"):
+            key = stage
+        elif stage == "awaiting":
+            key = "awaiting_not" if step == "not_executed" else "awaiting_executed"
+        else:
+            key = "confirmed_not" if step == "confirmed_not" else "confirmed_executed"
+        who = g.get("assigner") if key == "rejected" else g.get("holder")
+        bump(g.get("team"), who, "came")
+        bump(g.get("team"), who, key)
+    # times and hours: the read histories of the period's requests
+    hours = [{"hour": h, "came": 0, "done": 0, "confirmed": 0} for h in range(24)]
+    exec_m, confirm_m, whole_m = [], [], []
 
     def hour(stamp, key):
         t = _clean(stamp)
         if len(t) >= 13 and t[11:13].isdigit():
             hours[int(t[11:13]) % 24][key] += 1
-        else:
-            untimed[key] += 1
 
-    def came(stamp, team, person, day=None):
-        if inside(day or _day(stamp)):
-            out["arrived"] += 1
-            hour(stamp, "came")
-            bump(team, person, "arrived")
-
-    def grid_counts(g, stage, team):
-        step = step_of(g.get("status"), cfg)
-        if not inside(grid_event_day(g)):
-            return
-        at = grid_event_at(g)
-        counted = False
-        if step in EXECUTED_STEPS + NOT_EXECUTED_STEPS or stage == "rejected":
-            key = "executed" if step in EXECUTED_STEPS else "not_executed" if step in NOT_EXECUTED_STEPS else "rejected"
-            out[key] += 1
-            bump(team, g.get("assigner") if key == "rejected" else g.get("holder"), key)
-            if step not in ("confirmed_executed", "confirmed_not"):
-                hour(at, "done")
-            counted = True
-        if stage == "closed":
-            key = "closed_not" if step == "confirmed_not" else "closed_executed"
-            out["closed"] += 1
-            out[key] += 1
-            bump(team, g.get("holder"), "closed")
-            bump(team, g.get("holder"), key)
-            hour(at, "confirmed")
-            counted = True
-        out["from_grid"] += counted
-
-    for r in recs.values():
-        team, who = r.get("team"), r.get("executor") or r.get("holder")
+    for r in (records or {}).values():
+        if r.get("unread") or not inside(_day(r.get("request_date"))):
+            continue
         first = r.get("first_assigned_at") or r.get("assigned_at")
-        came(first or r.get("rejected_at"), team, who if first else r.get("rejected_by"))
-        if r.get("moved") and not r.get("executed_at"):
-            grid_counts(r.get("moved_row") or {}, stage_of(r), team)
-            continue
-        if inside(_day(r.get("executed_at"))):
-            key = "not_executed" if r.get("exec_outcome") == "not_executed" else "executed"
+        hour(first or r.get("rejected_at"), "came")
+        if r.get("executed_at"):
             m = _minutes(r.get("assigned_at"), r.get("executed_at"))
-            out[key] += 1
-            hour(r.get("executed_at"), "done")
             exec_m.append(m)
-            bump(team, who, key, minutes=m, clock="_exec")
-        elif not r.get("executed_at") and inside(_day(r.get("confirmed_at"))):
-            key = "not_executed" if r.get("final_outcome") == "not_executed" else "executed"
-            out[key] += 1
-            bump(team, who, key)
-        if r.get("moved"):
-            g = r.get("moved_row") or {}
-            if stage_of(r) in ("closed", "rejected") and inside(grid_event_day(g)):
-                out["from_grid"] += 1
-                if stage_of(r) == "closed":
-                    key = "closed_not" if r.get("final_outcome") == "not_executed" else "closed_executed"
-                    out["closed"] += 1
-                    out[key] += 1
-                    bump(team, who, "closed")
-                    bump(team, who, key)
-                    hour(grid_event_at(g), "confirmed")
-                else:
-                    out["rejected"] += 1
-                    bump(team, g.get("assigner") or r.get("rejected_by"), "rejected")
-            continue
-        if stage_of(r) == "closed" and inside(_day(r.get("confirmed_at"))):
-            key = "closed_not" if r.get("final_outcome") == "not_executed" else "closed_executed"
-            out["closed"] += 1
-            out[key] += 1
-            bump(team, who, "closed")
-            bump(team, who, key)
+            hour(r.get("executed_at"), "done")
+            bump(r.get("team"), r.get("executor") or r.get("holder"), None, minutes=m)
+        elif stage_of(r) == "rejected" and r.get("rejected_at"):
+            m = _minutes(r.get("assigned_at") or r.get("pool_at") or r.get("branch_confirmed_at"), r.get("rejected_at"))
+            exec_m.append(m)
+            hour(r.get("rejected_at"), "done")
+            bump(r.get("team"), r.get("rejected_by"), None, minutes=m)
+        if r.get("confirmed_at"):
             hour(r.get("confirmed_at"), "confirmed")
             if r.get("executed_at"):
                 confirm_m.append(_minutes(r.get("executed_at"), r.get("confirmed_at")))
             whole_m.append(_minutes(first, r.get("confirmed_at")))
-        elif stage_of(r) == "rejected" and inside(_day(r.get("rejected_at"))):
-            start = r.get("assigned_at") or r.get("pool_at") or r.get("branch_confirmed_at")
-            m = _minutes(start, r.get("rejected_at"))
-            out["rejected"] += 1
-            hour(r.get("rejected_at"), "done")
-            exec_m.append(m)
-            bump(team, r.get("rejected_by"), "rejected", minutes=m, clock="_exec")
-    for key, stub in stubs.items():
-        g = (grid or {}).get(stub.get("grid_key") or key[5:]) or {}
-        came(stub.get("entered_at"), g.get("team"), g.get("holder"), assignment_day(stub))
-        grid_counts(g, stub["stage"], g.get("team"))
-    # where the requests stand NOW, per team and person (the grid; Live tickets it does not list by ``live_team``)
-    open_keys = {}
-    for g in (grid or {}).values():
-        stage = row_stage(g, cfg)
-        if stage in ("open", "awaiting"):
-            bump(g.get("team"), g.get("holder"), "open_now" if stage == "open" else "awaiting_now")
-            if stage == "open":
-                open_keys.setdefault(_live_key_of_grid(g), []).append({"holder": g.get("holder") or ""})
-    for req in _live_unlisted(live, open_keys):
-        bump((live_team or (lambda r: ""))(req), req.get("security_user"), "open_now")
-    out["times"] = {"execution": _times(exec_m, targets.get("work")),
-                    "confirmation": _times(confirm_m, targets.get("review")),
-                    "whole": _times(whole_m, targets.get("sla"))}
-    out["sla_pct"], out["median_minutes"] = out["times"]["whole"]["within_pct"], out["times"]["whole"]["median_minutes"]
-    out["measured"] = out["times"]["whole"]["n"]
-    out["hours"], out["untimed"] = hours, untimed
-    rank = lambda row: (-row["arrived"], -row["executed"] - row["not_executed"], -row["open_now"])   # noqa: E731
-    out["by_team"] = sorted(({"team": k, **_tally_out(t, targets)} for k, t in teams_.items()), key=rank)
-    out["by_person"] = sorted(({"person": names[k], **_tally_out(t, targets)} for k, t in people.items()), key=rank)
-    nowb = right_now(grid, {k: r for k, r in records.items() if stage_of(r) in ("open", "awaiting")}, index, cfg,
-                     now, live=live)["now"]
-    nowb["pre"] = sum(1 for g in (grid or {}).values() if row_stage(g, cfg) == "pre")
-    out["now"] = nowb
+    for req in live or []:                               # with a security user right now (the Live tab)
+        bump((live_team or (lambda x: ""))(req), req.get("security_user"), "now")
+    out = _status_out(total, targets.get("work"))
+    timed = {k: sum(h[k] for h in hours) for k in ("came", "done", "confirmed")}
+    out.update(pre=pre, hours=hours,
+               untimed={"came": max(0, out["came"] - timed["came"]),
+                        "done": max(0, out["executed"] + out["not_executed"] + out["rejected"] - timed["done"]),
+                        "confirmed": max(0, out["confirmed"] - timed["confirmed"])},
+               times={"execution": _times(exec_m, targets.get("work")),
+                      "confirmation": _times(confirm_m, targets.get("review")),
+                      "whole": _times(whole_m, targets.get("sla"))})
+    rank = lambda row: (-row["came"], -row["executed"] - row["not_executed"], -row["now"])   # noqa: E731
+    out["by_team"] = sorted(({"team": k, **_status_out(t, targets.get("work"))} for k, t in teams_.items()), key=rank)
+    out["by_person"] = sorted(({"person": names[k], **_status_out(t, targets.get("work"))} for k, t in people.items()),
+                              key=rank)
     return out
-
-
-def day_numbers(records, grid, index, cfg, day, now, live=None):
-    """``period_numbers`` of one day (the daily summary's tickets)."""
-    return period_numbers(records, grid, index, cfg, day, day, now, live)
 
 
 # ------------------------------------------------------------------- live tickets: when they were first assigned
@@ -1176,8 +1106,8 @@ def assignment_day(r):
     was FIRST assigned to a security user (a request with a period: the day its period starts, ``apply_period``), else
     its (last) assignment; a request whose history is not read yet: the day the scans saw it reach the security team
     (``entered_at``), else its request date / registration."""
-    return _day(r.get("first_assigned_at") or r.get("assigned_at") or r.get("entered_at") or r.get("request_date")
-                or r.get("registered_at") or r.get("first_seen"))
+    return _day(r.get("first_assigned_at") or r.get("assigned_at") or r.get("entered_at") or r.get("entered_day")
+                or r.get("request_date") or r.get("registered_at") or r.get("first_seen"))
 
 
 def filter_records(records, filt):

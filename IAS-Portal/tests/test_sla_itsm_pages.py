@@ -399,7 +399,8 @@ def test_sla_links_from_home_open_the_linked_requests(tab, hub):
 
 # ------------------------------------------------------------------ the SLA Analysis: Insights › Analysis › SLA
 def history_rec(rid, assigned, confirmed="", system="Flexcube"):
-    return {"id": rid, "source": "history", "stage": "closed" if confirmed else "open", "first_assigned_at": assigned,
+    return {"id": rid, "source": "history", "stage": "closed" if confirmed else "open", "request_date": assigned[:10],
+            "first_assigned_at": assigned,
             "assigned_at": assigned, "executed_at": confirmed, "confirmed_at": confirmed, "system": system,
             "executor": USERS[0], "holder": USERS[0], "final_outcome": "executed" if confirmed else "",
             "exec_outcome": "executed" if confirmed else "", "outcome": "completed" if confirmed else "in_progress"}
@@ -419,27 +420,35 @@ def grid_entry(status, stage, system="Flexcube"):
             "request_type": "اضافة صلاحية", "user_no": "9001", "request_date": "2026-10-11T00:00:00", "since": iso(NOW)}
 
 
-def todays_history(ops, at=NOW):
+TODAYS_GRID = {"g1": ("تم التعزيز على التنفيذ", "closed"), "g2": ("تم التعزيز على التنفيذ", "closed"),
+               "g3": ("اسناد لمستخدم السرية", "open"), "g4": ("تسجيل", "pre"), "g5": ("رفض", "rejected")}
+
+
+def todays_history(ops, at=NOW, extra_grid=None, extra_closed=()):
     closed = [history_rec("c1", "2026-10-11T07:00:00", "2026-10-11T08:00:00"),
-              history_rec("c2", "2026-10-11T06:00:00", "2026-10-11T08:30:00")]
-    grid = {"g1": grid_entry("تم التعزيز على التنفيذ", "closed"), "g2": grid_entry("تم التعزيز على التنفيذ", "closed"),
-            "g3": grid_entry("اسناد لمستخدم السرية", "open"), "g4": grid_entry("تسجيل", "pre"),
-            "g5": grid_entry("رفض", "rejected")}
-    write_history(ops, closed, [history_rec("o1", "2026-10-11T08:20:00")], grid,
-                  {"g1": {"id": "c1"}, "g2": {"id": "c2"}, "g3": {"id": "o1"}}, at)
+              history_rec("c2", "2026-10-11T06:00:00", "2026-10-11T08:30:00"), *extra_closed]
+    grid = {k: grid_entry(*v) for k, v in TODAYS_GRID.items()}
+    grid.update(extra_grid or {})
+    index = {"g1": {"id": "c1"}, "g2": {"id": "c2"}, "g3": {"id": "o1"}}
+    index.update({k: {"id": r["id"]} for k, r in zip(extra_grid or {}, extra_closed)})
+    write_history(ops, closed, [history_rec("o1", "2026-10-11T08:20:00")], grid, index, at)
 
 
 def test_the_sla_analysis_opens_on_the_security_teams_own_day(ops, tab, hub):
-    """What the owner reads: what came to the security team today, what it executed, did not execute, rejected,
-    confirmed, what waits; every hour came vs done; how long execution and confirmation take; each team and each
-    employee. A registration still at the branch is not counted; there is no "detailed analysis" any more."""
+    """What the owner reads: the requests of today («تاريخ الطلب») exactly as the portal's inquiry lists them, by their
+    status now - came = executed + not executed + rejected + still with a security user; waiting for confirmation;
+    confirmed; with us now = the Live tickets. Hours and times only from the read histories. A registration still at
+    the branch is not counted; there is no "detailed analysis" any more."""
     todays_history(ops)
     t = tab()
     page = t.open("/analysis?tab=sla", '[data-kpi="g-came"]')
     assert page.locator("#ax-tab-sla").get_attribute("aria-selected") == "true"
-    got = {k: kpi(page, k) for k in ("g-came", "g-exec", "g-notexec", "g-rejected", "g-confirmed", "g-awaiting")}
-    assert got == {"g-came": "4", "g-exec": "2", "g-notexec": "0", "g-rejected": "1", "g-confirmed": "2", "g-awaiting": "0"}
-    assert "1 request(s) still with the branch" in text(page, "[data-glance-note]")
+    got = {k: kpi(page, k) for k in ("g-came", "g-exec", "g-notexec", "g-rejected", "g-open", "g-awaiting", "g-confirmed")}
+    assert got == {"g-came": "4", "g-exec": "2", "g-notexec": "0", "g-rejected": "1", "g-open": "1", "g-awaiting": "0",
+                   "g-confirmed": "2"}
+    live_now = len(sla_snapshot()["requests"])
+    assert kpi(page, "g-now") == str(live_now)                                     # = the Live tab
+    assert "1 request(s) of these dates still with the branch" in text(page, "[data-glance-note]")
     hours = page.locator("[data-glance-hour-table] tbody tr")
     assert hours.nth(0).locator("td").last.inner_text() == "4" and hours.nth(1).locator("td").last.inner_text() == "3"
     assert "No time yet" in page.locator("[data-glance-hour-table] thead").inner_text()   # the unread rejection
@@ -447,7 +456,7 @@ def test_the_sla_analysis_opens_on_the_security_teams_own_day(ops, tab, hub):
     assert [times.nth(i).inner_text() for i in range(3)] == ["2", "1.8 h", "1.8 h"]     # 60 and 150 min (read ones)
     first = page.locator(".card:has-text('Each employee') tbody tr").first          # most came first
     cells = [c.inner_text() for c in first.locator("td").all()]
-    assert cells[0] == USERS[0] and cells[1:4] == ["4", "2", "0"]                   # came, executed, not executed
+    assert cells[0] == USERS[0] and cells[1:6] == ["3", "2", "0", "0", "1"]       # came, executed, not, rejected, open
     assert page.locator("[data-details], [data-kpi='an-closed'], [data-portal]").count() == 0
     t.clean()
 
@@ -471,8 +480,8 @@ def test_the_sla_analysis_is_live(ops, tab, hub):
     page = t.open("/analysis?tab=sla", '[data-kpi="g-came"]')
     assert kpi(page, "g-confirmed") == "2"
     later = NOW + dt.timedelta(minutes=5)
-    write_history(ops, [history_rec("c3", "2026-10-11T08:40:00", "2026-10-11T09:04:00")],
-                  [], {}, {}, at=later)
+    todays_history(ops, at=later, extra_grid={"g6": grid_entry("تم التعزيز على التنفيذ", "closed")},
+                   extra_closed=[history_rec("c3", "2026-10-11T08:40:00", "2026-10-11T09:04:00")])
     t.poll_now()
     expect(page.locator('[data-kpi="g-confirmed"] [data-kpi-value]')).to_have_text("3")
     t.clean()
@@ -506,15 +515,15 @@ def test_the_numbers_are_kept_day_by_day(ops, tab, hub):
     time and the best performer."""
     todays_history(ops)
     ops.update_history("sla", "2026-10-10", lambda d: d.update(day_log={
-        "at": "2026-10-10T17:00:00", "totals": {"arrived": 120, "executed": 90, "not_executed": 10, "rejected": 5,
-                                                "closed": 95, "closed_executed": 88, "closed_not": 7, "from_grid": 0},
+        "at": "2026-10-10T17:00:00", "totals": {"came": 120, "executed": 90, "not_executed": 10, "rejected": 5,
+                                                "open": 15, "waiting": 3, "confirmed": 97},
         "times": {"execution": {"n": 80, "average_minutes": 42.0, "median_minutes": 35.0, "within_pct": 61.0}},
         "by_team": [], "by_person": [], "people": [{"name": "موظف ممتاز", "team": "Flex Cube", "total": 33}]}))
     t = tab()
     page = t.open("/analysis?tab=sla", "[data-days] table")
     row = page.locator("[data-days] tbody tr").first
     cells = [c.inner_text() for c in row.locator("td").all()]
-    assert cells[:6] == ["10/10/2026", "120", "90", "10", "5", "95"] and cells[6] == "42 min"
+    assert cells[:8] == ["10/10/2026", "120", "90", "10", "5", "15", "3", "97"] and cells[8] == "42 min"
     assert "موظف ممتاز (33)" in cells[-1]
     t.clean()
 
