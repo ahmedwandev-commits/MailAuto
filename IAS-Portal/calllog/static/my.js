@@ -318,12 +318,13 @@
     if (!s.requests.length) return OPS.card("My tickets", {}, tiles, OPS.emptyState({ title: "Nothing waiting for you", icon: "check", text: "No ticket is open under your name." }));
     const rows = s.requests.map((r) => {
       const fields = r.fields || {};
-      const since = r.assigned_at || r.sent_at;          // the first «اسناد لمستخدم السرية» when known, else the sent date
+      const since = r.sent_at;                           // «تاريخ الارسال للسرية»: the live SLA's clock
       return h("tr", { "data-sent": since || "" },
         h("td", {}, OPS.statusChip(r.status)),
-        h("td", { class: "nowrap my-age", "data-age": "", "data-since": r.assigned_at ? "assignment" : "sent",
-          title: r.assigned_at ? "Since it was first assigned to a security user" + (r.holder_since ? " (with you since " + r.holder_since.slice(11, 16) + ")" : "")
-            : "Since it was sent to the security team" },
+        h("td", { class: "nowrap my-age", "data-age": "", "data-since": "sent",
+          title: "Since it was sent to the security team («تاريخ الارسال للسرية»)"
+            + (r.assigned_at ? "; first assigned " + r.assigned_at.slice(11, 16) : "")
+            + (r.holder_since ? ", with you since " + r.holder_since.slice(11, 16) : "") },
         OPS.fmtDuration(liveMinutes(since, r.age_minutes))),
         ...["اسم الموظف", "النظام", "نوع الطلب"].map((k) => h("td", { dir: "auto" }, bidi(fields[k] || "—"))));
     });

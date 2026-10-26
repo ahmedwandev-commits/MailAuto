@@ -1227,21 +1227,21 @@ def test_the_oldest_request_is_aged_by_the_clock_everywhere_like_the_live_tab(ad
     assert admin.get("/api/ops/overview").get_json()["sla"]["oldest_minutes"] is None
 
 
-def test_the_oldest_request_and_my_tickets_count_from_the_first_assignment_when_the_scan_knows_it(admin, emp, ops, clock):
-    """The scan ages a request from its FIRST «اسناد لمستخدم السرية» (the SLA history's clock); a request sent 150
-    minutes before the scan but first assigned 30 minutes before it is 70 minutes old 40 minutes later, on Home and on
-    My work, and My tickets says which clock it is and since when its holder has it."""
-    req = sla_request("k1", "احمد سالم", "within", 30)
-    req.update(sent_at="2026-10-11T06:30:00", assigned_at="2026-10-11T08:30:00", age_from="assignment",
-               holder_since="2026-10-11T08:50:00")
+def test_the_oldest_request_and_my_tickets_count_from_the_sent_date_and_show_the_first_assignment(admin, emp, ops, clock):
+    """Like the owner's sla_monitor.py, the live SLA counts from «تاريخ الارسال للسرية»: a request sent 150 minutes
+    before the scan is 190 minutes old 40 minutes later on Home and My work, even though the scan noted it was first
+    assigned 30 minutes before it; My tickets still shows that assignment and since when its holder has it."""
+    req = sla_request("k1", "احمد سالم", "breached", 150)
+    req.update(sent_at="2026-10-11T06:30:00", assigned_at="2026-10-11T08:30:00", holder_since="2026-10-11T08:50:00")
     put_snapshot(ops, "sla", sla_data([req, sla_request("k2", "Bob", "within", 20)]))
     clock.advance(minutes=40)
-    assert admin.get("/api/ops/overview").get_json()["sla"]["oldest_minutes"] == 70
+    assert admin.get("/api/ops/overview").get_json()["sla"]["oldest_minutes"] == 190
     mine = emp.get("/api/ops/my").get_json()["sla"]
-    assert mine["totals"]["oldest_minutes"] == 70
+    assert mine["totals"]["oldest_minutes"] == 190 and mine["totals"]["breached"] == 1
     one = mine["requests"][0]
-    assert one["assigned_at"] == "2026-10-11T08:30:00" and one["age_from"] == "assignment"
-    assert one["sent_at"] == "2026-10-11T06:30:00" and one["holder_since"] == "2026-10-11T08:50:00"
+    assert one["sent_at"] == "2026-10-11T06:30:00" and one["age_minutes"] == 150 and one["status"] == "breached"
+    assert one["assigned_at"] == "2026-10-11T08:30:00" and one["holder_since"] == "2026-10-11T08:50:00"
+    assert "age_from" not in one
 
 
 def test_a_manager_is_told_when_a_role_of_their_team_could_not_be_read(admin, flex_mgr, ops):

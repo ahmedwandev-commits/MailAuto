@@ -118,17 +118,20 @@ def test_a_live_ticket_is_matched_to_its_open_history_and_prefers_the_current_ho
     assert {k: v["id"] for k, v in got.items()} == {"a": "R2", "b": "R1"}
 
 
-def test_live_ages_come_from_the_assignment_else_the_sent_date():
-    from datetime import datetime
+def test_the_first_assignment_is_noted_on_a_live_ticket_and_its_sent_date_age_is_kept():
+    """Like the owner's sla_monitor.py, the live SLA runs from «تاريخ الارسال للسرية»: the first assignment the
+    history recorded is noted next to it, never its clock."""
     open_recs = {"R1": {"id": "R1", "stage": "open", "user_no": "700301", "system": "Flexcube",
                         "request_type": "اضافة صلاحية", "holder": "مستخدم اول", "assigned_at": "2026-10-21T08:30:00"}}
-    reqs = [live("a", "700301", "Flexcube", "اضافة صلاحية", "مستخدم اول", sent="2026-10-19T08:00:00"),
-            live("b", "700999", "Flexcube", "اضافة صلاحية", "مستخدم اول", sent="2026-10-21T08:00:00")]
-    sh.apply_assignment_ages(reqs, open_recs, datetime(2026, 10, 21, 9, 0), warn=60, breach=120)
+    reqs = [dict(live("a", "700301", "Flexcube", "اضافة صلاحية", "مستخدم اول", sent="2026-10-19T08:00:00"),
+                 age_minutes=2940, status="breached"),
+            dict(live("b", "700999", "Flexcube", "اضافة صلاحية", "مستخدم اول", sent="2026-10-21T08:00:00"),
+                 age_minutes=60, status="reminder")]
+    assert sh.note_assignments(reqs, open_recs) == 1
     a, b = reqs
-    assert a["assigned_at"] == "2026-10-21T08:30:00" and a["age_from"] == "assignment"
-    assert a["age_minutes"] == 30 and a["status"] == "within"     # not 2 days "with the employee"
-    assert b["assigned_at"] is None and b["age_from"] == "sent" and b["age_minutes"] == 60 and b["status"] == "reminder"
+    assert a["assigned_at"] == "2026-10-21T08:30:00" and a["holder_since"] is None
+    assert a["age_minutes"] == 2940 and a["status"] == "breached"        # still from the sent date
+    assert b["assigned_at"] is None and b["age_minutes"] == 60 and b["status"] == "reminder"
 
 
 # ------------------------------------------------------------------------- compared with the portal's results
@@ -170,10 +173,9 @@ def test_the_employee_clock_starts_at_the_assignment_line_of_the_status_history(
     assert round(lc["held_minutes"], 1) == 78.6
 
 
-def test_an_open_request_is_assigned_by_a_reviewer_and_aged_from_that_line():
+def test_an_open_request_is_assigned_by_a_reviewer_and_that_line_is_its_assignment():
     """The assignment line names the assigner («Checker security» here), never the security user who holds the
-    request - the holder comes from the inquiry grid's «مستخدم السرية». The live age counts from the assignment."""
-    from datetime import datetime
+    request - the holder comes from the inquiry grid's «مستخدم السرية». The live ticket notes that assignment."""
     rows = [["700511", "ه مشرف فرع", "Checker Branch", "21/10/2026\n09:36:00", "تم التعزيز من قبل مشرف الفرع", ""],
             ["700512", "و مراجع سرية", "Checker security", "21/10/2026\n10:23:48", "اسناد لمستخدم السرية", "ملاحظة"],
             ["700513", "ز موظف فرع", "Maker Branch", "21/10/2026\n08:55:02", "تسجيل", "ملاحظة"]]
@@ -185,12 +187,12 @@ def test_an_open_request_is_assigned_by_a_reviewer_and_aged_from_that_line():
     assert rec["stage"] == "open" and rec["assigned_at"] == "2026-10-21T10:23:48" and not rec["executed_at"]
     assert rec["assigner"] == "و مراجع سرية" and rec["holder"] == "مستخدم اول"
     reqs = [live("a", "700301", "Flexcube", "اضافة صلاحية", "مستخدم اول", sent="2026-10-21T09:36:00")]
-    sh.apply_assignment_ages(reqs, records, datetime(2026, 10, 21, 11, 0), warn=60, breach=120)
-    assert reqs[0]["age_from"] == "assignment" and reqs[0]["age_minutes"] == 36
+    sh.note_assignments(reqs, records)
+    assert reqs[0]["assigned_at"] == "2026-10-21T10:23:48"
 
 
-def test_requests_with_a_security_user_are_read_first_so_their_live_clock_is_exact():
-    """When a scan cannot open every row, the requests still with a security user come first (their live age needs the
+def test_requests_with_a_security_user_are_read_first_so_their_assignment_is_known():
+    """When a scan cannot open every row, the requests still with a security user come first (the Live tab shows their
     assignment line), then the ones awaiting the reviewer, then the closed ones, then the rejected ones; a request still
     with the branch has no SLA step to read."""
     order = [sh.detail_priority(s, CFG) for s in ("اسناد لمستخدم السرية", "معلق", "تم التنفيذ",
@@ -198,18 +200,18 @@ def test_requests_with_a_security_user_are_read_first_so_their_live_clock_is_exa
     assert order[0] == order[1] < order[2] < order[3] < order[4] and order[5] is None
 
 
-# --------------------------------------------------- the owner's clocks: the request from its FIRST assignment
-def test_a_live_ticket_ages_from_its_first_assignment_and_says_since_when_the_holder_has_it():
-    """The owner's rule: a request's age starts at its first «اسناد لمستخدم السرية», also after a re-assignment; the
-    time the security user holding it now got it is kept as ``holder_since``."""
-    from datetime import datetime
+# --------------------------------------------------- the first assignment of a live ticket, and since when its holder has it
+def test_a_live_ticket_notes_its_first_assignment_and_since_when_the_holder_has_it():
+    """After a re-assignment the live ticket shows its first «اسناد لمستخدم السرية» and, as ``holder_since``, when the
+    security user holding it now got it; its age and status stay the sent date's."""
     open_recs = {"R1": {"id": "R1", "stage": "open", "user_no": "700301", "system": "Flexcube",
                         "request_type": "اضافة صلاحية", "holder": "مستخدم ثان",
                         "first_assigned_at": "2026-10-21T07:00:00", "assigned_at": "2026-10-21T08:30:00"}}
-    reqs = [live("a", "700301", "Flexcube", "اضافة صلاحية", "مستخدم ثان", sent="2026-10-20T08:00:00")]
-    sh.apply_assignment_ages(reqs, open_recs, datetime(2026, 10, 21, 9, 0), warn=60, breach=120)
+    reqs = [dict(live("a", "700301", "Flexcube", "اضافة صلاحية", "مستخدم ثان", sent="2026-10-21T08:20:00"),
+                 age_minutes=40, status="within")]
+    sh.note_assignments(reqs, open_recs)
     assert reqs[0]["assigned_at"] == "2026-10-21T07:00:00" and reqs[0]["holder_since"] == "2026-10-21T08:30:00"
-    assert reqs[0]["age_minutes"] == 120 and reqs[0]["status"] == "breached"
+    assert reqs[0]["age_minutes"] == 40 and reqs[0]["status"] == "within"
 
 
 def _history(*lines):
@@ -295,7 +297,7 @@ def test_right_now_lists_every_live_ticket_even_the_ones_the_inquiry_does_not():
     grid = sh.grid_state(items, {}, "2026-10-21T09:00:00", CFG)
     tickets = [live("a", "700301", "Flexcube", "اضافة صلاحية", "مستخدم اول"),       # the grid's row: counted once
                dict(live("b", "700399", "T24", "حذف", "مستخدم ثان", sent="2026-10-14T08:00:00"),
-                    assigned_at="2026-10-14T09:00:00", age_from="assignment")]   # older than the inquiry window
+                    assigned_at="2026-10-14T09:00:00")]                         # older than the inquiry window
     out = sh.right_now(grid, {}, {}, CFG, "2026-10-21T09:00:00", live=tickets)
     assert out["now"]["open"] == 2 and out["now"]["live_only"] == 1
     older = next(o for o in out["open_now"] if o["source"] == "live")

@@ -546,10 +546,10 @@ def right_now(grid, open_records, index, cfg, now, keep=None, live=None):
     """What is open / awaiting the reviewer RIGHT NOW: every request the latest inquiry grid lists (read or not), plus
     every live ticket of the Re-Assign page the grid does not list (``live``: the Live tickets tab's requests, already
     limited to the viewer) - so the open count is complete. A request's age counts from its FIRST «اسناد لمستخدم
-    السرية» (like the Live tickets tab); ``holder_minutes`` = since the security user holding it got it. Ages come
-    from the exact history; a request whose history is not read yet has none ("not read yet") - never a guess. The
-    stage is taken from the CURRENT status with the current rules. ``keep(row)`` narrows the rows (team, person,
-    exclusions)."""
+    السرية» (the analysis rule; the Live tickets tab's SLA runs from «تاريخ الارسال للسرية»); ``holder_minutes`` = since
+    the security user holding it got it. Ages come from the exact history; a request whose history is not read yet has
+    none ("not read yet") - never a guess. The stage is taken from the CURRENT status with the current rules.
+    ``keep(row)`` narrows the rows (team, person, exclusions)."""
     sla = int((cfg or {}).get("sla_minutes") or 180)
     open_now, awaiting_now, pre = [], [], 0
     open_keys = {}                                       # (user number, system, request type) -> open entries
@@ -593,7 +593,7 @@ def right_now(grid, open_records, index, cfg, now, keep=None, live=None):
     for req in _live_unlisted(live, open_keys):          # on the Re-Assign page, not (yet) on the inquiry grid
         live_only += 1
         fields = req.get("fields") or {}
-        first = req.get("assigned_at") if req.get("age_from") == "assignment" else ""
+        first = req.get("assigned_at") or ""             # the request's age in the analysis: from its first assignment
         m = _minutes(first, now) if first else None
         open_now.append({"id": "", "holder": req.get("security_user") or "",
                          "system": _field(fields, "النظام"), "requester": _field(fields, "اسم الموظف"),
@@ -676,7 +676,7 @@ def grid_stubs(grid, index, records, cfg=None):
     return out
 
 
-# ------------------------------------------------------------------- live tickets: the age from the first assignment
+# ------------------------------------------------------------------- live tickets: when they were first assigned
 LIVE_FIELDS = {"user_no": "رقم المستخدم", "system": "النظام", "request_type": "نوع الطلب"}
 
 
@@ -723,28 +723,19 @@ def _stamp_sort(stamp):
     return t.timestamp() if t else 0.0
 
 
-def apply_assignment_ages(requests, open_records, now, warn, breach):
-    """Age every live request from its FIRST «اسناد لمستخدم السرية» (``match_live_requests``; the owner's rule: the
-    request's age starts when it was first assigned to a security user), not from the day it was sent to the team:
-    sets ``assigned_at`` (that first assignment), ``holder_since`` (when the security user holding it now got it, if
-    later - a re-assignment), ``age_from`` ("assignment" / "sent"), ``age_minutes`` and ``status`` (within / reminder /
-    breached / no_date). Without a match the sent date stays the clock. Returns how many were matched."""
-    from . import schemas
+def note_assignments(requests, open_records):
+    """Note on every live request when it was FIRST given to a security user (``match_live_requests``): sets
+    ``assigned_at`` (that first «اسناد لمستخدم السرية») and ``holder_since`` (when the security user holding it now got
+    it, if later - a re-assignment), None when the history has not read the request. For information only: the live
+    SLA (``age_minutes`` / ``status``) runs from «تاريخ الارسال للسرية» on the Re-Assign page, like the owner's
+    sla_monitor.py, and is never changed here. Returns how many were matched."""
     matched = match_live_requests(requests, open_records)
     for r in requests or []:
         rec = matched.get(r.get("key"))
         start = parse_time(rec.get("first_assigned_at") or rec.get("assigned_at")) if rec else None
         holder = parse_time(rec.get("assigned_at")) if rec else None
+        r["assigned_at"] = start.strftime(_FMT) if start is not None else None
         r["holder_since"] = holder.strftime(_FMT) if holder is not None and start is not None and holder > start else None
-        if start is not None:
-            r["assigned_at"], r["age_from"] = start.strftime(_FMT), "assignment"
-        else:
-            r["assigned_at"], r["age_from"] = None, "sent"
-            start = parse_time(r.get("sent_at")) if r.get("sent_at") else None
-        age = None if start is None else max(0, round((now - start).total_seconds() / 60))
-        r["age_minutes"] = age
-        r["status"] = (schemas.SLA_NO_DATE if age is None else schemas.SLA_BREACHED if age >= breach
-                       else schemas.SLA_REMINDER if age >= warn else schemas.SLA_WITHIN)
     return len(matched)
 
 

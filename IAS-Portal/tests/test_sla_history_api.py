@@ -90,11 +90,11 @@ def test_a_manager_compares_only_their_own_team(flex_mgr, history, admin):  # no
 
 
 def test_right_now_lists_every_open_live_ticket_and_counts_the_unread_requests(no_third_party, history):
-    """«Open now» is complete: a Live ticket (Re-Assign page) the inquiry grid does not list is in it too, aged from
-    its first assignment; a Third Party ticket never is."""
+    """«Open now» is complete: a Live ticket (Re-Assign page) the inquiry grid does not list is in it too, aged (in the
+    analysis) from the first assignment the scan noted on it; a Third Party ticket never is."""
     from tests.test_ops_api import put_snapshot
     tickets = [{"key": "old", "security_user": "مستخدم ثان", "sent_at": "2026-10-01T08:00:00",
-                "assigned_at": "2026-10-01T09:00:00", "age_from": "assignment", "status": "breached",
+                "assigned_at": "2026-10-01T09:00:00", "status": "breached",
                 "fields": {"رقم المستخدم": "700399", "النظام": "Flexcube", "نوع الطلب": "حذف", "اسم الموظف": "موظف"}},
                {"key": "tp", "security_user": "مستخدم ثان", "sent_at": "2026-10-01T08:00:00", "status": "breached",
                 "fields": {"رقم المستخدم": "700398", "النظام": "TP App", "نوع الطلب": "حذف"}}]

@@ -241,6 +241,17 @@ HOW TO UPDATE (your data is kept)
      came. The subject shows "CRs pending N".
    - A team mail Outlook refuses is sent again at the retry; the mails that went are never sent twice.
 
+24. LIVE SLA COUNTED LIKE THE SLA MONITOR: FROM «تاريخ الارسال للسرية»
+   - Live tickets, Home, My tickets, the alert e-mail, the Excel report and the daily summary count a request's
+     age from «تاريخ الارسال للسرية» on the Re-Assign page again, like the SLA monitor script: REMINDER from
+     1 hour (warning_minutes 60), SLA BREACHED from 2 hours (breach_minutes 120), WITHIN SLA before, NO SENT DATE
+     when the page shows none. This replaces the first-assignment clock of item 19 for the live SLA.
+   - The first «اسناد لمستخدم السرية» (and "this user since" after a re-assignment) is still shown next to the age
+     and in the Excel's ASSIGNED_AT column, for information only. The alert e-mail's column is "Sent to Security".
+   - Third Party applications stay out of the live SLA, its alerts and totals as before.
+   - Insights > Analysis > SLA is unchanged: the security user's time and the whole request's time still count
+     from the assignment (item 19).
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -423,3 +434,13 @@ IAS PORTAL - الجديد في هذا التحديث
      كل الأيام اللي فاتت)، و"Implementation requests pending (all)" بيعد كل الطلبات المعلقة مهما كان يومها. والعنوان
      بيقول "CRs pending N".
    - إيميل فريق الـ Outlook رفضه بيتبعت تاني في المحاولة اللي بعدها، والإيميلات اللي اتبعتت عمرها ما بتتبعت مرتين.
+
+24. الـ Live SLA بيتحسب زي سكريبت الـ SLA monitor: من «تاريخ الارسال للسرية»
+   - Live tickets و Home و My tickets وإيميل التنبيه والإكسيل والملخص اليومي بيحسبوا عمر الطلب تاني من «تاريخ
+     الارسال للسرية» في صفحة الـ Re-Assign، زي سكريبت الـ SLA monitor: REMINDER من ساعة (warning_minutes 60)،
+     SLA BREACHED من ساعتين (breach_minutes 120)، WITHIN SLA قبل كده، و NO SENT DATE لو الصفحة مش كاتبة تاريخ.
+     ده بدل عداد أول إسناد اللي في بند 19 بالنسبة للـ Live SLA.
+   - أول «اسناد لمستخدم السرية» (و"this user since" بعد إعادة الإسناد) لسه ظاهر جنب العمر وفي عمود ASSIGNED_AT في
+     الإكسيل، للمعلومة بس. وعمود إيميل التنبيه اسمه "Sent to Security".
+   - تطبيقات Third Party لسه برة الـ Live SLA وتنبيهاته وإجمالياته زي ما هي.
+   - Insights > Analysis > SLA زي ما هو: وقت مستخدم السرية ووقت الطلب كله لسه بيتحسبوا من الإسناد (بند 19).

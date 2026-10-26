@@ -379,7 +379,7 @@ class TestExcel:
         _, over, everything = wb.worksheets
         first = [c.value for c in everything[2]]
         assert first[3:6] == [400, "6h 40m", "SLA BREACHED"] and first[1] == "12/10/2026 03:20"
-        assert first[2] in (None, "")                        # no SLA history: aged from the sent date
+        assert first[2] in (None, "")                        # no SLA history: no assignment to note
         status = everything["F2"]
         assert status.fill.fgColor.rgb.endswith("FDECEA") and status.font.color.rgb.endswith("B71C1C") and status.font.bold
         assert {over.cell(r, 6).value for r in range(2, over.max_row + 1)} == {"SLA BREACHED", "REMINDER"}
@@ -550,22 +550,40 @@ class TestRun:
         retry, ctx2 = run(store, now=NOW + timedelta(minutes=15))
         assert retry.emails_sent == 1 and len(ctx2.mailer.sent) == 1
 
-    def test_a_live_ticket_is_aged_from_its_last_assignment_not_from_the_day_it_was_sent(self, store):
-        """The Re-Assign page only gives «تاريخ الارسال للسرية». The SLA history knows when the security user holding
-        the request got it: that is the clock (a request re-assigned 30 minutes ago is not 3 hours "with" its holder)."""
+    def test_a_live_ticket_is_aged_from_the_day_it_was_sent_and_its_assignment_is_only_noted(self, store):
+        """Like the owner's sla_monitor.py: the live SLA runs from «تاريخ الارسال للسرية» on the Re-Assign page -
+        reminder from warning_minutes, breached from breach_minutes. The first «اسناد لمستخدم السرية» the SLA history
+        recorded is noted next to it (``assigned_at``), never its clock."""
         assigned = (NOW - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
         store.update_sla_history_state(lambda d: d.update(open={"R1": {
             "id": "R1", "stage": "open", "user_no": "1000", "system": "نظام", "request_type": "نوع",
             "holder": OWNER_A, "assigned_at": assigned}}))
-        result, _ = run(store, (HEADERS, [row("a", 200, OWNER_A), row("b", 130, OWNER_B, user_no="1001")]))
-        a, b = by_name(result)["a"], by_name(result)["b"]
-        assert a["assigned_at"] == assigned and a["age_from"] == "assignment"
-        assert a["age_minutes"] == 30 and a["status"] == schemas.SLA_WITHIN
-        assert b["assigned_at"] is None and b["age_from"] == "sent" and b["age_minutes"] == 130
-        assert [r["fields"]["اسم الموظف"] for r in result.snapshot_data["requests"]] == ["b", "a"]   # oldest first
+        result, ctx = run(store, (HEADERS, [row("a", 200, OWNER_A), row("b", 70, OWNER_B, user_no="1001"),
+                                            row("c", 20, OWNER_B, user_no="1002")]))
+        a, b, c = (by_name(result)[k] for k in "abc")
+        assert a["assigned_at"] == assigned and a["age_minutes"] == 200 and a["status"] == schemas.SLA_BREACHED
+        assert b["assigned_at"] is None and b["age_minutes"] == 70 and b["status"] == schemas.SLA_REMINDER
+        assert c["age_minutes"] == 20 and c["status"] == schemas.SLA_WITHIN
+        assert "age_from" not in a
+        assert [r["fields"]["اسم الموظف"] for r in result.snapshot_data["requests"]] == ["a", "b", "c"]   # oldest first
         totals = result.snapshot_data["totals"]
-        assert totals["within"] == 1 and totals["breached"] == 1 and totals["oldest_minutes"] == 130
-        assert result.history_extra["first_breach"] == {b["key"]: NOW.isoformat(timespec="seconds")}
+        assert (totals["within"], totals["reminder"], totals["breached"], totals["oldest_minutes"]) == (1, 1, 1, 200)
+        assert result.history_extra["first_breach"] == {a["key"]: NOW.isoformat(timespec="seconds")}
+        assert any("3 request(s) aged from «تاريخ الارسال للسرية»" in line and "1 matched" in line for line in ctx.logs)
+
+    def test_third_party_requests_are_left_out_of_the_live_sla(self, store):
+        """As before: a request of a Third Party application is not in the live SLA - not in its list, totals, alerts
+        or first breaches - however old it is."""
+        store.update_auto_assign(lambda d: d.update(applications=[{"name": "TP Bank App", "team": "Third Party"}]))
+        tp = row("tp", 400, OWNER_A, user_no="1009")
+        tp[4] = "TP Bank App"
+        result, ctx = run(store, (HEADERS, [tp, row("a", 130, OWNER_A), row("b", 20, OWNER_B, user_no="1001")]))
+        assert set(by_name(result)) == {"a", "b"}
+        totals = result.snapshot_data["totals"]
+        assert (totals["open"], totals["breached"], totals["oldest_minutes"]) == (2, 1, 130)
+        assert list(result.history_extra["first_breach"]) == [by_name(result)["a"]["key"]]
+        assert ctx.mailer.sent and "TP Bank App" not in ctx.mailer.sent[0]["html"]
+        assert any("1 request(s) of excluded applications left out of the SLA" in line for line in ctx.logs)
 
     def test_missing_mailer_falls_back_to_outlook_and_fails_cleanly_here(self, store):
         ctx = make_ctx(store)

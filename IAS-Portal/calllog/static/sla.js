@@ -3,8 +3,8 @@
 
    Reads GET /api/ops/sla (the last good scan + collector health) every 15 s with ?since=, so an unchanged scan costs
    almost nothing, and draws: KPI tiles, a per-security-user table, the request list (filters, sorting, paging) and
-   today's timeline. Ages tick live between scans from "assigned_at" (the first «اسناد لمستخدم السرية», else
-   "sent_at") and the server clock. "Run scan now" asks the
+   today's timeline. Ages tick live between scans from "sent_at" («تاريخ الارسال للسرية», like the owner's
+   sla_monitor.py) and the server clock. "Run scan now" asks the
    collector for a scan and waits (visibly, with a time limit) until a newer scan appears.
 
    Every scraped text goes in with textContent (CL.h) - never innerHTML - and Arabic text carries dir="auto". */
@@ -79,10 +79,10 @@
   }
   const fmtLimit = (min) => (min && min % 60 === 0 ? `${min / 60} h` : `${min} min`);
 
-  /** The request's age, counted now: from its FIRST «اسناد لمستخدم السرية» when the scan matched it to the SLA history
-      ("assigned_at"), else from «تاريخ الارسال للسرية» (null with neither). */
+  /** The request's age, counted now from «تاريخ الارسال للسرية» ("sent_at"), like the owner's sla_monitor.py (null
+      without a sent date). */
   function ageOf(r) {
-    const t = r._t === undefined ? (r._t = naiveMs(r.assigned_at || r.sent_at)) : r._t;
+    const t = r._t === undefined ? (r._t = naiveMs(r.sent_at)) : r._t;
     if (t == null) return null;
     return Math.max(0, Math.floor((serverNow() - t) / 60000));
   }
@@ -324,19 +324,18 @@
     return now === "breached" ? `now over ${fmtLimit(limits().breach)}` : `now over ${fmtLimit(limits().warn)}`;
   }
 
-  /** Which clock the age counts from: "assigned 09:30" (the first «اسناد لمستخدم السرية», from the SLA history) or
-      "sent 09:30" (the Re-Assign page's sent date, when the history has not read the request yet); after a
-      re-assignment also "· this user since 10:15". */
+  /** The clock of the age: "sent 09:30" (the Re-Assign page's «تاريخ الارسال للسرية»); for information also
+      "· assigned 09:40" (the first «اسناد لمستخدم السرية», from the SLA history) and, after a re-assignment,
+      "· this user since 10:15". */
   function sinceText(r) {
-    const at = r.assigned_at || r.sent_at;
-    if (!at) return "";
     const today = state.snap.generated_at.slice(0, 10);
     const when = (s) => (s.slice(0, 10) === today ? hhmm(s) : `${s.slice(8, 10)}/${s.slice(5, 7)} ${hhmm(s)}`);
-    return `${r.assigned_at ? "assigned" : "sent"} ${when(at)}` + (r.holder_since ? ` · this user since ${when(r.holder_since)}` : "");
+    return [r.sent_at ? `sent ${when(r.sent_at)}` : "no sent date",
+            r.assigned_at ? `assigned ${when(r.assigned_at)}` : "",
+            r.holder_since ? `this user since ${when(r.holder_since)}` : ""].filter(Boolean).join(" · ");
   }
-  const sinceTitle = (r) => (r.assigned_at
-    ? "Age from the first «اسناد لمستخدم السرية» (SLA history)" + (r.holder_since ? "; re-assigned to the user holding it now later" : "")
-    : "Age from «تاريخ الارسال للسرية»: the status history of this request is not read yet");
+  const sinceTitle = (r) => "Age from «تاريخ الارسال للسرية»: reminder from " + fmtLimit(limits().warn) + ", breached from "
+    + fmtLimit(limits().breach) + (r.assigned_at ? "; the first «اسناد لمستخدم السرية» is shown for information" : "");
 
   function requestRow(r, cols) {
     const cue = cueText(r);
@@ -344,7 +343,7 @@
       h("td", { class: "sx-status" }, chip(r.status), h("span", { class: "sx-cue hint", "data-cue": "" }, cue)),
       h("td", { class: "sx-who" }, bidi(r.security_user)),
       h("td", { class: "sx-age nowrap" }, h("strong", { "data-age": "" }, fmtAge(ageOf(r))),
-        h("span", { class: "hint", "data-since": r.assigned_at ? "assignment" : "sent", title: sinceTitle(r) }, sinceText(r))),
+        h("span", { class: "hint", "data-since": "sent", title: sinceTitle(r) }, sinceText(r))),
       ...cols.map((c) => h("td", { class: "sx-field" }, (r.fields || {})[c] ? bidi(r.fields[c]) : h("span", { class: "sx-none" }, "—"))));
     tr._req = r;
     return tr;
