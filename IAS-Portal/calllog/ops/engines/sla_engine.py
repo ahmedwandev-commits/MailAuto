@@ -928,7 +928,7 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     closed) the old way."""
     from .. import sla_history
     started = time.monotonic()
-    deadline = started + float(plan.get("seconds") or history_seconds(cfg))
+    deadline = plan.get("deadline") or started + float(plan.get("seconds") or history_seconds(cfg))
     timeout_s = int(cfg["timeout_seconds"])
     base = cfg["base_url"].rstrip("/")
     path = cfg.get("inquiry_path") or DEFAULTS["sla"]["inquiry_path"]
@@ -1019,13 +1019,16 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     portal_total = None
     with suppress(Exception):
         portal_total = browser.eval(JS_PORTAL_TOTAL)
-    pages = []
+    pages, walk_cut = [], False
     while True:
         rows, pbs, total = whole_page(table)
         pages.append({"sig": _rows_sig(table["rows"]), "rows": rows, "pbs": pbs, "total": total})
         if len(pages) >= MAX_SERVER_PAGES:
             break
         if isinstance(portal_total, int) and sum(len(p["rows"]) for p in pages) >= portal_total:
+            break
+        if time.monotonic() >= deadline - PAGE_RESERVE_S:   # the run must never outlive its time limit
+            walk_cut = True
             break
         table = server_next(_rows_sig(table["rows"]))
         if table is None:
@@ -1046,7 +1049,10 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
         + (f", the portal lists {portal_total} in all («اجمالي عدد الطلبات»)" if isinstance(portal_total, int)
            else f", the portal lists {grid_total}" if grid_total is not None else "")
         + ("".join(f"; page {n}: only {got} of its {want} rows could be read" for n, got, want in short)))
-    if isinstance(portal_total, int) and len(rows) < portal_total:
+    if walk_cut:
+        log(f"SLA history: the time budget ran out after {len(pages)} result page(s) ({len(rows)} rows) - the rows of the "
+            "other pages keep what the earlier scans read")
+    elif isinstance(portal_total, int) and len(rows) < portal_total:
         log(f"SLA history: WARNING only {len(rows)} of the {portal_total} requests could be read - the next result page "
             "(«عرض التالي») did not open; the rest are read at the next scan")
 
@@ -1081,16 +1087,16 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     # a «نموذج (7)» row read before its period was taken from the details: read again, after every other row
     late = {it["key"] for it in grid if it["key"] in todo
             and not sla_history.needs_details(it, index, plan["cfg"], period=False)}
-    # a row's post-back opens it on ITS result page only, so the rows are read page by page - starting on the page
-    # where the last scan stopped (``resume_page``), so no page waits for the others scan after scan; on each page the
-    # CLOSED requests first (they complete the day's numbers), then the ones awaiting the reviewer, then the ones with
-    # a security user, then the rejected ones; the oldest request first within each
+    # the FINISHED requests first (confirmed, then rejected: one read gives every stamp of a request), then the ones
+    # awaiting the reviewer, then the ones with a security user; within each, page by page starting on the page where
+    # the last scan stopped (``resume_page``: a row's post-back opens it on ITS result page only, and no page waits
+    # scan after scan), the newest request first
     npages = max(1, len(pages))
     resume = int(plan.get("resume_page") or 0) % npages
-    ordered = sorted(grid, key=lambda it: (it["key"] in late, (page_of[it["key"]] - resume) % npages,
-                                           it["key"] not in todo,
+    ordered = sorted(grid, key=lambda it: (it["key"] not in todo, it["key"] in late,
                                            sla_history.detail_priority(it["status"], plan["cfg"], it.get("executor") or "") or 0,
-                                           (sla_history.parse_time(it["date"]) or datetime.max)))
+                                           (page_of[it["key"]] - resume) % npages,
+                                           -((sla_history.parse_time(it["date"]) or datetime.min).toordinal())))
     resume_next = None
     lost_pages = set()
     items, opened, failed, streak, unverified, partial = [], 0, 0, 0, 0, 0
@@ -1197,6 +1203,7 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
         + (f"; {unverified} detail(s) could not be matched to their row by number" if unverified else ""))
     return {"items": items, "rows": len(grid), "opened": opened, "left": left, "failed": failed, "timing": timing,
             "portal_total": portal_total if isinstance(portal_total, int) else None,
+            "complete": not walk_cut and not short and not (isinstance(portal_total, int) and len(rows) < portal_total),
             "resume_page": resume_next if resume_next is not None else 0,
             "date_from": plan["date_from"].isoformat() if hasattr(plan.get("date_from"), "isoformat") else ""}
 
@@ -1246,7 +1253,7 @@ def scrape(ctx, username, password, history=None, history_sink=None):
         # 4) SLA Analysis: the inquiry page and the status history of what moved (never costs the scan above)
         if history is not None and history_sink is not None:
             try:
-                history_sink.update(read_history(browser, cfg, debug, history, ctx.log))
+                history_sink.update(read_history_slices(browser, cfg, debug, history, ctx.log))
             except Exception as exc:
                 history_sink["error"] = clean_error(exc, [password])
                 ctx.log(f"SLA history not read this scan: {history_sink['error']}")
@@ -1777,7 +1784,8 @@ def _notify(ctx, cfg, requests, by_user, columns, now):
     return sent, note
 
 
-HISTORY_REACH_DAYS = 31        # how far back the inquiry is searched for a request that is still open
+HISTORY_REACH_DAYS = 31        # how far back a request still in progress is followed (one older day a scan)
+PAGE_RESERVE_S = 20            # seconds kept for the details and the fold when the result pages are walked
 LIVE_REACH_MARGIN_DAYS = 3     # a live ticket's request date can be this many days before it was sent to the team
 
 
@@ -1791,9 +1799,11 @@ def sla_excluder(ctx, cfg):
 
 
 def history_plan(ctx, cfg, now):
-    """What the inquiry read covers this scan: {date_from, date_to, index, cfg}. The last ``history_days`` days, reaching
-    back to the oldest request of the recording that is still open (at most ``HISTORY_REACH_DAYS``), so a request is
-    followed until it closes. None when the SLA history is switched off."""
+    """What the inquiry read covers this scan: {date_from, date_to (the recent window), slices, older_day, index, cfg,
+    ...}. Each scan searches the last ``history_days`` days, and ONE older day (at most ``HISTORY_REACH_DAYS`` back)
+    that still has a request in progress - the oldest such day first, then the next one at the next scan, in turn - so
+    a request is followed until it closes without the search ever reaching a month back at once (37 result pages took
+    the whole scan). None when the SLA history is switched off."""
     from .. import sla_history, sla_records
     if not cfg.get("history_enabled", True):
         return None
@@ -1803,27 +1813,69 @@ def history_plan(ctx, cfg, now):
     date_from = today - timedelta(days=days - 1)
     floor = today - timedelta(days=HISTORY_REACH_DAYS - 1)
     rules = sla_records.clean_config((ctx.store.read_sla_records() or {}).get("config"))
+    older = set()
     still_open = [r.get("request_date") for r in (state.get("open") or {}).values()]
     still_open += [g.get("request_date") for g in (state.get("grid") or {}).values()   # a branch-only request has no
-                   if sla_history.row_stage(g, rules) not in ("closed", "rejected", "pre")]   # SLA yet
+                   if sla_history.row_stage(g, rules) in ("open", "awaiting")]         # SLA yet
     for stamp in still_open:                              # follow every request that is not finished yet
         day = sla_history.parse_time(stamp)
         if day and floor <= day.date() < date_from:
-            date_from = day.date()
+            older.add(day.date())
     # and every ticket of the last Live scan (the Re-Assign page): its request date is at most a few days before the
-    # day it was sent to the security team, so the inquiry lists it and its history is read
+    # day it was sent to the security team
     with suppress(Exception):
         live = (((ctx.store.read_snapshot("sla") or {}).get("data") or {}).get("requests") or [])
         for r in live:
             sent = sla_history.parse_time(r.get("sent_at")) if isinstance(r, dict) else None
             if sent:
-                day = max(floor, sent.date() - timedelta(days=LIVE_REACH_MARGIN_DAYS))
-                if day < date_from:
-                    date_from = day
-    return {"date_from": date_from, "date_to": today, "index": dict(state.get("index") or {}), "cfg": rules,
+                for back in range(LIVE_REACH_MARGIN_DAYS + 1):
+                    day = sent.date() - timedelta(days=back)
+                    if floor <= day < date_from:
+                        older.add(day)
+    last = str(state.get("history_older_day") or "")
+    turn = sorted(d for d in older if d.isoformat() > last) or sorted(older)
+    pick = turn[0] if turn else None
+    slices = [(date_from, today)] + ([(pick, pick)] if pick else [])
+    return {"date_from": date_from, "date_to": today, "slices": slices, "older_day": pick.isoformat() if pick else "",
+            "older_days": len(older), "index": dict(state.get("index") or {}), "cfg": rules,
             "excluded": sla_excluder(ctx, cfg), "seconds": history_seconds(cfg, getattr(ctx, "general", None)),
             "day_start": day_start(cfg, getattr(ctx, "general", None)),
             "resume_page": int(((state.get("history_stats") or {}).get("resume_page")) or 0)}
+
+
+def read_history_slices(browser, cfg, debug, plan, log=lambda m: None):
+    """``read_history`` for each slice of the plan (the recent window, then the older day), all within ONE time budget:
+    the items of every slice, and ``covered`` = the request days whose rows were all read (a slice cut short keeps its
+    other rows as the earlier scans read them)."""
+    started = time.monotonic()
+    deadline = started + float(plan.get("seconds") or history_seconds(cfg))
+    out = {"items": [], "rows": 0, "opened": 0, "left": 0, "failed": 0, "timing": {}, "portal_total": None,
+           "resume_page": 0, "covered": [], "date_from": plan["date_from"].isoformat(), "older_day": plan.get("older_day", "")}
+    covered = set()
+    for n, (dfrom, dto) in enumerate(plan.get("slices") or [(plan["date_from"], plan["date_to"])]):
+        if time.monotonic() >= deadline - PAGE_RESERVE_S:
+            log(f"SLA history: no time left for {dfrom:%d/%m}" + (f" – {dto:%d/%m}" if dto != dfrom else "")
+                + "; it is read at a next scan")
+            if n:
+                out["older_day"] = ""                    # not read: its turn comes again
+            break
+        sub = {**plan, "date_from": dfrom, "date_to": dto, "deadline": deadline,
+               "resume_page": plan.get("resume_page", 0) if n == 0 else 0}
+        got = read_history(browser, cfg, debug, sub, log)
+        out["items"] += got["items"]
+        for key in ("rows", "opened", "left", "failed"):
+            out[key] += got[key]
+        if n == 0:
+            out.update(timing=got["timing"], portal_total=got["portal_total"], resume_page=got["resume_page"])
+        if got.get("complete"):
+            d = dfrom
+            while d <= dto:
+                covered.add(d.isoformat())
+                d += timedelta(days=1)
+        elif n:
+            out["older_day"] = ""
+    out["covered"] = sorted(covered)
+    return out
 
 
 def day_start(cfg, general=None):
@@ -1892,10 +1944,13 @@ def fold_history_result(store, sink, now_iso, system_team=None):
                       if (v.get("day") and v["day"] >= oldest) or (not v.get("day") and v.get("id") in d["open"])
                       or ((v.get("fail") or {}).get("at") or "") >= oldest}
         if items:
-            watched = d.get("grid_from") if d.get("grid") else None      # the previous read's first request date
-            d["grid"] = sla_history.grid_state([it["grid"] for it in items], d.get("grid"), now_iso, cfg, watched)
-            d["grid_from"] = sink.get("date_from") or d.get("grid_from") or ""
-            out["unknown_wordings"] = sla_history.unknown_wordings(d["grid"], cfg)
+            fresh = sla_history.grid_state([it["grid"] for it in items], d.get("grid"), now_iso, cfg)
+            keep_from = sink.get("date_from") or now_iso[:10]
+            d["grid"] = sla_history.merge_grid(d.get("grid"), fresh, set(sink.get("covered") or ()), keep_from)
+            d["grid_from"] = keep_from
+            out["unknown_wordings"] = sla_history.unknown_wordings(fresh, cfg)
+        if sink.get("older_day"):
+            d["history_older_day"] = sink["older_day"]
         d["last_history"] = now_iso
         d["history_stats"] = {"at": now_iso, "rows": sink.get("rows", 0), "portal_total": sink.get("portal_total"),
                               "opened": sink.get("opened", 0), "resume_page": int(sink.get("resume_page") or 0),
@@ -1965,6 +2020,14 @@ def run(ctx, scraper=None):
         except Exception as exc:
             ctx.log(f"SLA history could not be recorded: {type(exc).__name__}: {scrub(str(exc), secrets)}")
     note_assignments(ctx, cfg, requests, secrets)
+    if sink and not ctx.dry_run:                          # today's numbers kept for the day-by-day view
+        try:
+            from .. import performance
+            from ...storage import Store
+            calls_store = Store(ctx.data_dir)
+            performance.save_day_log(ctx.store, calls_store, ctx.hub or {}, calls_store.users() or {}, now)
+        except Exception as exc:
+            ctx.log(f"SLA day log could not be kept: {type(exc).__name__}: {scrub(str(exc), secrets)}")
 
     by_user = summarize(requests)
     data = snapshot_data(requests, by_user, cfg)

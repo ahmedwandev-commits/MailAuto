@@ -1128,17 +1128,23 @@ class TestEndToEnd:
         assert got == [sla.norm(s) for s in samples]
 
 
-def test_the_inquiry_reaches_back_to_every_live_ticket_so_its_history_is_read(store):
-    """The analysis must know every open request: the inquiry window (the last ``history_days`` days) reaches back to
-    the oldest ticket of the last Live scan (a few days before it was sent to the team), at most HISTORY_REACH_DAYS."""
+def test_the_inquiry_follows_older_live_tickets_one_day_a_scan_never_a_month_at_once(store):
+    """The analysis must know every open request, but a search a month back took 37 result pages and the whole scan:
+    each scan searches the last ``history_days`` days plus ONE older day that still has a request in progress (a Live
+    ticket's request date is a few days before it was sent), the oldest first and the next one at the next scan; never
+    further back than HISTORY_REACH_DAYS."""
     ctx = make_ctx(store, None, NOW)
     plain = sla.history_plan(ctx, sla_settings(), NOW)
+    assert plain["date_from"] == NOW.date() - timedelta(days=2) and plain["slices"] == [(plain["date_from"], NOW.date())]
     store.write_snapshot("sla", {"requests": [{"key": "old", "sent_at": (NOW - timedelta(days=9)).isoformat()},
                                               {"key": "ancient", "sent_at": (NOW - timedelta(days=90)).isoformat()}]},
                          generated_at=NOW.isoformat(timespec="seconds"))
     plan = sla.history_plan(ctx, sla_settings(), NOW)
-    assert plain["date_from"] == NOW.date() - timedelta(days=2)                      # the default 3 days
-    assert plan["date_from"] == NOW.date() - timedelta(days=sla.HISTORY_REACH_DAYS - 1)   # capped, the 90-day one
-    store.write_snapshot("sla", {"requests": [{"key": "old", "sent_at": (NOW - timedelta(days=9)).isoformat()}]},
-                         generated_at=NOW.isoformat(timespec="seconds"))
-    assert sla.history_plan(ctx, sla_settings(), NOW)["date_from"] == NOW.date() - timedelta(days=12)
+    assert plan["date_from"] == NOW.date() - timedelta(days=2)                          # the recent window stays
+    first = NOW.date() - timedelta(days=12)                                              # sent 9 days ago, 3 before
+    assert plan["slices"][1] == (first, first) and plan["older_days"] == 4               # the 90-day one is too old
+    store.update_sla_history_state(lambda d: d.update(history_older_day=first.isoformat()))
+    after = sla.history_plan(ctx, sla_settings(), NOW)
+    assert after["slices"][1] == (first + timedelta(days=1),) * 2                       # the next one, in turn
+
+

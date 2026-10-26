@@ -192,13 +192,12 @@ def test_an_open_request_is_assigned_by_a_reviewer_and_that_line_is_its_assignme
 
 
 def test_finished_requests_are_read_first_so_the_days_numbers_are_complete():
-    """When a scan cannot open every row, the CLOSED requests come first (their history completes the day's executed /
-    not executed / SLA numbers), then the ones awaiting the reviewer, then the ones with a security user (the Live tab
-    counts from «تاريخ الارسال للسرية» and needs no history), then the rejected ones; a request still with the branch
-    has no SLA step to read."""
-    order = [sh.detail_priority(s, CFG) for s in ("تم التعزيز على التنفيذ", "تم التنفيذ", "اسناد لمستخدم السرية",
-                                                  "معلق", "رفض", "تسجيل")]
-    assert order[0] < order[1] < order[2] == order[3] < order[4] and order[5] is None
+    """When a scan cannot open every row, the FINISHED requests come first - confirmed, then rejected: one read gives
+    every stamp - then the ones awaiting the reviewer, then the ones with a security user (the Live tab counts from
+    «تاريخ الارسال للسرية» and needs no history); a request still with the branch has no SLA step to read."""
+    order = [sh.detail_priority(s, CFG) for s in ("تم التعزيز على التنفيذ", "رفض", "تم التنفيذ",
+                                                  "اسناد لمستخدم السرية", "معلق", "تسجيل")]
+    assert order[0] < order[1] < order[2] < order[3] == order[4] and order[5] is None
 
 
 # --------------------------------------------------- the first assignment of a live ticket, and since when its holder has it
@@ -441,3 +440,31 @@ def test_the_analysis_counts_a_request_that_moved_on_at_its_new_stage():
     assert "moved" not in cur["R4"]
     a = sh.analyze({"R3": cur["R3"]}, CFG, now="2026-10-21T13:00:00")
     assert a["buckets"]["closed"] == 1 and a["overall"]["n"] == 1 and a["requests_list"][0]["waiting_minutes"] is None
+
+
+# ------------------------------------------- a request is dated by what the scans WATCHED, never by a first sighting
+def test_a_request_seen_for_the_first_time_is_not_dated_today_unless_it_was_registered_today():
+    """A read reaching a month back sees thousands of old, long-finished requests at once: they are not "confirmed
+    today". Only a status change the scans watched, or a request registered today, is dated today."""
+    old = sh.grid_rows(HEAD, [grid_row(status="تم التعزيز على التنفيذ", date="01-10-2026")])
+    new = sh.grid_rows(HEAD, [grid_row(status="تم التعزيز على التنفيذ", date="21-10-2026", system="T24")])
+    g = sh.grid_state(old + new, {}, "2026-10-21T12:00:00", CFG)
+    assert g[old[0]["key"]]["since_known"] is False and sh.grid_event_day(g[old[0]["key"]]) == "2026-10-01"
+    assert g[new[0]["key"]]["since_known"] is True and sh.grid_event_day(g[new[0]["key"]]) == "2026-10-21"
+    watched = sh.grid_rows(HEAD, [grid_row(status="اسناد لمستخدم السرية", date="01-10-2026", system="Card")])
+    prev = sh.grid_state(watched, {}, "2026-10-21T09:00:00", CFG)
+    moved = sh.grid_rows(HEAD, [grid_row(status="تم التعزيز على التنفيذ", date="01-10-2026", system="Card")])
+    g2 = sh.grid_state(moved, prev, "2026-10-21T12:00:00", CFG)
+    assert g2[moved[0]["key"]]["since_known"] is True and sh.grid_event_day(g2[moved[0]["key"]]) == "2026-10-21"
+    legacy = {"status": "تم التعزيز على التنفيذ", "since": "2026-10-21T08:00:00", "request_date": "2026-10-01T00:00:00"}
+    assert sh.grid_event_day(legacy) == "2026-10-01"                 # an entry kept before: not trusted
+
+
+def test_the_grid_keeps_only_what_still_matters_so_every_page_stays_fast():
+    prev = {"a": {"request_date": "2026-10-20T00:00:00", "stage": "closed"},       # recent: kept
+            "b": {"request_date": "2026-10-01T00:00:00", "stage": "closed"},       # old and finished: dropped
+            "c": {"request_date": "2026-10-01T00:00:00", "stage": "open"},         # old, still open: followed
+            "d": {"request_date": "2026-10-19T00:00:00", "stage": "open"}}         # its day read again: replaced
+    fresh = {"e": {"request_date": "2026-10-19T00:00:00", "stage": "closed"}}
+    got = sh.merge_grid(prev, fresh, {"2026-10-19"}, "2026-10-19")
+    assert sorted(got) == ["a", "c", "e"]

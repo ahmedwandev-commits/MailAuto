@@ -64,3 +64,39 @@ def test_the_daily_summary_names_the_best_performers_at_its_checkpoint(tmp_path)
     assert "Best performers - 13:00 checkpoint" in html and "Person 7001" in html
     flex = ds.collect(ctx, NOW, "Flex Cube")
     assert [r["user_id"] for r in flex["people"]["rows"]] == ["7001"]
+
+
+def test_every_scan_keeps_the_days_numbers_and_each_scope_reads_its_own(tmp_path):
+    """The day's numbers are kept (refreshed at every scan): every team's totals, a manager's own teams summed, one
+    employee's own row - and the best performer of each."""
+    ops, data = world(tmp_path)
+    _sla_day(ops)
+    _, hub, users = _hub_and_users(ops, data)
+    log = performance.save_day_log(ops, Store(str(data)), hub, users, NOW)
+    assert log["totals"]["executed"] == 1 and log["totals"]["rejected"] == 1
+    assert (ops.read_history("sla", DAY) or {}).get("day_log", {}).get("at") == "2026-10-11T13:05:00"
+    every = performance.read_day_logs(ops, "", "", None)
+    assert [(d["day"], d["executed"], d["rejected"]) for d in every] == [(DAY, 1, 1)]
+    assert every[0]["best"] == {"name": "Person 7001", "total": 4}
+    card = performance.read_day_logs(ops, "", "", ("Card Management",))
+    assert (card[0]["executed"], card[0]["rejected"]) == (0, 1) and card[0]["best"]["name"] == "Person 7002"
+    one = performance.read_day_logs(ops, "", "", None, person="Person 7001")
+    assert (one[0]["executed"], one[0]["exec_n"]) == (1, 1) and one[0]["exec_average_minutes"] == 40.0
+
+
+def test_a_team_left_out_of_the_sla_never_shows_even_through_the_person_who_executed(tmp_path):
+    """Third Party is left out of the SLA: a request executed by a Third Party person is not counted for any team."""
+    ops, data = world(tmp_path)
+    from calllog.storage import Store as Calls
+    calls = Calls(str(data))
+    calls.create_user({"user_id": "7009", "name": "Person 7009", "role": "user", "active": True, "team": "Third Party",
+                       "email": "tp@example.test"})
+    ops.update_sla_closed_day(DAY, lambda d: d.update({"R9": {
+        "id": "R9", "source": "history", "stage": "closed", "outcome": "completed", "final_outcome": "executed",
+        "system": "Flexcube", "first_assigned_at": f"{DAY}T09:00:00", "assigned_at": f"{DAY}T09:00:00",
+        "executed_at": f"{DAY}T09:30:00", "exec_outcome": "executed", "confirmed_at": f"{DAY}T09:40:00",
+        "executor": "Person 7009", "executor_no": "7009"}}))
+    ops.update_sla_history_state(lambda d: d.update(open={}, index={}, grid={}, last_history=f"{DAY}T13:00:00"))
+    _, hub, users = _hub_and_users(ops, data)
+    sc = performance.sla_scope(ops, hub, users, DAY, DAY, None)
+    assert "R9" not in sc["records"]

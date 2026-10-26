@@ -260,3 +260,39 @@ def test_a_scan_that_cannot_read_every_row_starts_the_next_one_where_it_stopped(
     last_page = {r["number"] for r in reqs[9:]}
     assert set(opened[:3]) == last_page                  # page 4 first, then pages 1, 2 ...
     assert second["opened"] == 10 and second["resume_page"] == 2
+
+
+# ------------------------------------------------------- the recent days + one older day, within one time budget
+def test_each_scan_reads_the_recent_days_and_one_older_day_within_its_time_budget(browser, tmp_path):
+    """The search never reaches a month back at once: the recent window, then the one older day with a request still
+    in progress, each its own search; both are «covered» when every row of them was read."""
+    from datetime import timedelta
+    older = DAY - timedelta(days=9)
+    reqs = [request(8400001, DAY, "تم التعزيز على التنفيذ", executor="ج مستخدم سرية", history=six_line_history()),
+            request(8400002, older, "اسناد لمستخدم السرية", executor="مستخدم اول", history=open_history())]
+    with FakeInquiryPortal(reqs) as portal:
+        raw = settings.deep_merge({"sla": {"username": "700101", "base_url": portal.url}}, {})
+        cfg = settings.validate(raw)[0]["sla"]
+        cfg["timeout_seconds"] = 8
+        plan = {"date_from": DAY, "date_to": DAY, "slices": [(DAY, DAY), (older, older)], "older_day": older.isoformat(),
+                "index": {}, "cfg": CFG, "excluded": None, "seconds": 120}
+        out = sla.read_history_slices(browser, cfg, sla.Debug(False, tmp_path / "debug"), plan, lambda m: None)
+    assert portal.searches == [("21-10-2026", "21-10-2026"), ("12-10-2026", "12-10-2026")]
+    assert out["covered"] == ["2026-10-12", "2026-10-21"] and out["older_day"] == "2026-10-12"
+    assert sorted(it["id"] for it in out["items"] if it.get("id")) == ["8400001", "8400002"]
+
+
+def test_the_result_pages_are_not_walked_past_the_time_budget(browser, tmp_path):
+    """A walk that would outlive the scan stops at the budget: the run is never killed, and the days of a slice cut
+    short are not «covered» (their other rows keep what the earlier scans read)."""
+    reqs = _many(9)
+    with FakeInquiryPortal(reqs, server_page=3) as portal:
+        raw = settings.deep_merge({"sla": {"username": "700101", "base_url": portal.url}}, {})
+        cfg = settings.validate(raw)[0]["sla"]
+        cfg["timeout_seconds"] = 8
+        logs = []
+        plan = {"date_from": DAY, "date_to": DAY, "index": {}, "cfg": CFG, "excluded": None,
+                "deadline": __import__("time").monotonic() + sla.PAGE_RESERVE_S}    # spent once page 1 is read
+        out = sla.read_history(browser, cfg, sla.Debug(False, tmp_path / "debug"), plan, logs.append)
+    assert out["complete"] is False and out["rows"] == 3          # page 1 only; its rows are read in the reserve
+    assert any("the time budget ran out after" in line for line in logs)

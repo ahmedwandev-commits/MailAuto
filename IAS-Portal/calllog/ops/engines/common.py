@@ -3,6 +3,7 @@
 Nothing here may import win32com / playwright / keyring at module level (they are imported inside the functions
 that need them), so engines stay importable and testable on any OS.
 """
+import functools
 import html
 import os
 import re
@@ -121,7 +122,14 @@ _ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
 
 
 def norm_arabic(text):
-    """Normalise Arabic text for matching (tatweel, diacritics, alef/yaa/taa marbuta variants, digits, spaces)."""
+    """Normalise Arabic text for matching (tatweel, diacritics, alef/yaa/taa marbuta variants, digits, spaces).
+    The same few thousand names, statuses and applications come back hundreds of thousands of times on a big
+    inquiry grid: strings are remembered (``_norm_text``)."""
+    return _norm_text(text) if isinstance(text, str) else _norm_text(str(text or ""))
+
+
+@functools.lru_cache(maxsize=65536)
+def _norm_text(text):
     s = str(text or "").translate(_ARABIC_DIGITS).replace("ـ", "")
     s = re.sub(r"[ً-ْ]", "", s)
     s = re.sub("[إأآ]", "ا", s).replace("ة", "ه").replace("ى", "ي")

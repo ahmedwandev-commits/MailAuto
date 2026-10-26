@@ -298,6 +298,25 @@ HOW TO UPDATE (your data is kept)
    - Insights > Analysis opens with "Best performers" for any day; a manager sees their own team only. An earlier
      day's e-mails come from the replies the e-mail report keeps each day (from this update on).
 
+29. SLA: RIGHT NUMBERS, NO MORE TIMED-OUT SCANS, FAST PAGES, A DAY-BY-DAY LOG
+   - The numbers: a request whose details are not read yet counts on a day only when the scans watched its status
+     change that day, or when it was registered that day - never because it was seen for the first time (a search a
+     month back had made thousands of old requests "confirmed today").
+   - The scan: it searches the recent days (Search the last N days) plus ONE older day that still has a request in
+     progress, a different one each scan - never a month at once (37 result pages had taken the whole scan and it was
+     stopped after 5 minutes). Walking the result pages stops at the time budget too, so a scan is never killed.
+     The finished requests (confirmed, rejected) are read first, the newest first.
+   - The pages are fast again: the scan keeps only the recent days and the requests still in progress, and the
+     analysis no longer repeats the same work for every row (8 s -> under 1 s on the largest grid).
+   - Third Party is left out also when the person who executed a request is of the Third Party team.
+   - The detailed analysis (stages, branches, assigners, the portal check) is gone: the SLA tab shows the security
+     team's numbers only.
+   - "Applications with no team" (administrators): every application whose requests count under "(no team)", with
+     a team list and Save - saved in Auto Assign > Applications.
+   - "Day by day": every scan keeps the day's numbers (came, executed, not executed, rejected, confirmed, the
+     execution time, each team, each employee, the best performer); the SLA tab lists the last 30 days - the team or
+     the employee picked in the filter, a manager's own team.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -535,3 +554,21 @@ IAS PORTAL - الجديد في هذا التحديث
      بس.
    - Insights > Analysis بيفتح بكارت "Best performers" لأي يوم، والمدير بيشوف فريقه بس. إيميلات الأيام اللي فاتت
      بتيجي من الردود اللي تقرير الإيميل بيحفظها كل يوم (من التحديث ده).
+
+29. الـ SLA: أرقام صح، مفيش scan بيقف من الوقت، صفحات سريعة، وسجل يوم بيوم
+   - الأرقام: الطلب اللي تفاصيله لسه ما اتقرتش بيتحسب على يوم بس لو الـ scans شافت حالته بتتغير اليوم ده، أو لو
+     اتسجل اليوم ده - عمره ما بيتحسب علشان اتشاف لأول مرة (البحث اللي رجع شهر كان خلى آلاف الطلبات القديمة
+     "confirmed today").
+   - الـ scan: بيدور في الأيام الأخيرة (Search the last N days) + يوم واحد أقدم فيه طلب لسه شغال، يوم مختلف كل
+     scan - عمره ما بيدور شهر مرة واحدة (37 صفحة نتايج كانوا بياخدوا الـ scan كله ويتوقف بعد 5 دقايق). والمشي في
+     صفحات النتايج كمان بيقف عند الوقت المسموح، فالـ scan عمره ما بيتقفل. والطلبات المنتهية (اتعززت، اترفضت)
+     بتتقري الأول، الأحدث الأول.
+   - الصفحات بقت سريعة تاني: الـ scan بيحتفظ بالأيام الأخيرة والطلبات اللي لسه شغالة بس، والتحليل مبقاش بيكرر نفس
+     الشغل لكل صف (8 ثواني -> أقل من ثانية على أكبر جدول).
+   - الـ Third Party برة كمان لو اللي نفذ الطلب من فريق الـ Third Party.
+   - التحليل التفصيلي (المراحل، الفروع، موظفين الاسناد، مقارنة البورتال) اتشال: تاب الـ SLA بيعرض أرقام فريق
+     السرية بس.
+   - "Applications with no team" (للأدمن): كل تطبيق طلباته بتتعد تحت "(no team)"، مع قايمة الفرق وزرار Save -
+     بيتحفظ في Auto Assign > Applications.
+   - "Day by day": كل scan بيحفظ أرقام اليوم (جه، اتنفذ، متنفذش، اترفض، اتعزز، وقت التنفيذ، كل فريق، كل موظف،
+     وأحسن أداء)، وتاب الـ SLA بيعرض آخر 30 يوم - للفريق أو الموظف اللي في الفلتر، والمدير فريقه بس.

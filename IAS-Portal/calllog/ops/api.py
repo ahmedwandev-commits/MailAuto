@@ -1083,7 +1083,8 @@ def sla_analysis_get():
     state = ops().read_sla_history_state() or {}
     memo_key = (overlay.scope_label(scope), tuple(sorted(filt.items())), state.get("last_history") or "",
                 json.dumps(hub_cfg().get("sla") or {}, sort_keys=True, default=str),
-                json.dumps((ops().read_sla_records() or {}).get("config") or {}, sort_keys=True, default=str))
+                json.dumps((ops().read_sla_records() or {}).get("config") or {}, sort_keys=True, default=str),
+                json.dumps(_aa_config().get("applications") or [], sort_keys=True, default=str))   # the team rule
     memo = current_app.extensions.setdefault("ops_sla_view", {})
     hit = memo.get(memo_key)
     if hit and time.monotonic() - hit[0] < SLA_VIEW_TTL:
@@ -1123,6 +1124,14 @@ def sla_analysis_get():
     period["portal"] = {**sla_history.portal_comparison(view["grid"], view["index"], filt["date_from"], filt["date_to"],
                                                         cfg),
                         "last_read": view["recorder"]["last_read"]}
+    if scope is None:                                       # the administrator: the applications no rule gives a team
+        apps = {}
+        for r in list(view["records"].values()) + list(view["grid"].values()):
+            if r.get("team") == teams.NO_TEAM and str(r.get("system") or "").strip():
+                name = str(r["system"]).strip()
+                apps[name] = apps.get(name, 0) + 1
+        period["no_team_apps"] = [{"system": k, "requests": n} for k, n in sorted(apps.items(), key=lambda kv: -kv[1])][:100]
+        period["team_names"] = [t for t in hub_cfg()["email"]["teams"] if t not in (overlay.UNCLASSIFIED,)]
     answer = dict(available=True, server_time=now, scope=overlay.scope_label(scope), unmapped=view["unmapped"],
                   scan_interval=health.module_interval(hub_cfg(), "sla"), recorder=view["recorder"],
                   left_out=view["left_out"], options=options, filter={k: (v or "") for k, v in filt.items()}, **period)
@@ -1159,6 +1168,23 @@ def sla_period(scope, filt):
     records = sla_history.with_current_stage(view["records"], view["grid"], view["index"], view["cfg"])
     stubs = sla_history.grid_stubs(view["grid"], view["index"], records, view["cfg"])
     return view, sla_history.filter_records({**stubs, **records}, filt)
+
+
+@bp.get("/sla-days")
+@auth.ops_view_required
+def sla_days_get():
+    """The kept day-by-day numbers of the security team (``?from&to``, the last 30 days by default; ``team``,
+    ``executor`` narrow them) - a manager's own team(s) only (calllog/ops/performance.read_day_logs)."""
+    today = auth.now().date()
+    d_to = parse_day(request.args.get("to")) if request.args.get("to") else today.isoformat()
+    d_from = parse_day(request.args.get("from")) if request.args.get("from") else (
+        date.fromisoformat(d_to) - timedelta(days=29)).isoformat()
+    scope = auth.team_scope()
+    team = str(request.args.get("team") or "").strip()[:80]
+    if team and (scope is None or teams.in_scope(scope, team)):
+        scope = (team,)
+    rows = performance.read_day_logs(ops(), d_from, d_to, scope, str(request.args.get("executor") or "").strip()[:150])
+    return jsonify(days=rows, date_from=d_from, date_to=d_to, scope=overlay.scope_label(scope))
 
 
 @bp.get("/performance")
@@ -1393,8 +1419,13 @@ def sla_history_view(scope, date_from="", date_to=""):
     resolver = team_resolver()
     excluded = teams.sla_exclusion(sla_cfg, resolver) or (lambda system: False)
 
-    def team_of(system, number="", name=""):
-        return teams.sla_person_team(system, number, name, sla_history_people(), resolver)
+    seen = {}
+
+    def team_of(system, number="", name=""):           # thousands of rows, a few hundred people and applications
+        key = (system, number, name)
+        if key not in seen:
+            seen[key] = teams.sla_person_team(system, number, name, sla_history_people(), resolver)
+        return seen[key]
 
     def link(r):
         person_no = r.get("executor_no") if r.get("executor_no") or r.get("executor") else ""
@@ -1415,6 +1446,9 @@ def sla_history_view(scope, date_from="", date_to=""):
     records.update(open_recs)
     # records read under older status rules are brought up to the current ones (sla_history.rederive)
     records = {k: link(sla_history.rederive(r, cfg)) for k, r in records.items() if not excluded(r.get("system"))}
+    # a team left out of the SLA (Third Party by default) never shows, also when its person executed the request
+    out_teams = {str(t).strip().casefold() for t in sla_cfg.get("exclude_teams") or [] if str(t).strip()}
+    records = {k: r for k, r in records.items() if str(r["team"]).casefold() not in out_teams}
     unmapped = sum(1 for r in records.values() if r["team"] == teams.NO_TEAM)
     # the grid names the security user holding a request but not their number: the number they act under in the
     # history (any request they executed or confirmed) links them, else their account's security name does
@@ -1428,7 +1462,9 @@ def sla_history_view(scope, date_from="", date_to=""):
         if excluded(row.get("system")):
             continue
         holder = row.get("holder") or ""
-        grid[key] = {**row, "team": team_of(row.get("system"), number_of.get(sla_history._norm(holder), ""), holder)}
+        team = team_of(row.get("system"), number_of.get(sla_history._norm(holder), ""), holder)
+        if str(team).casefold() not in out_teams:
+            grid[key] = {**row, "team": team}
     if scope is not None:
         records = {k: r for k, r in records.items() if teams.in_scope(scope, r["team"])}
         grid = {k: r for k, r in grid.items() if teams.in_scope(scope, r["team"])}

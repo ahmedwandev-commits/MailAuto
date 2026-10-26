@@ -33,7 +33,15 @@ def sla_scope(store, hub, users, day_from, day_to, scope=None):
     resolver = _resolver(store, hub, users)
     excluded = teams.sla_exclusion(sla_cfg, resolver) or (lambda system: False)
     people = teams.sla_people(users)
-    team_of = lambda system, number="", name="": teams.sla_person_team(system, number, name, people, resolver)  # noqa: E731
+    out_teams = {str(t).strip().casefold() for t in sla_cfg.get("exclude_teams") or [] if str(t).strip()}
+    seen = {}
+
+    def team_of(system, number="", name=""):           # thousands of rows, a few hundred people and applications
+        key = (system, number, name)
+        if key not in seen:
+            seen[key] = teams.sla_person_team(system, number, name, people, resolver)
+        return seen[key]
+    shown = lambda t: teams.in_scope(scope, t) and str(t).casefold() not in out_teams   # noqa: E731 - never Third Party
     live = []
     snap = store.read_snapshot("sla")
     if snap:
@@ -55,7 +63,7 @@ def sla_scope(store, hub, users, day_from, day_to, scope=None):
             continue
         number = r.get("executor_no") if r.get("executor_no") or r.get("executor") else ""
         t = team_of(r.get("system"), number, r.get("executor") or r.get("holder"))
-        if teams.in_scope(scope, t):
+        if shown(t):
             records[k] = {**r, "team": t, "teams": [t]}
     number_of = {}
     for r in records.values():
@@ -69,7 +77,7 @@ def sla_scope(store, hub, users, day_from, day_to, scope=None):
             continue
         holder = g.get("holder") or ""
         t = team_of(g.get("system"), number_of.get(sla_history._norm(holder), ""), holder)
-        if teams.in_scope(scope, t):
+        if shown(t):
             grid[key] = {**g, "team": t}
     return {"records": records, "grid": grid, "index": state.get("index") or {}, "cfg": cfg, "live": live,
             "resolver": resolver, "people": people, "number_of": number_of,
@@ -165,3 +173,70 @@ def people_day(store, calls_store, hub, users, day, now, scope=None, top=None):
     for n, r in enumerate(rows, 1):
         r["rank"] = n
     return rows[:top] if top else rows
+
+
+# ------------------------------------------------------------------------- the day-by-day log (kept for good)
+DAY_LOG_KEYS = ("arrived", "executed", "not_executed", "rejected", "closed", "closed_executed", "closed_not",
+                "from_grid")
+
+
+def save_day_log(store, calls_store, hub, users, now):
+    """Keep today's numbers in the SLA history day file (``day_log``), refreshed at every scan - the last one of the day
+    stays: what came to the security team, what it did, its times, each team, each security user and the best
+    performers, so performance can be followed day by day. Returns the log (None when there is no SLA history)."""
+    day = now.date().isoformat()
+    sc = sla_scope(store, hub, users, day, day, None)
+    if not sc["available"]:
+        return None
+    nums = sla_history.period_numbers(sc["records"], sc["grid"], sc["index"], sc["cfg"], day, day,
+                                      now.strftime("%Y-%m-%dT%H:%M:%S"), live=sc["live"],
+                                      live_team=lambda r: sc["resolver"].sla_team(teams.sla_system(r), r.get("security_user")))
+    log = {"at": now.strftime("%Y-%m-%dT%H:%M:%S"), "totals": {k: nums[k] for k in DAY_LOG_KEYS},
+           "times": nums["times"], "by_team": nums["by_team"], "by_person": nums["by_person"],
+           "people": people_day(store, calls_store, hub, users, day, now, top=50)}
+    store.update_history("sla", day, lambda d: d.update(day_log=log))
+    return log
+
+
+def _team_sum(rows, scope):
+    """Totals and execution time of the team rows ``scope`` may see (exact: counts add up, the average is weighted)."""
+    mine = [r for r in rows or [] if teams.in_scope(scope, r.get("team"))]
+    out = {k: sum(int(r.get(k) or 0) for r in mine) for k in DAY_LOG_KEYS if k != "from_grid"}
+    n = sum(int(r.get("exec_n") or 0) for r in mine)
+    total = sum((r.get("exec_average_minutes") or 0) * int(r.get("exec_n") or 0) for r in mine)
+    out.update(exec_n=n, exec_average_minutes=round(total / n, 1) if n else None,
+               exec_within_pct=round(100.0 * sum(int(r.get("exec_within") or 0) for r in mine) / n, 1) if n else None)
+    return out
+
+
+def read_day_logs(store, day_from, day_to, scope=None, person=""):
+    """The kept days between ``day_from`` and ``day_to`` (newest first) as ``scope`` may see them: [{day, at, came,
+    executed, not_executed, rejected, closed, exec_average_minutes, exec_within_pct, best}] - every team's totals, a
+    manager's own teams summed, or (``person``) one security user's own row."""
+    want = sla_history._norm(person) if person else ""
+    out = []
+    for day in reversed(store.history_days("sla")):
+        if (day_from and day < day_from) or (day_to and day > day_to):
+            continue
+        log = (store.read_history("sla", day) or {}).get("day_log")
+        if not isinstance(log, dict):
+            continue
+        if want:
+            row = next((r for r in log.get("by_person") or [] if sla_history._norm(r.get("person")) == want), None)
+            if row is None or (scope is not None and not teams.in_scope(scope, row.get("team"))):
+                continue
+            nums = {k: row.get(k, 0) for k in DAY_LOG_KEYS if k != "from_grid"}
+            nums.update(exec_n=row.get("exec_n", 0), exec_average_minutes=row.get("exec_average_minutes"),
+                        exec_within_pct=row.get("exec_within_pct"))
+        elif scope is None:
+            t, ex = log.get("totals") or {}, (log.get("times") or {}).get("execution") or {}
+            nums = {k: t.get(k, 0) for k in DAY_LOG_KEYS if k != "from_grid"}
+            nums.update(exec_n=ex.get("n", 0), exec_average_minutes=ex.get("average_minutes"),
+                        exec_within_pct=ex.get("within_pct"))
+        else:
+            nums = _team_sum(log.get("by_team"), scope)
+        best = next((p for p in log.get("people") or []
+                     if scope is None or teams.in_scope(scope, p.get("team"))), None)
+        out.append({"day": day, "at": log.get("at", ""), **nums,
+                    "best": {"name": best["name"], "total": best["total"]} if best else None})
+    return out

@@ -18,6 +18,7 @@ request number, so a row is keyed on its own fixed columns) and decide which row
 status changed). ``fold_history`` writes the result into the SLA recording (``sla_records``), and ``analyze`` builds the
 SLA Analysis from it. Everything is live and kept as history: nothing is uploaded. Pure functions over plain dicts; the
 status labels come from the SLA settings (``sla_records.default_config()['statuses']``)."""
+import functools
 import hashlib
 import re
 from datetime import datetime
@@ -67,8 +68,13 @@ def _clean(text):
     return " ".join(str(text or "").replace("﻿", "").split())
 
 
-def _norm(text):
+@functools.lru_cache(maxsize=65536)
+def _norm_str(text):
     return norm_arabic(_clean(text)).lower()
+
+
+def _norm(text):
+    return _norm_str(text) if isinstance(text, str) else _norm_str(str(text or ""))
 
 
 def parse_time(text):
@@ -112,6 +118,7 @@ def find_col(headers, wanted):
 
 
 _LABELS_MEMO = {}
+_LABELS_LAST = {}                    # the statuses object seen last and its labels (one grid: one settings object)
 
 
 def _labels(cfg):
@@ -119,6 +126,9 @@ def _labels(cfg):
     A current-status word («تحت التنفيذ», «قيد الإجراء») is never a step, even where an older saved setting still
     lists it under the assignment (NBE OpsHub did): it would restart the security user's clock."""
     statuses = (cfg or {}).get("statuses") or {}
+    last = _LABELS_LAST.get("cfg")
+    if last is not None and last[0] is statuses:          # the same settings object again (a whole grid): no key
+        return last[1]
     memo_key = repr(sorted((k, tuple(v or ())) for k, v in statuses.items()))
     hit = _LABELS_MEMO.get(memo_key)
     if hit is None:
@@ -136,6 +146,7 @@ def _labels(cfg):
         if len(_LABELS_MEMO) > 32:
             _LABELS_MEMO.clear()
         hit = _LABELS_MEMO[memo_key] = (memo_key, pairs, {})
+    _LABELS_LAST["cfg"] = (statuses, hit)
     return hit
 
 
@@ -529,48 +540,64 @@ def row_stage(g, cfg):
 
 
 def detail_priority(status, cfg, holder=None):
-    """Which rows' details are read first when a scan cannot read them all: a CLOSED request (its history completes the
-    day's numbers: executed, not executed, the SLA), then one awaiting the reviewer, then one still with a security
-    user (the Live tab counts from «تاريخ الارسال للسرية» and needs no history), then a rejected one (only its outcome
-    is new). None = never opened (still with the branch: no SLA step yet)."""
-    return {"closed": 0, "awaiting": 1, "open": 2, "rejected": 3}.get(grid_stage(status, cfg, holder))
+    """Which rows' details are read first when a scan cannot read them all: a FINISHED request - confirmed, then
+    rejected (one read gives every stamp: the day's executed / not executed / rejected numbers and their times) -
+    then one awaiting the reviewer, then one still with a security user (the Live tab counts from «تاريخ الارسال
+    للسرية» and needs no history). None = never opened (still with the branch: no SLA step yet)."""
+    return {"closed": 0, "rejected": 1, "awaiting": 2, "open": 3}.get(grid_stage(status, cfg, holder))
 
 
 SECURITY_STAGES = ("open", "awaiting", "closed", "rejected")
 
 
 def grid_state(grid, previous, now, cfg, watched_from=None):
-    """The latest inquiry grid as {key: {status, stage, system, holder, checker, employee, form, request_date, since,
+    """The latest inquiry rows as {key: {status, stage, system, holder, checker, employee, form, request_date, since,
     since_known, entered, known}}: what is open / awaiting the reviewer RIGHT NOW (complete even before a row's details
     are read). ``since`` = when the row was first seen in its current status (kept across scans); ``since_known`` =
-    that moment is when it got that status (the scans watched it change, or it is new) - not the first read of a request
-    that already had it. ``entered`` = when it was first seen with the security team (open, awaiting, closed, rejected)
-    while watched ("" = not known: it already was at the first read). ``watched_from`` = the first request date the
-    PREVIOUS read covered (None = there was none): a row it did not list but should have is new now. ``known`` = the
-    settings name its wording."""
+    that moment is when it GOT that status: the scans watched the status change (the row was in the previous read with
+    another status), or the request was registered that day - never because a row is seen for the first time (a read
+    reaching further back sees thousands of old requests at once). ``entered`` = when the scans watched it reach the
+    security team ("" = not known). ``known`` = the settings name its wording. (``watched_from`` is no longer used.)"""
     out = {}
+    today = _day(now)
     for g in grid or []:
         prev = (previous or {}).get(g["key"])
         day = parse_time(g.get("date"))
+        born_today = bool(day) and day.strftime("%Y-%m-%d") == today
         stage = row_stage(g, cfg)
         if prev:
             same = _norm(prev.get("status")) == _norm(g.get("status"))
             since = prev.get("since") if same and prev.get("since") else now
-            since_known = bool(prev.get("since_known", True)) if same else True
+            since_known = bool(prev.get("since_known")) if same else True
             entered = prev.get("entered") or ""
-            if not entered and stage in SECURITY_STAGES and prev.get("stage") == "pre":
+            if not entered and stage in SECURITY_STAGES and (prev.get("stage") == "pre" or born_today):
                 entered = now                             # watched it reach the security team
         else:
-            new = watched_from is not None and bool(day) and day.strftime("%Y-%m-%d") >= str(watched_from)[:10]
-            since, since_known = now, new
-            entered = now if new and stage in SECURITY_STAGES else ""
+            since, since_known = now, born_today
+            entered = now if born_today and stage in SECURITY_STAGES else ""
         out[g["key"]] = {"status": _clean(g.get("status")), "stage": stage,
                          "system": _clean(g.get("system")), "holder": _clean(g.get("executor")),
                          "checker": _clean(g.get("checker")), "employee": _clean(g.get("employee")),
                          "request_type": _clean(g.get("request_type")), "user_no": _clean(g.get("user_no")),
-                         "assigner": _clean(g.get("assigner")), "form": _clean(g.get("form")), "request_date": day.strftime(_FMT) if day else "",
+                         "assigner": _clean(g.get("assigner")), "form": _clean(g.get("form")),
+                         "request_date": day.strftime(_FMT) if day else "",
                          "since": since, "since_known": since_known, "entered": entered,
                          "known": known_status(g.get("status"), cfg)}
+    return out
+
+
+def merge_grid(previous, fresh, covered, keep_from):
+    """The grid kept after a read: the rows just read (``fresh``), and of the earlier ones only those of request days
+    this read did not cover completely (``covered``: a set of days) that still matter - with the security team and not
+    finished, or of the recent window (day >= ``keep_from``). A request already finished, of an older day, is not kept:
+    its outcome is known and the grid stays small (thousands of old rows made every page slow)."""
+    out = {}
+    for key, g in (previous or {}).items():
+        day = _day(g.get("request_date"))
+        if key in fresh or (day and day in covered) or (day and day < keep_from and g.get("stage") not in ("open", "awaiting")):
+            continue
+        out[key] = g
+    out.update(fresh)
     return out
 
 
@@ -822,15 +849,16 @@ def with_current_stage(records, grid, index, cfg):
 
 
 def grid_event_day(g):
-    """The day this grid row got its CURRENT status: when the scans saw the status change (``since``), else - a row
-    already in it at the first read - its request date. ``grid_event_at``: the moment, "" when only the day is known."""
-    if g.get("since_known", True) and _clean(g.get("since")):
+    """The day this grid row got its CURRENT status: when the scans watched the status change (``since``), else its
+    request date (a request registered that day did everything that day). ``grid_event_at``: the moment, "" when only
+    the day is known."""
+    if g.get("since_known") and _clean(g.get("since")):
         return _day(g.get("since"))
     return _day(g.get("request_date"))
 
 
 def grid_event_at(g):
-    return _clean(g.get("since")) if g.get("since_known", True) and _clean(g.get("since")) else ""
+    return _clean(g.get("since")) if g.get("since_known") and _clean(g.get("since")) else ""
 
 
 def grid_day(g, day):
@@ -860,8 +888,12 @@ def _tally():
 def _tally_out(t, targets):
     out = {k: t[k] for k in _TALLY_KEYS}
     ex = _times(t["_exec"], targets.get("work"))
+    target = targets.get("work")
     out.update(exec_n=ex["n"], exec_median_minutes=ex["median_minutes"], exec_average_minutes=ex["average_minutes"],
-               exec_within_pct=ex["within_pct"])
+               exec_within_pct=ex["within_pct"],
+               exec_within=sum(1 for v in t["_exec"] if v is not None and target and v <= target))
+    if t.get("_teams"):                                  # a person: the team they worked for most
+        out["team"] = max(t["_teams"].items(), key=lambda kv: kv[1])[0]
     return out
 
 
@@ -906,6 +938,9 @@ def period_numbers(records, grid, index, cfg, date_from, date_to, now, live=None
             if book is people:
                 names.setdefault(k, who)
             t = book.setdefault(k, _tally())
+            if book is people:
+                t.setdefault("_teams", {})
+                t["_teams"][_clean(team) or "—"] = t["_teams"].get(_clean(team) or "—", 0) + 1
             if key:
                 t[key] += n
             if clock and minutes is not None:
