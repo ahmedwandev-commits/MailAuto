@@ -509,7 +509,19 @@
       h("dd", { "data-portal": key }, h("strong", {}, fmtNum(p[key] || 0)), (sub[key] || note) ? h("span", { class: "hint" }, ` · ${sub[key] || note}`) : null)]);
     return OPS.card("Compared with the portal", { hint: `«الاستفسار عن الطلبات» · ${period}${d.scope ? ` · ${d.scope}` : ""}${p.last_read ? ` · read ${fmtStamp(p.last_read)}` : ""}` },
       h("dl", { class: "op-defs sx-portal" }, ...facts),
+      readNote(d),
       h("p", { class: "hint" }, "Search the same dates on the portal: its number of results should be «Inquiry rows». Third Party is left out here, as everywhere in the SLA."));
+  }
+
+  /** The last scan against the portal's own «اجمالي عدد الطلبات»: every result page («عرض التالي») read, or not. */
+  function readNote(d) {
+    const st = ((d.recorder || {}).stats) || {};
+    if (st.portal_total == null) return null;
+    const all = (st.rows || 0) >= st.portal_total;
+    return h("p", { class: `op-note op-t-${all ? "ok" : "warn"} op-block`, "data-portal-read": all ? "all" : "short" },
+      OPS.icon(all ? "check" : "alert"),
+      h("span", {}, all ? `The last scan read all ${fmtNum(st.portal_total)} requests the portal lists («اجمالي عدد الطلبات»), page after page («عرض التالي»).`
+        : `The last scan read ${fmtNum(st.rows || 0)} of the ${fmtNum(st.portal_total)} requests the portal lists («اجمالي عدد الطلبات»): the next result page («عرض التالي») did not open. The rest are read at the next scan.`));
   }
 
   function renderAnalysis(d) {

@@ -544,6 +544,9 @@
         { path: "summary.send_times", type: "times", label: "Checkpoints (send at)", hint: "24-hour times, comma separated, like 10:00, 13:00, 15:00. Only times inside the active hours are sent." },
         { path: "summary.to", type: "lines", kind: "email", label: "To", hint: "One address per line." },
         { path: "summary.cc", type: "lines", kind: "email", label: "Cc", hint: "One address per line." },
+        { path: "summary.team_recipients", type: "kv", label: "Team summaries", wide: true,
+          hint: "Each team listed here gets its OWN summary at every checkpoint, with only its own calls, e-mails, tickets and change requests.",
+          kv: { key: "team", value: "recipients", add: "Add a team", empty: "No team summaries: To / Cc above get every team's numbers." } },
         { path: "summary.subject_prefix", type: "text", max: 120, label: "Subject" },
         { path: "summary.modules.calls", type: "switch", label: "Include calls" },
         { path: "summary.modules.email", type: "switch", label: "Include e-mails" },
@@ -827,7 +830,8 @@
     function runNowPanel(job) {
       const status = h("p", { class: "op-note op-t-info op-block", role: "status", "data-run-status": job }, "Checking the collector…");
       const saved = () => (st.base || {}).summary || {};
-      const recipients = () => (saved().to || []).length + (saved().cc || []).length;
+      const teamLists = () => Object.values(saved().team_recipients || {}).filter((r) => r && ((r.to || []).length || (r.cc || []).length)).length;
+      const recipients = () => (saved().to || []).length + (saved().cc || []).length + teamLists();
       const unsaved = () => changed().some((f) => f.section === "summary");
       let timer = null;
       function show(tone, text) {
@@ -840,7 +844,8 @@
         const j = d && d.jobs ? d.jobs[job] : null;
         const pending = !!(d && (d.pending || []).some((p) => p.job === job));
         const now = d && d.server_time, parts = [];
-        if (!recipients()) parts.push("No recipient: add an address in To or Cc and save. Nothing is sent until then, not even by Run now.");
+        if (!recipients()) parts.push("No recipient: add an address in To / Cc, or a team summary, and save. Nothing is sent until then, not even by Run now.");
+        else if (teamLists()) parts.push(`${teamLists()} team summar${teamLists() === 1 ? "y" : "ies"} too, each with its own numbers only.`);
         if (!saved().enabled) parts.push("Off: the collector does not send it at the checkpoints (switch “Send the daily summary” on and save).");
         if (pending) parts.push("Run now requested: the collector sends it within a minute.");
         else if (j && j.present && j.last_run_at) {
@@ -853,9 +858,10 @@
       }
       async function run() {
         if (unsaved()) { toast("Save the settings first: Run now sends with the saved settings.", "error"); return; }
-        if (!recipients()) { toast("Add at least one address in To or Cc and save first.", "error"); return; }
+        if (!recipients()) { toast("Add at least one address in To or Cc, or a team summary, and save first.", "error"); return; }
+        const everyTeam = (saved().to || []).length + (saved().cc || []).length;
         const ok = await OPS.confirm({ title: "Send the daily summary now?", confirmLabel: "Send now", danger: true,
-          message: `It goes to the ${recipients()} saved recipient(s) within a minute, whatever the time and day.` });
+          message: `${everyTeam ? `Every team's summary goes to the ${everyTeam} saved recipient(s)` : "No every-team summary (To / Cc are empty)"}${teamLists() ? `, and ${teamLists()} team${teamLists() === 1 ? "" : "s"} get their own` : ""} - within a minute, whatever the time and day.` });
         if (!ok) return;
         try {
           const r = await api("POST", `/api/ops/jobs/${encodeURIComponent(job)}/run`);

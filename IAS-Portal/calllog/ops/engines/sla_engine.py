@@ -769,9 +769,10 @@ JS_GRID_NEXT = ("(() => {" + JS_NORM + JS_FIND_GRID + r"""
   try { n.scrollIntoView({block: 'center'}); } catch (e) {}
   const r = n.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; })()""")
 
-# The portal's OWN next page of results («التالي» under the grid: the server sends at most a page of rows, «All» = 1000
-# on the bank's portal): an ASP.NET pager post-back {t, a}, else the control's centre {x, y}; null on the last page.
-# The DataTables pager and anything in a details box are not it.
+# The portal's OWN next page of results (the server sends at most a page of rows, «All» = 1000 on the bank's portal):
+# the button «عرض التالي» under the grid (next to «عرض السابق»), or a pager link «التالي» / Page$Next. An ASP.NET
+# post-back {t, a}, else the control's centre {x, y}; null on the last page. The DataTables pager and anything in a
+# details box are not it.
 JS_SERVER_NEXT = ("(() => {" + JS_NORM + JS_FIND_GRID + r"""
   if (!grid) return null;
   const PB = /__doPostBack\(\s*['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]\s*\)/;
@@ -780,7 +781,10 @@ JS_SERVER_NEXT = ("(() => {" + JS_NORM + JS_FIND_GRID + r"""
   const ctls = [...document.querySelectorAll('a, input[type=submit], input[type=button], button')]
     .filter(visible).filter(after)
     .filter(el => !el.closest('.dataTables_paginate, .dataTables_length, .modal, [role=dialog], .ui-dialog'));
-  const n = ctls.find(el => /Page\$Next/i.test(src(el))) || ctls.find(el => textOf(el) === norm('التالي'));
+  const NEXT = norm('التالي'), BACK = norm('السابق');
+  const isNext = el => { const t = textOf(el);       // «عرض التالي», «التالي», «الصفحة التالية»..., never «عرض السابق»
+    return !!t && t.length <= 24 && !t.includes(BACK) && (t === NEXT || t.endsWith(NEXT) || t === 'next' || t.includes(norm('التاليه'))); };
+  const n = ctls.find(el => /Page\$Next/i.test(src(el))) || ctls.find(isNext);
   if (!n || n.disabled || n.hasAttribute('disabled') || /aspNetDisabled|disabled/.test(n.className || '')) return null;
   const m = PB.exec(src(n));
   if (m) return {t: m[1], a: m[2]};
@@ -788,6 +792,12 @@ JS_SERVER_NEXT = ("(() => {" + JS_NORM + JS_FIND_GRID + r"""
   const r = n.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; })()""")
 
 MAX_SERVER_PAGES = 50                      # the portal's own result pages walked per search (1000 rows each)
+
+# The portal's own grand total under the grid: «اجمالي عدد الطلبات : - 4351» (every result page together), or null
+JS_PORTAL_TOTAL = ("(() => {" + JS_NORM + r"""
+  const t = norm(document.body ? document.body.innerText : '');
+  const m = t.match(/اجمالي\s*عدد\s*الطلبات[^0-9]{0,12}([0-9][0-9,]*)/);
+  return m ? parseInt(m[1].replace(/,/g, ''), 10) : null; })()""")
 
 
 def _rows_sig(rows):
@@ -985,12 +995,18 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     if table is None:
         raise PortalError("The inquiry results table did not appear after the search.")
     headers = table["headers"]
-    # the portal's result pages: {sig (its rows as first shown: to know it again), rows, pbs, total}
+    # the portal's result pages: {sig (its rows as first shown: to know it again), rows, pbs, total}; the portal's
+    # own «اجمالي عدد الطلبات» says how many there are in all, so the last page is known without one click too many
+    portal_total = None
+    with suppress(Exception):
+        portal_total = browser.eval(JS_PORTAL_TOTAL)
     pages = []
     while True:
         rows, pbs, total = whole_page(table)
         pages.append({"sig": _rows_sig(table["rows"]), "rows": rows, "pbs": pbs, "total": total})
         if len(pages) >= MAX_SERVER_PAGES:
+            break
+        if isinstance(portal_total, int) and sum(len(p["rows"]) for p in pages) >= portal_total:
             break
         table = server_next(_rows_sig(table["rows"]))
         if table is None:
@@ -1008,8 +1024,12 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     short = [(n + 1, len(p["rows"]), p["total"]) for n, p in enumerate(pages)
              if p["total"] is not None and len(p["rows"]) < p["total"]]
     log(f"SLA history: inquiry grid {len(rows)} row(s)" + (f" over {len(pages)} result pages" if len(pages) > 1 else "")
-        + (f", the portal lists {grid_total}" if grid_total is not None else "")
+        + (f", the portal lists {portal_total} in all («اجمالي عدد الطلبات»)" if isinstance(portal_total, int)
+           else f", the portal lists {grid_total}" if grid_total is not None else "")
         + ("".join(f"; page {n}: only {got} of its {want} rows could be read" for n, got, want in short)))
+    if isinstance(portal_total, int) and len(rows) < portal_total:
+        log(f"SLA history: WARNING only {len(rows)} of the {portal_total} requests could be read - the next result page "
+            "(«عرض التالي») did not open; the rest are read at the next scan")
 
     def goto(page):
         """Show result page ``page``: forward with «التالي», back by a new search (it starts on the first page). True
@@ -1142,7 +1162,8 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
         + (f", {timing['drill_avg_seconds']} s a request, slowest {timing['drill_max_seconds']} s" if drill_s else "")
         + ")" + (f"; stopped: {stopped}" if stopped and left else "")
         + (f"; {unverified} detail(s) could not be matched to their row by number" if unverified else ""))
-    return {"items": items, "rows": len(grid), "opened": opened, "left": left, "failed": failed, "timing": timing}
+    return {"items": items, "rows": len(grid), "opened": opened, "left": left, "failed": failed, "timing": timing,
+            "portal_total": portal_total if isinstance(portal_total, int) else None}
 
 
 def scrape(ctx, username, password, history=None, history_sink=None):
@@ -1832,7 +1853,8 @@ def fold_history_result(store, sink, now_iso, system_team=None):
         if items:
             d["grid"] = sla_history.grid_state([it["grid"] for it in items], d.get("grid"), now_iso, cfg)
         d["last_history"] = now_iso
-        d["history_stats"] = {"at": now_iso, "rows": sink.get("rows", 0), "opened": sink.get("opened", 0),
+        d["history_stats"] = {"at": now_iso, "rows": sink.get("rows", 0), "portal_total": sink.get("portal_total"),
+                              "opened": sink.get("opened", 0),
                               "left": sink.get("left", 0), "failed": sink.get("failed", 0),
                               "timing": sink.get("timing") or {}, **out}
         d.pop("history_error", None)

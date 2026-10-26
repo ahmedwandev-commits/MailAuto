@@ -150,6 +150,29 @@ def test_every_result_page_of_the_portal_is_read_and_each_request_opened_on_its_
     assert any("7 row(s) over 3 result pages, the portal lists 7" in line for line in out["logs"])
 
 
+def test_the_banks_show_next_button_is_pressed_until_the_portals_total_is_read(browser, tmp_path):
+    """The bank's page shows at most 1000 rows; the rest are behind the button «عرض التالي» (next to «عرض السابق»),
+    and «اجمالي عدد الطلبات : - N» under the grid says how many there are. Every page is read and each request
+    opened on its own page; once the total is read, «عرض التالي» is not pressed again."""
+    reqs = _many(7, dup_at=2)
+    with FakeInquiryPortal(reqs, server_page=3, pager="buttons") as portal:
+        out = read(browser, portal, tmp_path)
+    assert out["rows"] == 7 and out["portal_total"] == 7 and out["timing"]["grid_pages"] == 3
+    assert sorted(recorded(out)) == [r["number"] for r in reqs]
+    assert sorted(set(portal.pages_shown)) == [0, 1, 2]
+    text = "\n".join(out["logs"])
+    assert "7 row(s) over 3 result pages, the portal lists 7 in all («اجمالي عدد الطلبات»)" in text
+    assert "WARNING" not in text
+
+
+def test_a_next_page_that_cannot_be_opened_is_reported_with_the_portals_total(browser, tmp_path):
+    reqs = _many(7)
+    with FakeInquiryPortal(reqs, server_page=3, pager="total_only") as portal:
+        out = read(browser, portal, tmp_path)
+    assert out["rows"] == 3 and out["portal_total"] == 7
+    assert any("WARNING only 3 of the 7 requests could be read" in line for line in out["logs"])
+
+
 @pytest.mark.parametrize("grid", ["paged_api", "dom"])
 def test_a_grid_that_holds_only_its_current_page_is_walked_to_the_end(browser, tmp_path, grid):
     """«Show» offers no «All» here and the DataTable holds only the rows of its current page: its own pager is walked

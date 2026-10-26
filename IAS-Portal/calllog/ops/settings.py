@@ -130,6 +130,7 @@ DEFAULTS = {
         "schedule": {"work_days": None, "active_hours": None},
         "catch_up_minutes": 45,                 # a checkpoint missed by less than this (collector restarting) is still sent
         "to": [], "cc": [],
+        "team_recipients": {},                  # team -> {"to": [], "cc": []}: that team's own summary, its numbers only
         "subject_prefix": "Daily Operations Summary",
         "modules": {"calls": True, "email": True, "tickets": True, "crs": True},
         "per_team": True,
@@ -460,7 +461,7 @@ FIELDS = {
     },
     "summary": {
         "enabled": _bool, "send_times": _times, "schedule": _schedule, "catch_up_minutes": _int(5, 180),
-        "to": _emails, "cc": _emails, "subject_prefix": _str(120),
+        "to": _emails, "cc": _emails, "subject_prefix": _str(120), "team_recipients": _map(_recipients),
         "modules": {"calls": _bool, "email": _bool, "tickets": _bool, "crs": _bool},
         "per_team": _bool, "display_only": _bool,
     },
@@ -515,8 +516,12 @@ def validate(raw):
     if cls["unclassified_team"] and cls["unclassified_team"] not in teams:
         ctx.err("email.classification.unclassified_team", f"'{cls['unclassified_team']}' is not one of the teams")
     summary = clean.get("summary") or {}
-    if summary.get("enabled") and not summary.get("to"):
-        ctx.err("summary.to", "add at least one recipient, or switch the daily summary off")
+    team_lists = [t for t, rec in (summary.get("team_recipients") or {}).items() if (rec or {}).get("to")]
+    if summary.get("enabled") and not summary.get("to") and not team_lists:
+        ctx.err("summary.to", "add at least one recipient (To, or a team below), or switch the daily summary off")
+    for t in summary.get("team_recipients") or {}:
+        if t not in teams:
+            ctx.err(f"summary.team_recipients.{t}", f"'{t}' is not one of the teams")
     return clean, ctx.errors
 
 

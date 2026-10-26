@@ -6,8 +6,10 @@
   refused with a message and no results), «مجموعة العمل» (All) and the «بـحـث» button;
 * the results grid in the real column order, one row per application of a request, each with its own «التفاصيل»
   ASP.NET post-back (``Select$N``, N counted on the result page shown - like a GridView);
-* the portal sends at most ``server_page`` rows a search page («All» = 1000 on the bank's portal); more are behind the
-  «التالي» link centred under the grid (``Page$Next``) - a post-back to the next page;
+* the portal sends at most ``server_page`` rows a search page («All» = 1000 on the bank's portal); more are behind its
+  pager under the grid. ``pager``: "link" = the «التالي» link centred under the grid (``Page$Next``, a post-back);
+  "buttons" = like the bank's page: the buttons «عرض التالي» / «عرض السابق» (plain submits, always shown) and the line
+  «اجمالي عدد الطلبات : - N» with the total of every result page; "total_only" = that line and no way to the next page;
 * ``grid``: how the DataTable on top of a result page behaves -
     "client"     every row of the page through a small DataTables API (window.jQuery.fn.dataTable), ``dt_len`` shown;
     "paged_api"  the API holds only the rows of the DataTable's current page, its «of N records» counts the page; its
@@ -123,8 +125,9 @@ class FakeInquiryPortal:
     """``with FakeInquiryPortal(requests) as portal: portal.url + INQUIRY_PATH``. Public knobs can be changed."""
 
     def __init__(self, requests, grid="client", history="api", server_page=1000, dt_len=20,
-                 grid_lengths=(5, 10, 20, -1)):
+                 grid_lengths=(5, 10, 20, -1), pager="link"):
         self.requests = requests
+        self.pager = pager
         self.grid = grid
         self.grid_lengths = list(grid_lengths)
         self.history = history
@@ -187,9 +190,9 @@ class FakeInquiryPortal:
         target, arg = form.get("__EVENTTARGET", ""), form.get("__EVENTARGUMENT", "")
         rows = self._results(state)
         last = max(0, (len(rows) - 1) // self.server_page)
-        if target == GRID_TARGET and arg == "Page$Next":
+        if (target == GRID_TARGET and arg == "Page$Next") or "btnNext" in form:
             state["page"] = min(last, state["page"] + 1)
-        elif target == GRID_TARGET and arg == "Page$Prev":
+        elif (target == GRID_TARGET and arg == "Page$Prev") or "btnPrev" in form:
             state["page"] = max(0, state["page"] - 1)
         elif target == GRID_TARGET and arg.startswith("Select$"):
             n = state["page"] * self.server_page + int(arg.split("$", 1)[1])
@@ -224,7 +227,13 @@ class FakeInquiryPortal:
                      for i, r in enumerate(shown)]
             body = ("<h3>نتيجة البحث عن الطلبات</h3>"
                     + _dt_wrapper("GridView_Inquiry", GRID_HEADERS + ["التفاصيل"], self.grid_lengths, self.dt_len))
-            if last:                                   # the portal's own pager, centred under the grid
+            if self.pager in ("buttons", "total_only"):   # the bank's page: total line + «عرض السابق» / «عرض التالي»
+                body += f"<div class='total'>اجمالي عدد الطلبات : - {len(rows)}</div>"
+                if self.pager == "buttons":
+                    body += ("<div class='pager-buttons' style='text-align:left'>"
+                             "<input type='submit' class='btn' name='btnPrev' value='عرض السابق'> "
+                             "<input type='submit' class='btn' name='btnNext' value='عرض التالي'></div>")
+            elif last:                                 # the portal's own pager, centred under the grid
                 links = []
                 if state["page"] > 0:
                     links.append(f"<a href=\"javascript:__doPostBack('{GRID_TARGET}','Page$Prev')\">السابق</a>")

@@ -3,8 +3,13 @@
 
 The collector's runner sends it at each ``summary.send_times`` checkpoint (e.g. 10:00, 13:00, 15:00) that falls on a
 work day, outside the holidays and inside the summary's active hours (System › Settings › Daily summary); "Run now"
-sends it at once. One mail per checkpoint: the state ``daily_summary`` remembers the checkpoints already sent today,
-so a retry or a second collector never sends it twice (``force`` sends again).
+sends it at once. At a checkpoint the summary of every team goes to ``to`` / ``cc``, and each team listed in
+``team_recipients`` gets its OWN summary with only its own numbers (its people's calls, its e-mails, its tickets, its
+ITSM roles). The state ``daily_summary`` remembers the checkpoints - and, within one, the mails - already sent today,
+so a retry or a second collector never sends one twice (``force`` sends again).
+
+Change requests: the implementations COMPLETED count today only (the scoreboard's completed columns add up every
+earlier day too); the implementation requests PENDING count all of them, whatever day they came.
 
 The numbers are the ones the pages show for every team:
   * Calls     - the Call Log's own day files (logged calls by status, busiest hour, active employees, per team);
@@ -62,18 +67,21 @@ def _team_of_user(users):
 
 
 # ------------------------------------------------------------------------------------------------ the four blocks
-def calls_block(data_dir, users, day):
+def calls_block(data_dir, users, day, team=None):
+    """The day's logged calls: every employee's, or (``team``) those of the team's employees only."""
     from ... import stats as call_stats
     from ...storage import Store
     cs = Store(data_dir)                                    # read only: never init() (it would write default files)
     reasons = {r["key"]: r for r in cs.reasons()}
     records = cs.day_all(day)
+    team_of = _team_of_user(users)
+    if team:
+        records = [r for r in records if any(overlay.team_in((team,), t) for t in team_of(r.get("user_id")))]
     roll = call_stats.rollup_day(records, reasons)
     t = roll.get("totals") or {}
     hours = [sum((h or {}).values()) for h in roll.get("hours") or []]
     busiest = max(range(len(hours)), key=lambda i: hours[i]) if any(hours) else None
     by_team = {}
-    team_of = _team_of_user(users)
     for r in records:
         for team in team_of(r.get("user_id")) or ["(no team)"]:
             by_team[team] = by_team.get(team, 0) + 1
@@ -85,14 +93,15 @@ def calls_block(data_dir, users, day):
             "by_team": by_team}
 
 
-def email_block(store, hub, day, now):
+def email_block(store, hub, day, now, team=None):
+    """Today's e-mails with every override applied: every team's, or (``team``) only that team's."""
     snap = store.read_snapshot("email")
     if not snap:
         return {"available": False, "reason": "no e-mail scan yet"}
     if str(snap.get("date") or "")[:10] != day:
         return {"available": False, "reason": "no e-mail scan today yet", "as_of": snap.get("generated_at", "")}
     ovr = {name: store.overrides(name) for name in schemas.OVERRIDES}
-    view = overlay.view_email_data(snap.get("data") or {}, ovr, None, now)
+    view = overlay.view_email_data(snap.get("data") or {}, ovr, team, now)
     s = view.get("stats") or {}
     by_team = {}
     for r in view.get("rows") or []:
@@ -110,20 +119,29 @@ def email_block(store, hub, day, now):
             **{k: s.get(k, 0) for k in keys}, "by_team": by_team}
 
 
-def tickets_block(store, hub, users, day, now):
-    sla_cfg = hub.get("sla") or {}
+def _resolver(store, hub, users):
     apps = []
     try:
         apps = (store.read_auto_assign() or {}).get("applications") or []
     except Exception:                                       # noqa: BLE001
         pass
-    resolver = teams.Resolver(hub, users, apps)
+    return teams.Resolver(hub, users, apps)
+
+
+def tickets_block(store, hub, users, day, now, team=None):
+    """The security requests: every team's, or (``team``) only those the team rule gives to that team (by the
+    application, else the security user's account) - Third Party always left out."""
+    sla_cfg = hub.get("sla") or {}
+    resolver = _resolver(store, hub, users)
     excluded = teams.sla_exclusion(sla_cfg, resolver) or (lambda system: False)
+    scope = (team,) if team else None
+    mine = lambda system, who: teams.in_scope(scope, resolver.sla_team(system, who))   # noqa: E731
     out = {"available": False}
     snap = store.read_snapshot("sla")
     if snap:
         data = snap.get("data") or {}
-        live = [r for r in data.get("requests") or [] if not excluded(teams.sla_system(r))]
+        live = [r for r in data.get("requests") or [] if not excluded(teams.sla_system(r))
+                and mine(teams.sla_system(r), r.get("security_user"))]
         totals = {k: 0 for k in ("open", "within", "reminder", "breached")}
         for r in live:
             totals["open"] += 1
@@ -133,11 +151,14 @@ def tickets_block(store, hub, users, day, now):
                    stale=_stale(hub, "sla", snap.get("generated_at"), now))
     cfg = sla_records.clean_config((store.read_sla_records() or {}).get("config"))
     state = store.read_sla_history_state() or {}
-    closed = {k: r for k, r in (store.read_sla_closed_day(day) or {}).items() if not excluded(r.get("system"))}
+    closed = {k: sla_history.rederive(r, cfg) for k, r in (store.read_sla_closed_day(day) or {}).items()
+              if not excluded(r.get("system")) and mine(r.get("system"), r.get("executor") or r.get("holder"))}
     if state.get("last_history") or closed:
         a = sla_history.analyze(closed, cfg)["overall"]
-        grid = {k: g for k, g in (state.get("grid") or {}).items() if not excluded(g.get("system"))}
-        nowb = sla_history.right_now(grid, state.get("open") or {}, state.get("index") or {}, cfg,
+        grid = {k: g for k, g in (state.get("grid") or {}).items()
+                if not excluded(g.get("system")) and mine(g.get("system"), g.get("holder"))}
+        opened = {k: sla_history.rederive(r, cfg) for k, r in (state.get("open") or {}).items()}
+        nowb = sla_history.right_now(grid, opened, state.get("index") or {}, cfg,
                                      now.strftime("%Y-%m-%dT%H:%M:%S"))["now"]
         received = sum(1 for g in grid.values() if str(g.get("request_date") or "")[:10] == day)
         within = a.get("sla_pct") or 0.0
@@ -150,38 +171,56 @@ def tickets_block(store, hub, users, day, now):
     return out
 
 
-def crs_block(store, hub, day, now):
+def crs_block(store, hub, day, now, team=None, users=None):
+    """The change requests (ITSM): every role's, or (``team``) only the roles of that team. ``pending`` = every
+    implementation request waiting on the board, whatever day it came; ``completed_today`` = the implementations
+    completed TODAY (the board's completed columns count earlier days too, so they are not used); ``rollback`` = the
+    rollback requests waiting."""
     snap = store.read_snapshot("itsm")
     if not snap:
         return {"available": False, "reason": "no ITSM scan yet"}
     data = snap.get("data") or {}
-    board = {str(k): int(v or 0) for k, v in (data.get("totals") or {}).items()}
+    roles = data.get("roles") or []
+    if team:
+        resolver = _resolver(store, hub, users or {})
+        roles = [r for r in roles if teams.in_scope((team,), resolver.itsm_team(r.get("role")))]
+        board = {}
+        for r in roles:
+            for label, cat in (r.get("categories") or {}).items():
+                board[str(label)] = board.get(str(label), 0) + int((cat or {}).get("count") or 0)
+    else:
+        board = {str(k): int(v or 0) for k, v in (data.get("totals") or {}).items()}
     buckets = {"pending": 0, "completed": 0, "rollback": 0}
     for label, n in board.items():
         buckets[itsm_records.conclusion_for(label)] += n
-    records = (store.read_itsm_records() or {}).get("records") or {}
-    completed_today = sum(1 for r in records.values()
+    names = {str(r.get("role") or "") for r in roles}
+    records = [r for r in ((store.read_itsm_records() or {}).get("records") or {}).values()
+               if not team or str(r.get("role") or "") in names]
+    completed_today = sum(1 for r in records
                           if r.get("conclusion") == "completed" and str(r.get("completed_at") or "")[:10] == day)
-    new_today = sum(1 for r in records.values() if str(r.get("first_seen") or "")[:10] == day)
-    failed = sum(1 for r in data.get("roles") or [] if r.get("error"))
+    new_today = sum(1 for r in records if str(r.get("first_seen") or "")[:10] == day)
+    failed = sum(1 for r in roles if r.get("error"))
+    waiting = {label: n for label, n in board.items() if itsm_records.conclusion_for(label) != "completed"}
     return {"available": True, "as_of": snap.get("generated_at", ""), "stale": _stale(hub, "itsm", snap.get("generated_at"), now),
-            "board": board, "total": sum(board.values()), **buckets, "completed_today": completed_today,
-            "new_today": new_today, "roles_failed": failed}
+            "board": waiting, "total": buckets["pending"] + buckets["rollback"], "pending": buckets["pending"],
+            "rollback": buckets["rollback"], "completed_today": completed_today, "new_today": new_today,
+            "roles_failed": failed, "roles": len(roles)}
 
 
-def collect(ctx, now):
-    """The four blocks of today (each one on its own: one that fails says why, the others still go)."""
+def collect(ctx, now, team=None):
+    """The four blocks of today - every team's, or (``team``) only that team's (each block on its own: one that fails
+    says why, the others still go)."""
     cfg = deep_merge(DEFAULTS["summary"], ctx.settings or {})
     hub = ctx.hub or {}
     want = cfg.get("modules") or {}
     day = now.date().isoformat()
     users = _users(ctx.data_dir)
-    jobs = (("calls", lambda: calls_block(ctx.data_dir, users, day)),
-            ("email", lambda: email_block(ctx.store, hub, day, now)),
-            ("tickets", lambda: tickets_block(ctx.store, hub, users, day, now)),
-            ("crs", lambda: crs_block(ctx.store, hub, day, now)))
+    jobs = (("calls", lambda: calls_block(ctx.data_dir, users, day, team)),
+            ("email", lambda: email_block(ctx.store, hub, day, now, team)),
+            ("tickets", lambda: tickets_block(ctx.store, hub, users, day, now, team)),
+            ("crs", lambda: crs_block(ctx.store, hub, day, now, team, users)))
     module_of = {"calls": None, "email": "email", "tickets": "sla", "crs": "itsm"}
-    out = {"day": day, "at": now.strftime("%Y-%m-%dT%H:%M:%S")}
+    out = {"day": day, "at": now.strftime("%Y-%m-%dT%H:%M:%S"), "team": team or ""}
     for key, build in jobs:
         if not want.get(key, True):
             continue
@@ -205,11 +244,13 @@ def _n(block, key):
 def build_subject(cfg, now, slot, data):
     parts = []
     for key, label, field in (("calls", "Calls", "total"), ("email", "Mails", "business_emails"),
-                              ("tickets", "Tickets", "closed_today"), ("crs", "CRs", "total")):
+                              ("tickets", "Tickets", "closed_today"), ("crs", "CRs pending", "pending")):
         block = data.get(key)
         if block is not None:
             parts.append(f"{label} {_n(block, field) if block.get('available') else '-'}")
-    head = f"{cfg.get('subject_prefix') or 'Daily Operations Summary'} - {now:%d/%m/%Y} {slot if slot != 'manual' else now.strftime('%H:%M')}"
+    team = f" - {data['team']}" if data.get("team") else ""
+    head = (f"{cfg.get('subject_prefix') or 'Daily Operations Summary'}{team} - {now:%d/%m/%Y} "
+            f"{slot if slot != 'manual' else now.strftime('%H:%M')}")
     return " ".join((head + (" | " + " · ".join(parts) if parts else "")).split())[:240]
 
 
@@ -338,13 +379,14 @@ def build_html(data, cfg, slot, now, next_slot=None):
             heroes.append(_hero("Tickets", "—", _sub(esc(tix.get("reason", ""))), er.AMBER))
     if crs is not None:
         if crs.get("available"):
-            heroes.append(_hero("CRs", crs["total"], _sub(
-                f'{crs["completed"]} completed &middot; {crs["rollback"]} rollback &middot; {crs["pending"]} pending'),
-                er.PURPLE))
+            heroes.append(_hero("CRs pending", crs["pending"], _sub(
+                f'{crs["completed_today"]} implemented today &middot; {crs["rollback"]} rollback waiting'), er.PURPLE))
             board = [(label, n, er.PURPLE) for label, n in sorted(crs["board"].items(), key=lambda kv: -kv[1])]
             cards.append(_card("Change requests (ITSM)", _facts([
-                ("On the board", crs["total"]), ("Completed today", crs["completed_today"]),
-                ("New today", crs["new_today"])]) + er._bar_table(board, "No change requests on the board."), er.PURPLE))
+                ("Implementation requests pending (all)", crs["pending"]),
+                ("Implementations completed today", crs["completed_today"]),
+                ("Rollback requests waiting", crs["rollback"]), ("New today", crs["new_today"])])
+                + er._bar_table(board, "No change request waiting on the board."), er.PURPLE))
             if crs["rollback"]:
                 attention.append(f'{crs["rollback"]} rollback request(s) waiting')
             if crs["roles_failed"]:
@@ -365,7 +407,7 @@ def build_html(data, cfg, slot, now, next_slot=None):
     inner += er._heading("By module")
     inner += ('<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">' + "".join(grid)
               + "</table>")
-    if cfg.get("per_team", True):
+    if cfg.get("per_team", True) and not data.get("team"):
         team_rows = _team_rows(data)
         if team_rows:
             inner += er._heading("By team")
@@ -380,8 +422,10 @@ def build_html(data, cfg, slot, now, next_slot=None):
     foot += " Counts only - open the IAS Portal for the details."
     inner += er._footer(foot)
     subtitle = (f"National Bank of Egypt &nbsp;&bull;&nbsp; {esc(now.strftime('%A %d/%m/%Y'))} &nbsp;&bull;&nbsp; "
-                f"{esc(slot if slot != 'manual' else now.strftime('%H:%M'))} checkpoint")
-    return er._page(cfg.get("subject_prefix") or "Daily Operations Summary", subtitle, inner)
+                f"{esc(slot if slot != 'manual' else now.strftime('%H:%M'))} checkpoint"
+                + (f" &nbsp;&bull;&nbsp; {esc(data['team'])} only" if data.get("team") else ""))
+    title = cfg.get("subject_prefix") or "Daily Operations Summary"
+    return er._page(f"{title} - {data['team']}" if data.get("team") else title, subtitle, inner)
 
 
 def _team_rows(data):
@@ -413,6 +457,26 @@ def run(ctx):
         return JobResult(ok=False, error=f"The daily summary could not be built: {type(exc).__name__}: {exc}")
 
 
+def _parts(cfg):
+    """The mails of one checkpoint: [(key, team or None, to, cc)] - every team's summary to ``to`` / ``cc``, then one
+    summary of its own for each team of ``team_recipients`` that has an address."""
+    out = []
+    if cfg.get("to") or cfg.get("cc"):
+        out.append(("all", None, list(cfg.get("to") or []), list(cfg.get("cc") or [])))
+    for team, rec in sorted((cfg.get("team_recipients") or {}).items(), key=lambda kv: str(kv[0]).casefold()):
+        rec = rec or {}
+        if str(team).strip() and (rec.get("to") or rec.get("cc")):
+            out.append((f"team:{team}", str(team), list(rec.get("to") or []), list(rec.get("cc") or [])))
+    return out
+
+
+def _counts(data):
+    return ", ".join(f"{k} {v}" for k, v in (
+        ("calls", _n(data.get("calls"), "total")), ("mails", _n(data.get("email"), "business_emails")),
+        ("tickets", _n(data.get("tickets"), "closed_today") or _n((data.get("tickets") or {}).get("live"), "open")),
+        ("CRs pending", _n(data.get("crs"), "pending"))))
+
+
 def _run(ctx):
     cfg = deep_merge(DEFAULTS["summary"], ctx.settings or {})
     now = ctx.now()
@@ -425,31 +489,55 @@ def _run(ctx):
         state = ctx.store.read_state(STATE_NAME) or {}
     except Exception:                                       # noqa: BLE001
         state = {}
-    sent = state.get("sent") if state.get("day") == day else {}
-    sent = dict(sent or {})
+    today = state.get("day") == day
+    sent = dict((state.get("sent") if today else {}) or {})
+    done = {k: list(v or []) for k, v in ((state.get("parts") if today else {}) or {}).items()}
     if slot != "manual" and slot in sent and not force:
         return JobResult(ok=True, skipped=True, summary=f"the {slot} summary was already sent today")
-    if not (cfg.get("to") or cfg.get("cc")):
-        return JobResult(ok=True, skipped=True, summary="no recipient - add one in System › Settings › Daily summary")
-    data = collect(ctx, now)
-    html = build_html(data, cfg, slot, now, _next_slot_text(cfg, slot, now))
-    subject = build_subject(cfg, now, slot, data)
-    counts = ", ".join(f"{k} {v}" for k, v in (
-        ("calls", _n(data.get("calls"), "total")), ("mails", _n(data.get("email"), "business_emails")),
-        ("tickets", _n(data.get("tickets"), "closed_today") or _n((data.get("tickets") or {}).get("live"), "open")),
-        ("CRs", _n(data.get("crs"), "total"))))
+    parts = _parts(cfg)
+    if not parts:
+        return JobResult(ok=True, skipped=True,
+                         summary="no recipient - add one (To / Cc, or a team) in System › Settings › Daily summary")
+    already = set() if (force or slot == "manual") else set(done.get(slot) or [])
+    mailer = None
+    built, mailed, errors = [], 0, []
+
+    def remember():
+        try:
+            ctx.store.write_state(STATE_NAME, {"day": day, "sent": sent, "parts": done})
+        except Exception as exc:                            # noqa: BLE001 - the mail went; the runner also marks the slot
+            ctx.log(f"daily summary: could not remember what was sent ({exc})")
+    for key, team, to, cc in parts:
+        if key in already:
+            continue
+        label = team or "every team"
+        data = collect(ctx, now, team)
+        html = build_html(data, cfg, slot, now, _next_slot_text(cfg, slot, now))
+        subject = build_subject(cfg, now, slot, data)
+        built.append(f"{label}: {_counts(data)}")
+        if not ctx.can_email():
+            continue
+        mailer = mailer or ctx.mailer or OutlookMailer()
+        try:
+            mailer.send(to, cc=cc, subject=subject, html_body=html, inline_images=er.mail_images() or None,
+                        display_only=bool(cfg.get("display_only")))
+        except Exception as exc:                            # noqa: BLE001 - built, not sent: say which of the two
+            ctx.log(f"daily summary ({label}) built ({slot}: {_counts(data)}) but Outlook could not send it: "
+                    f"{outlook_error_text(exc)}")
+            errors.append(f"{label}: {outlook_error_text(exc)}")
+            continue
+        mailed += 1
+        done.setdefault(slot, []).append(key)
+        remember()
     if not ctx.can_email():
-        return JobResult(ok=True, summary=f"summary built, e-mail off ({slot}): {counts}")
-    mailer = ctx.mailer or OutlookMailer()
-    try:
-        mailer.send(cfg.get("to") or [], cc=cfg.get("cc") or [], subject=subject, html_body=html,
-                    inline_images=er.mail_images() or None, display_only=bool(cfg.get("display_only")))
-    except Exception as exc:                                # noqa: BLE001 - built, not sent: say which of the two
-        ctx.log(f"daily summary built ({slot}: {counts}) but Outlook could not send it: {outlook_error_text(exc)}")
-        return JobResult(ok=False, error=f"The daily summary was built but Outlook could not send it: {outlook_error_text(exc)}")
+        return JobResult(ok=True, summary=f"summary built, e-mail off ({slot}): " + "; ".join(built))
+    if errors:
+        return JobResult(ok=False, emails_sent=mailed,
+                         error=(f"The daily summary was built but Outlook could not send {len(errors)} of "
+                                f"{len(errors) + mailed} mail(s): " + "; ".join(errors)))
     sent[slot if slot != "manual" else f"manual {now:%H:%M:%S}"] = now.strftime("%Y-%m-%dT%H:%M:%S")
-    try:
-        ctx.store.write_state(STATE_NAME, {"day": day, "sent": sent})
-    except Exception as exc:                                # noqa: BLE001 - the mail went; the runner also marks the slot
-        ctx.log(f"daily summary: could not remember the sent checkpoint ({exc})")
-    return JobResult(ok=True, emails_sent=1, summary=f"summary sent ({slot}): {counts}")
+    remember()
+    teams_sent = sum(1 for key, *_ in parts if key.startswith("team:"))
+    return JobResult(ok=True, emails_sent=mailed,
+                     summary=(f"summary sent ({slot}): " + "; ".join(built)
+                              + (f" - {teams_sent} team summar{'y' if teams_sent == 1 else 'ies'}" if teams_sent else "")))

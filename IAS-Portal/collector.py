@@ -340,8 +340,10 @@ def cmd_check(args):
     line("recipients", f"report to {len(report['to'])} / cc {len(report['cc'])}; SLA mail to {len(settings['sla']['mail']['to'])}; "
                        f"ITSM mail to {len(settings['itsm']['mail']['to'])} (empty = your own address)")
     summary = settings.get("summary") or {}
+    team_lists = sum(1 for r in (summary.get("team_recipients") or {}).values() if (r or {}).get("to") or (r or {}).get("cc"))
     line("daily summary", (f"on at {', '.join(summary.get('send_times') or []) or 'no time set'}; to {len(summary.get('to') or [])} "
-                           f"/ cc {len(summary.get('cc') or [])}") if summary.get("enabled") else "off")
+                           f"/ cc {len(summary.get('cc') or [])}" + (f"; {team_lists} team summaries" if team_lists else ""))
+         if summary.get("enabled") else "off")
     pinned = cc.pinned_keys()
     line("pinned settings", f"{len(pinned)} key(s) in collector_config.json override the web page")
     say()

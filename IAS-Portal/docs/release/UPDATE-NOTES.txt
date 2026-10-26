@@ -223,6 +223,24 @@ HOW TO UPDATE (your data is kept)
      refused. The assignee's name is the account's name. An employee without an e-mail address in Admin > Users
      cannot be picked - add it there.
 
+22. SLA: EVERY REQUEST OF «الاستفسار عن الطلبات» IS READ («عرض التالي»)
+   - The portal shows at most 1,000 requests a page and the rest behind the button «عرض التالي» under the grid; the
+     scan looked for a button called only «التالي», so it stopped after the first 1,000. It now presses «عرض التالي»
+     page after page until it has read as many requests as the portal's own «اجمالي عدد الطلبات» says, and opens
+     each request («التفاصيل») on its own page.
+   - Insights > Analysis > SLA, "Compared with the portal", says whether the last scan read them all
+     ("read all 4,351 requests the portal lists") or how many are missing.
+
+23. DAILY SUMMARY PER TEAM, AND THE CHANGE REQUESTS: COMPLETED TODAY, PENDING ALL
+   - System > Settings > Daily summary > "Team summaries": add a team and its addresses. At every checkpoint that
+     team gets its OWN summary with only its numbers: the calls of its people, its e-mails, its tickets and the
+     change requests of its ITSM roles. To / Cc above still get every team's summary (leave them empty to send
+     team summaries only).
+   - Change requests: "Implementations completed today" counts today's only (the board's completed column adds
+     up every earlier day); "Implementation requests pending (all)" counts every request waiting, whatever day it
+     came. The subject shows "CRs pending N".
+   - A team mail Outlook refuses is sent again at the retry; the mails that went are never sent twice.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -390,3 +408,18 @@ IAS PORTAL - الجديد في هذا التحديث
      بتظهر.
    - السيرفر بيتأكد كمان: الإسناد لحد من فريق تاني أو لعنوان مالوش حساب بيترفض. واسم الشخص بيتاخد من حسابه. الموظف
      اللي مالوش إيميل في Admin > Users مش بيظهر - ضيف الإيميل بتاعه هناك.
+
+22. الـ SLA: كل طلبات «الاستفسار عن الطلبات» بتتقري («عرض التالي»)
+   - البورتال بيعرض 1000 طلب بالكتير في الصفحة والباقي ورا زرار «عرض التالي» تحت الجدول؛ الـ scan كان بيدور على
+     زرار اسمه «التالي» بس، فكان بيقف بعد أول 1000. دلوقتي بيدوس «عرض التالي» صفحة ورا صفحة لحد ما يقرا عدد الطلبات
+     اللي البورتال كاتبه في «اجمالي عدد الطلبات»، وبيفتح كل طلب («التفاصيل») في صفحته.
+   - في Insights > Analysis > SLA، كارت "Compared with the portal" بيقول هل آخر scan قرا الكل أو ناقص كام.
+
+23. الملخص اليومي لكل فريق، وطلبات التغيير: المنفذ النهارده والمعلق كله
+   - System > Settings > Daily summary > "Team summaries": ضيف الفريق وعناوينه. في كل checkpoint الفريق ده بيوصله
+     ملخص لوحده فيه أرقامه هو بس: مكالمات ناسه وإيميلاته وتيكتاته وطلبات التغيير بتاعة الـ ITSM roles بتاعته. To / Cc
+     فوق لسه بيوصلهم ملخص كل الفرق (سيبهم فاضيين لو عايز ملخصات الفرق بس).
+   - طلبات التغيير: "Implementations completed today" بيعد اللي اتنفذ النهارده بس (عمود completed في البورد بيجمع
+     كل الأيام اللي فاتت)، و"Implementation requests pending (all)" بيعد كل الطلبات المعلقة مهما كان يومها. والعنوان
+     بيقول "CRs pending N".
+   - إيميل فريق الـ Outlook رفضه بيتبعت تاني في المحاولة اللي بعدها، والإيميلات اللي اتبعتت عمرها ما بتتبعت مرتين.

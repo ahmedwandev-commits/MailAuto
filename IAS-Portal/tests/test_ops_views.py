@@ -1143,6 +1143,8 @@ def test_the_daily_summary_card_says_why_it_does_not_send_and_runs_now(app, ops,
     text = status.inner_text()
     assert "No recipient" in text and "Off:" in text and "Last run" in text and "summary sent (13:00)" in text
     assert "op-t-danger" in status.get_attribute("class")
+    teams_field = page.locator('.op-field[data-path="summary.team_recipients"]')
+    assert teams_field.count() == 1 and "OWN summary" in teams_field.inner_text()
     page.click('[data-run-now="daily_summary"]')
     page.wait_for_selector("#toast .toast-msg")
     assert "Add at least one address" in page.locator("#toast").inner_text() and ops.pending_run_requests("daily_summary") == []

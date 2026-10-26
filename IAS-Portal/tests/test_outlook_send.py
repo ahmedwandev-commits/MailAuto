@@ -144,6 +144,7 @@ def test_a_summary_outlook_cannot_send_says_it_was_built_and_why(tmp_path):
                             now=lambda: datetime(2026, 10, 25, 10, 35), log=logs.append, mailer=Refusing(),
                             data_dir=str(tmp_path / "data"), options={"slot": "10:00"})
     res = daily_summary.run(ctx)
-    assert not res.ok and res.error.startswith("The daily summary was built but Outlook could not send it: Cannot create")
+    assert not res.ok and res.error.startswith("The daily summary was built but Outlook could not send 1 of 1 mail(s): "
+                                               "every team: Cannot create")
     assert "com_error" not in res.error and "-2147352567" not in res.error
     assert any("built (10:00" in line for line in logs)
