@@ -18,6 +18,7 @@
     slaFilter: null,         // {date_from, date_to, executor, checker, team, ...} - defaults to today on first open
     admin: false,
     today: "",               // the server's day (from its answers)
+    details: false,          // the detailed analysis (stages, branches, assigners...) shown under the main view
   };
   let panel = null;
 
@@ -526,6 +527,111 @@
         : `The last scan read ${fmtNum(st.rows || 0)} of the ${fmtNum(st.portal_total)} requests the portal lists («اجمالي عدد الطلبات»): the next result page («عرض التالي») did not open. The rest are read at the next scan.`));
   }
 
+  // ---- the main view: the security team's own work in the period - what reached it, what it did, how long it took,
+  //      each team and each security user; never a request still with the branch or of another team ----
+  function periodText(d) {
+    const f = d.filter || {}, t = state.today, day = (x) => (x === t ? "today" : `${x.slice(8, 10)}/${x.slice(5, 7)}/${x.slice(0, 4)}`);
+    if (!f.date_from && !f.date_to) return "every day recorded";
+    if (f.date_from === f.date_to) return day(f.date_from);
+    return `${f.date_from ? day(f.date_from) : "…"} – ${f.date_to ? day(f.date_to) : "…"}`;
+  }
+  function glanceKpis(d) {
+    const G = d.glance || {}, N = G.now || {};
+    return h("div", { class: "sx-kpis", "data-glance": "" },
+      OPS.kpi({ key: "g-came", label: "Came to us", value: fmtNum(G.arrived || 0), sub: "reached the security team", icon: "activity", hero: true }),
+      OPS.kpi({ key: "g-exec", label: "Executed", value: fmtNum(G.executed || 0), sub: "«تم التنفيذ»", tone: "ok", icon: "check" }),
+      OPS.kpi({ key: "g-notexec", label: "Not executed", value: fmtNum(G.not_executed || 0), sub: "«لم يتم التنفيذ» / «التعزيز على عدم التنفيذ»", tone: G.not_executed ? "warn" : null, icon: "alert" }),
+      OPS.kpi({ key: "g-rejected", label: "Rejected", value: fmtNum(G.rejected || 0), sub: "«رفض» by the assigner", tone: G.rejected ? "warn" : null, icon: "x" }),
+      OPS.kpi({ key: "g-confirmed", label: "Confirmed", value: fmtNum(G.closed || 0), sub: `${fmtNum(G.closed_executed || 0)} executed · ${fmtNum(G.closed_not || 0)} not executed`, icon: "shield" }),
+      OPS.kpi({ key: "g-awaiting", label: "Waiting for confirmation", value: fmtNum(N.awaiting || 0), sub: "now · executed, not confirmed yet", tone: N.awaiting ? "warn" : null, icon: "clock" }),
+      OPS.kpi({ key: "g-open", label: "With us now", value: fmtNum(N.open || 0), sub: "with a security user, not executed yet", icon: "user" }));
+  }
+  function glanceNote(d) {
+    const G = d.glance || {}, N = G.now || {};
+    const bits = [];
+    if (G.from_grid) bits.push(`${fmtNum(G.from_grid)} of these are counted from the inquiry's status: their details are read at the next scans (their times follow)`);
+    if (N.pre) bits.push(`${fmtNum(N.pre)} request(s) still with the branch (registration, supervisor) are not ours yet: not counted`);
+    return bits.length ? h("p", { class: "hint", "data-glance-note": "" }, bits.join(" · ") + ".") : null;
+  }
+  function glanceHours(d) {
+    const hours = ((d.glance || {}).hours) || [];
+    const active = hours.filter((x) => x.came || x.done || x.confirmed);
+    const hint = "came = reached the security team · done = executed, not executed or rejected";
+    if (!active.length) return OPS.card("Every hour", { hint }, h("p", { class: "hint" }, "Nothing came or was done in this period yet."));
+    const lo = Math.min(8, ...active.map((x) => x.hour)), hi = Math.max(16, ...active.map((x) => x.hour));
+    const span = hours.slice(lo, hi + 1);
+    const max = Math.max(1, ...span.map((x) => Math.max(x.came, x.done)));
+    const W = span.length * 4;
+    const svg = svgEl("svg", { class: "sx-hourly", viewBox: `0 0 ${W} 100`, preserveAspectRatio: "none", role: "img",
+      "aria-label": "Requests that came and requests done, hour by hour", "data-glance-hours": "" });
+    span.forEach((x, i) => {
+      [["came", "sx-hb-a", "came"], ["done", "sx-hb-c", "done"]].forEach(([k, cls, lbl], j) => {
+        const bh = x[k] ? Math.max(1.5, (x[k] / max) * 88) : 0;
+        const rect = svgEl("rect", { x: i * 4 + 0.4 + j * 1.6, y: 100 - bh, width: 1.5, height: bh, class: `${cls} sx-grow` });
+        const t = svgEl("title", {});
+        t.textContent = `${hh(x.hour)} – ${lbl}: ${fmtNum(x[k])}`;
+        rect.append(t);
+        svg.append(rect);
+      });
+    });
+    const axis = h("div", { class: "sx-hours-axis hint", "aria-hidden": "true" }, ...span.filter((_, i) => i % 2 === 0).map((x) => h("span", {}, hh(x.hour))));
+    const legend = h("div", { class: "sx-daily-legend hint" }, h("i", { class: "sx-key sx-hb-a" }), "Came", h("i", { class: "sx-key sx-hb-c" }), "Done");
+    const U = (d.glance || {}).untimed || {}, someUntimed = !!(U.came || U.done || U.confirmed);
+    const sum = (k) => span.reduce((a, x) => a + (x[k] || 0), 0) + (U[k] || 0);
+    const line = (label, k) => h("tr", {}, h("th", { scope: "row" }, label), ...span.map((x) => h("td", { class: "num" }, x[k] ? fmtNum(x[k]) : "·")),
+      someUntimed ? h("td", { class: "num", title: "Counted from the inquiry's status: the hour follows when the history is read" }, U[k] ? fmtNum(U[k]) : "·") : null,
+      h("td", { class: "num" }, fmtNum(sum(k))));
+    const table = h("div", { class: "table-wrap" }, h("table", { class: "data sx-hour-table", "data-glance-hour-table": "" },
+      h("caption", { class: "sr-only" }, "Requests per hour: came, done, confirmed"),
+      h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Hour"), ...span.map((x) => h("th", { scope: "col", class: "num" }, hh(x.hour))),
+        someUntimed ? h("th", { scope: "col", class: "num" }, "No time yet") : null, h("th", { scope: "col", class: "num" }, "Total"))),
+      h("tbody", {}, line("Came", "came"), line("Done", "done"), line("Confirmed", "confirmed"))));
+    return OPS.card("Every hour", { hint }, h("div", { class: "sx-stack" }, h("div", { class: "sx-daily-wrap" }, svg, axis, legend), table));
+  }
+  function glanceTimes(d) {
+    const T = (d.glance || {}).times || {};
+    const rows = [["execution", "Execution", "assignment → «تم التنفيذ» / «لم يتم التنفيذ» / «رفض»"],
+      ["confirmation", "Confirmation", "execution → «تم التعزيز»"], ["whole", "Whole request", "first assignment → «تم التعزيز»"]];
+    const body = rows.map(([k, label, what]) => { const t = T[k] || {};
+      return h("tr", { "data-time": k }, h("th", { scope: "row" }, label, h("span", { class: "hint", dir: "auto" }, ` · ${what}`)),
+        h("td", { class: "num" }, fmtNum(t.n || 0)), h("td", { class: "num" }, fmtMin(t.average_minutes)), h("td", { class: "num" }, fmtMin(t.median_minutes)),
+        h("td", { class: "num" }, fmtMin(t.target_minutes)), h("td", { class: "num" }, t.n ? pctChip(t.within_pct) : h("span", { class: "hint" }, "—"))); });
+    return OPS.card("How long it takes", { hint: "the requests of this period whose history is read · targets: System › Settings › Ticketing" },
+      h("div", { class: "table-wrap" }, h("table", { class: "data", "data-glance-times": "" },
+        h("caption", { class: "sr-only" }, "Execution and confirmation times"),
+        h("thead", {}, h("tr", {}, ...["", "Requests", "Average", "Median", "Target", "Within target"].map((c, i) => h("th", { scope: "col", class: i ? "num" : "" }, c)))),
+        h("tbody", {}, ...body))));
+  }
+  function glanceTable(rows, key, label, caption) {
+    rows = rows || [];
+    if (!rows.length) return h("p", { class: "hint" }, "Nothing in this period.");
+    const n = (k) => ({ key: k[0], label: k[1], num: true, sort: true, render: (r) => fmtNum(r[k[0]] || 0) });
+    return OPS.table({
+      search: rows.length > 12, copy: true, pageSize: 15, pageSizes: [15, 50, 200], caption, sort: { key: "arrived", desc: true },
+      columns: [
+        { key, label, sort: true, render: (r) => h("span", { dir: "auto" }, String(r[key])), text: (r) => String(r[key]) },
+        ...[["arrived", "Came"], ["executed", "Executed"], ["not_executed", "Not executed"], ["rejected", "Rejected"],
+          ["closed", "Confirmed"], ["awaiting_now", "Waiting confirmation now"], ["open_now", "With them now"]].map(n),
+        { key: "exec_median_minutes", label: "Execution (median)", num: true, sort: true, render: (r) => fmtMin(r.exec_median_minutes) },
+        { key: "exec_within_pct", label: "Within target", num: true, sort: true, render: (r) => (r.exec_n ? pctChip(r.exec_within_pct) : h("span", { class: "hint" }, "—")) },
+      ], rows,
+    }).el;
+  }
+  function glanceSection(d) {
+    const G = d.glance || {};
+    return [
+      h("h2", { class: "sx-glance-title" }, `The security team · ${periodText(d)}`),
+      glanceKpis(d), glanceNote(d), glanceHours(d), glanceTimes(d),
+      OPS.card("Each team", { hint: "the same numbers, team by team" }, glanceTable(G.by_team, "team", "Team", "Each team")),
+      OPS.card("Each employee", { hint: "مستخدم السرية · a rejection counts for the assigner who rejected it" }, glanceTable(G.by_person, "person", "Employee", "Each employee")),
+    ];
+  }
+  function detailsToggle() {
+    return h("p", { class: "sx-details-toggle" }, h("button", { type: "button", class: "btn btn-ghost", "aria-expanded": String(state.details), "data-details": "",
+      onclick: () => { state.details = !state.details; if (state.analysis) keepFocus(panel, () => renderAnalysis(state.analysis)); } },
+      state.details ? "Hide the detailed analysis" : "Show the detailed analysis (stages, branches, assigners, the portal check…)"));
+  }
+
   function renderAnalysis(d) {
     if (!d || !d.available) {
       const R = (d && d.recorder) || {};
@@ -536,7 +642,12 @@
       panel.replaceChildren(OPS.emptyState({ title: "No SLA history recorded yet", icon: "shield", text: why }));
       return;
     }
-    const stack = [analysisHead(d), liveStrip(d), unmappedNote(d), filterBar(d), portalCard(d)];
+    const stack = [filterBar(d), ...glanceSection(d), detailsToggle()];
+    if (!state.details) {
+      panel.replaceChildren(h("div", { class: "sx-stack" }, ...stack.filter(Boolean)));
+      return;
+    }
+    stack.push(analysisHead(d), liveStrip(d), unmappedNote(d), portalCard(d));
     if (!d.meta || !d.meta.requests) {
       stack.push(OPS.card("This period", {}, OPS.emptyState({ title: "No request matches this filter", icon: "shield",
         text: "“Right now” above is always current. Widen the dates, pick another employee / checker / team, or press Clear." })));

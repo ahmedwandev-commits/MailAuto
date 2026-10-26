@@ -1642,3 +1642,17 @@ def test_a_managers_email_answer_counts_only_their_team(flex_mgr, admin, hub, op
     assert mine["classification"]["unclassified"] == 0 and mine["classification"]["counts"]["none"] == 0
     assert admin.get("/api/ops/email").get_json()["data"]["classification"]["unclassified"] == 1
     assert flex_mgr.get("/api/ops/sla-config").get_json().get("recorded", 0) <= admin.get("/api/ops/sla-config").get_json().get("recorded", 0)
+
+
+def test_best_performers_of_the_day_are_scoped_to_the_managers_team(admin, flex_mgr, ops, assignees):
+    """GET /api/ops/performance: each employee's calls answered, e-mails replied and tickets handled, best first; the
+    administrator sees every team, a Flex Cube manager only Flex Cube's people."""
+    put_snapshot(ops, "email", email_data([replied_row("<p1@x>", "bob@example.test"), replied_row("<p2@x>", "bob@example.test"),
+                                           replied_row("<p3@x>", "carol@example.test", team="Card Management",
+                                                       all_teams=["Card Management"])]))
+    every = admin.get("/api/ops/performance").get_json()
+    assert every["day"] == "2026-10-11"
+    assert [(r["name"], r["emails"], r["rank"]) for r in every["rows"]] == [("Bob B", 2, 1), ("Carol C", 1, 2)]
+    mine = flex_mgr.get("/api/ops/performance?day=2026-10-11").get_json()
+    assert [r["name"] for r in mine["rows"]] == ["Bob B"]
+    assert admin.get("/api/ops/performance?day=2026-10-12").status_code == 400          # not come yet

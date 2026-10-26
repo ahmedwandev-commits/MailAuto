@@ -278,6 +278,26 @@ HOW TO UPDATE (your data is kept)
    - «Implementation Completed» is finished work: a green ticked circle instead of the amber warning, and a
      role's "open" count leaves it out. The daily summary's "Implementations completed today" uses the same days.
 
+27. INSIGHTS > ANALYSIS > SLA OPENS ON THE SECURITY TEAM'S OWN DAY
+   - The tab now opens on what matters: for the period picked (today by default), how many requests came to the
+     security team, how many were executed, not executed («لم يتم التنفيذ» / «التعزيز على عدم التنفيذ»), rejected
+     by the assigner («رفض») and confirmed, how many wait for the reviewer and how many are with a security user now.
+   - "Every hour": a simple chart and table of what came and what was done each hour.
+   - "How long it takes": execution (assignment -> executed / not executed / rejected), confirmation (execution ->
+     «تم التعزيز») and the whole request - average, median, target and how many within it.
+   - "Each team" and "Each employee": the same numbers team by team and person by person.
+   - Requests still with the branch (registration, supervisor) and other teams' requests are never counted; a
+     manager sees their own team(s) only. Everything else (stages, branches, assigners, the portal check) is
+     behind "Show the detailed analysis". The numbers are the same as the daily summary's.
+
+28. BEST PERFORMERS, IN THE DAILY SUMMARY AND ON INSIGHTS > ANALYSIS
+   - Each employee's day: calls answered (logged in the Call Log) + e-mails replied + security requests handled
+     (executed, not executed, rejected), best first.
+   - The daily summary shows the top five at every checkpoint ("Best performers - 13:00 checkpoint"); a team's
+     summary shows its own people only.
+   - Insights > Analysis opens with "Best performers" for any day; a manager sees their own team only. An earlier
+     day's e-mails come from the replies the e-mail report keeps each day (from this update on).
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -495,3 +515,23 @@ IAS PORTAL - الجديد في هذا التحديث
      لأول مرة). الـ CRs اللي كانت منفذة قبل ما التسجيل يبدأ مالهاش يوم، والـ board بيقول كام واحدة.
    - «Implementation Completed» شغل خلص: دايرة خضرا فيها علامة صح بدل التحذير البرتقاني، وعدد "open" بتاع الـ role
      مبقاش بيعدها. و"Implementations completed today" في الملخص اليومي بيستخدم نفس الأيام.
+
+27. Insights > Analysis > SLA بيفتح على يوم فريق السرية نفسه
+   - التاب بقى بيفتح على المهم بس: في الفترة اللي تختارها (النهارده افتراضي)، كام طلب جه لفريق السرية، وكام اتنفذ،
+     وكام متنفذش («لم يتم التنفيذ» / «التعزيز على عدم التنفيذ»)، وكام اترفض من موظف الاسناد («رفض»)، وكام اتعزز،
+     وكام مستني المراجع، وكام لسه مع مستخدم السرية دلوقتي.
+   - "Every hour": شارت وجدول بسيط بالجه والمعمول كل ساعة.
+   - "How long it takes": وقت التنفيذ (من الإسناد لحد التنفيذ / عدم التنفيذ / الرفض)، ووقت التعزيز (من التنفيذ
+     لحد «تم التعزيز»)، ووقت الطلب كله - المتوسط والوسيط والهدف وكام جوه الهدف.
+   - "Each team" و"Each employee": نفس الأرقام لكل فريق ولكل موظف.
+   - الطلبات اللي لسه في الفرع (تسجيل، مشرف) وطلبات الفرق التانية عمرها ما بتتعد، والمدير بيشوف فريقه بس. وباقي
+     التفاصيل (المراحل، الفروع، موظفين الاسناد، مقارنة البورتال) ورا زرار "Show the detailed analysis". والأرقام هي
+     نفس أرقام الملخص اليومي.
+
+28. أفضل أداء (Best performers) في الملخص اليومي وفي Insights > Analysis
+   - يوم كل موظف: المكالمات اللي رد عليها (المسجلة في Call Log) + الإيميلات اللي رد عليها + طلبات السرية اللي خلصها
+     (تنفيذ، عدم تنفيذ، رفض)، الأحسن الأول.
+   - الملخص اليومي بيعرض أحسن خمسة في كل checkpoint ("Best performers - 13:00 checkpoint")، وملخص الفريق فيه ناسه
+     بس.
+   - Insights > Analysis بيفتح بكارت "Best performers" لأي يوم، والمدير بيشوف فريقه بس. إيميلات الأيام اللي فاتت
+     بتيجي من الردود اللي تقرير الإيميل بيحفظها كل يوم (من التحديث ده).

@@ -181,11 +181,51 @@
         { key: "busiest_day", label: "Busiest day", render: (r) => (r.busiest_day ? `${fmtDay(r.busiest_day.date)} (${fmtNum(r.busiest_day.n)})` : "—"), text: (r) => (r.busiest_day ? r.busiest_day.date : "") },
       ], rows,
     }).el;
-    return [cards, qualitySummary(d.quality),
+    return [performersCard(), cards, qualitySummary(d.quality),
       h("div", { class: "sx-two" },
         OPS.card("All work by hour of the day", { hint: peak != null ? `peak ${hourText(peak)}` : "" }, columns(hourItems, { label: "All modules by hour", tone: "ax-c4" })),
         OPS.card("All work by weekday and hour", { hint: "darker = busier" }, heatmap(heat, "All modules by weekday and hour"))),
       OPS.card("Peaks by module", {}, table)];
+  }
+
+  // ------------------------------------------------------------------ best performers: who did the most work in a day
+  //   GET /api/ops/performance?day= - calls answered + e-mails replied + security requests handled, per employee
+  //   (a manager: their own team(s) only)
+  const perf = { day: "", seq: 0 };
+  function performersTable(d) {
+    const rows = d.rows || [];
+    if (!rows.length) return h("p", { class: "hint", "data-perf-empty": "" }, "No work recorded for this day yet.");
+    const medal = (n) => (n <= 3 ? OPS.chip(`#${n}`, n === 1 ? "ok" : "info") : h("span", {}, `#${n}`));
+    return OPS.table({
+      search: rows.length > 12, copy: true, pageSize: 15, pageSizes: [15, 50, 200], caption: "Best performers", sort: { key: "rank", desc: false },
+      columns: [
+        { key: "rank", label: "#", num: true, sort: true, render: (r) => medal(r.rank), text: (r) => String(r.rank) },
+        { key: "name", label: "Employee", sort: true, render: (r) => h("span", { dir: "auto" }, r.name), text: (r) => r.name },
+        { key: "team", label: "Team", sort: true, render: (r) => h("span", { dir: "auto" }, r.team || "—"), text: (r) => r.team || "" },
+        { key: "calls", label: "Calls answered", num: true, sort: true, render: (r) => fmtNum(r.calls) },
+        { key: "emails", label: "E-mails replied", num: true, sort: true, render: (r) => (r.emails == null ? h("span", { class: "hint", title: "That day's e-mails are not known" }, "—") : fmtNum(r.emails)) },
+        { key: "tickets", label: "Tickets handled", num: true, sort: true, render: (r) => h("span", { title: `${r.executed} executed · ${r.not_executed} not executed · ${r.rejected} rejected` }, fmtNum(r.tickets)) },
+        { key: "total", label: "Total", num: true, sort: true, render: (r) => h("strong", {}, fmtNum(r.total)) },
+      ], rows,
+    }).el;
+  }
+  function performersCard() {
+    const body = h("div", { "data-perf": "" }, h("p", { class: "hint" }, "Loading…"));
+    const dayI = h("input", { type: "date", "aria-label": "Day", "data-perf-day": "", value: perf.day || state.to || "" });
+    async function load() {
+      const seq = ++perf.seq, day = dayI.value;
+      let d;
+      try { d = await api("GET", `/api/ops/performance${day ? `?day=${encodeURIComponent(day)}` : ""}`); }
+      catch (e) { if (seq === perf.seq) body.replaceChildren(h("p", { class: "hint" }, e.message)); return; }
+      if (seq !== perf.seq) return;
+      perf.day = d.day;
+      dayI.value = d.day;
+      body.replaceChildren(performersTable(d));
+    }
+    dayI.addEventListener("change", load);
+    load();
+    return OPS.card("Best performers", { hint: "calls answered + e-mails replied + security requests handled (executed, not executed, rejected)",
+      actions: h("label", { class: "sx-filter-f" }, h("span", {}, "Day"), dayI) }, body);
   }
 
   // ------------------------------------------------------------------ e-mail reply quality (calls are never rated)

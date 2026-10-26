@@ -27,7 +27,7 @@ from .. import auth, overview as calls_overview, stats as call_stats
 from ..api import public_user
 from ..queries import ApiError, decorate, json_body, parse_day, reasons_by_key
 from ..storage import STATUSES, StorageError, norm_uid
-from . import analytics, auto_assign, health, itsm_records, mailbox, notifications, overlay, schemas, sla_history, sla_records, teams
+from . import analytics, auto_assign, health, itsm_records, mailbox, notifications, overlay, performance, schemas, sla_history, sla_records, teams
 from . import settings as hub_settings
 from .engines import common
 from .engines.common import norm_arabic
@@ -1111,6 +1111,14 @@ def sla_analysis_get():
                 and all(sla_history._norm(text[k]) == v for k, v in grid_text.items()))
     period.update(sla_history.right_now(view["grid"], view["open"], view["index"], cfg, now, keep,
                                         live=[r for r in view["live"] if keep_live(r)]))
+    # the security team's own day at a glance: what reached it, what it did, how long it took - never a request still
+    # with the branch or of another team (the same counting as the daily summary)
+    mine = sla_history.filter_records(view["records"], {**filt, "date_from": "", "date_to": ""})
+    period["glance"] = sla_history.period_numbers(mine, {k: g for k, g in view["grid"].items() if keep(g)},
+                                                  view["index"], cfg, filt["date_from"], filt["date_to"], now,
+                                                  live=[r for r in view["live"] if keep_live(r)],
+                                                  live_team=lambda r: teams.sla_request_team(r, team_resolver(),
+                                                                                             sla_system_header()))
     # the portal's own «الاستفسار عن الطلبات» rows of the period's request dates, next to what the history holds
     period["portal"] = {**sla_history.portal_comparison(view["grid"], view["index"], filt["date_from"], filt["date_to"],
                                                         cfg),
@@ -1151,6 +1159,22 @@ def sla_period(scope, filt):
     records = sla_history.with_current_stage(view["records"], view["grid"], view["index"], view["cfg"])
     stubs = sla_history.grid_stubs(view["grid"], view["index"], records, view["cfg"])
     return view, sla_history.filter_records({**stubs, **records}, filt)
+
+
+@bp.get("/performance")
+@auth.ops_view_required
+def performance_get():
+    """Best performers of one day (``?day=YYYY-MM-DD``, today by default): each employee's calls answered, e-mails
+    replied and security requests handled (calllog/ops/performance.py) - a manager sees their own team(s) only."""
+    now = auth.now()
+    day = parse_day(request.args.get("day")) if request.args.get("day") else now.date().isoformat()
+    if day > now.date().isoformat():
+        raise ApiError("That day has not come yet.")
+    users = auth.store().users()
+    users = users if isinstance(users, dict) else {u.get("user_id"): u for u in users or []}
+    rows = performance.people_day(ops(), auth.store(), hub_cfg(), users, day, now, auth.team_scope())
+    return jsonify(day=day, server_time=now.isoformat(timespec="seconds"), scope=overlay.scope_label(auth.team_scope()),
+                   rows=rows, emails_known=any(r["emails"] is not None for r in rows) or not rows)
 
 
 @bp.get("/sla-analysis/request")

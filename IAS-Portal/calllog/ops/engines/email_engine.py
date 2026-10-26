@@ -1227,6 +1227,12 @@ def save_today_stats_history(store, day, stats):
     return load_stats_history(store)
 
 
+def save_today_reply_history(store, day, rows):
+    """Write the day's replies per replier address (``replies``): what "Best performers" reads for a past day."""
+    from ..performance import email_replies_of
+    _set_history_key(store, day, "replies", email_replies_of(rows, _day_key(day)))
+
+
 def save_today_quality_history(store, day, scorecard):
     """Write the day's per-person quality numbers; returns the full quality history."""
     _set_history_key(store, day, "quality", {

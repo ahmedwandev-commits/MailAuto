@@ -23,7 +23,7 @@ in its card and the mail still goes.
 """
 from datetime import datetime, timedelta
 
-from .. import itsm_records, overlay, schemas, sla_history, sla_records, teams
+from .. import itsm_records, overlay, performance, schemas, sla_history, teams
 from ..settings import DEFAULTS, deep_merge
 from .common import FONT_STACK, NBE_GOLD, NBE_GREEN, JobResult, OutlookMailer, esc, outlook_error_text
 from . import email_report as er
@@ -129,68 +129,49 @@ def _resolver(store, hub, users):
 
 
 def tickets_block(store, hub, users, day, now, team=None):
-    """The security requests of ``day``, counted like Insights › Analysis › SLA (``sla_history.day_numbers``): every
-    team's, or (``team``) only that team's - a request's team is the team of the person who executed or holds it (their
-    account), else its application's (the same rule as the analysis); Third Party always left out. The Live queue
+    """The security requests of ``day``, counted like Insights › Analysis › SLA (``sla_history.period_numbers`` over
+    ``performance.sla_scope``): every team's, or (``team``) only that team's - a request's team is the team of the person
+    who executed or holds it (their account), else its application's; Third Party always left out. The Live queue
     (Re-Assign page) is counted from its own scan."""
-    sla_cfg = hub.get("sla") or {}
-    resolver = _resolver(store, hub, users)
-    excluded = teams.sla_exclusion(sla_cfg, resolver) or (lambda system: False)
     scope = (team,) if team else None
-    people = teams.sla_people(users)
-    team_of = lambda system, number="", name="": teams.sla_person_team(system, number, name, people, resolver)  # noqa: E731
+    sc = performance.sla_scope(store, hub, users, day, day, scope)
     out = {"available": False}
-    live = []
     snap = store.read_snapshot("sla")
     if snap:
-        data = snap.get("data") or {}
-        live = [r for r in data.get("requests") or [] if isinstance(r, dict) and not excluded(teams.sla_system(r))
-                and teams.in_scope(scope, resolver.sla_team(teams.sla_system(r), r.get("security_user")))]
         totals = {k: 0 for k in ("open", "within", "reminder", "breached")}
-        for r in live:
+        for r in sc["live"]:
             totals["open"] += 1
             if r.get("status") in totals:
                 totals[r["status"]] += 1
         out.update(available=True, as_of=snap.get("generated_at", ""), live=totals,
                    stale=_stale(hub, "sla", snap.get("generated_at"), now))
-    cfg = sla_records.clean_config((store.read_sla_records() or {}).get("config"))
-    state = store.read_sla_history_state() or {}
-    raw = dict(store.read_sla_closed_day(day) or {})
-    raw.update(state.get("open") or {})
-    if state.get("last_history") or raw:
-        records = {}
-        for k, r in raw.items():
-            r = sla_history.rederive(r, cfg)
-            if excluded(r.get("system")):
-                continue
-            number = r.get("executor_no") if r.get("executor_no") or r.get("executor") else ""
-            t = team_of(r.get("system"), number, r.get("executor") or r.get("holder"))
-            if teams.in_scope(scope, t):
-                records[k] = {**r, "team": t, "teams": [t]}
-        number_of = {}
-        for r in records.values():
-            for name, no in ((r.get("executor"), r.get("executor_no")), (r.get("checker"), r.get("checker_no"))):
-                if name and no:
-                    number_of.setdefault(sla_history._norm(name), no)
-        grid = {}
-        for key, g in (state.get("grid") or {}).items():
-            if excluded(g.get("system")):
-                continue
-            holder = g.get("holder") or ""
-            t = team_of(g.get("system"), number_of.get(sla_history._norm(holder), ""), holder)
-            if teams.in_scope(scope, t):
-                grid[key] = {**g, "team": t}
-        nums = sla_history.day_numbers(records, grid, state.get("index") or {}, cfg, day,
-                                       now.strftime("%Y-%m-%dT%H:%M:%S"), live=live)
+    if sc["available"]:
+        resolver = sc["resolver"]
+        nums = sla_history.period_numbers(sc["records"], sc["grid"], sc["index"], sc["cfg"], day, day,
+                                          now.strftime("%Y-%m-%dT%H:%M:%S"), live=sc["live"],
+                                          live_team=lambda r: resolver.sla_team(teams.sla_system(r), r.get("security_user")))
         out.update(available=True, history=True, received_today=nums["arrived"], closed_today=nums["closed"],
                    closed_executed=nums["closed_executed"], closed_not=nums["closed_not"],
                    executed=nums["executed"], not_executed=nums["not_executed"], rejected=nums["rejected"],
                    from_grid=nums["from_grid"], sla_pct=nums["sla_pct"] if nums["sla_pct"] is not None else 0.0,
-                   measured=nums["measured"], median_minutes=nums["median_minutes"], sla_minutes=cfg["sla_minutes"],
-                   now=nums["now"], history_as_of=state.get("last_history", ""))
+                   measured=nums["measured"], median_minutes=nums["median_minutes"], sla_minutes=sc["cfg"]["sla_minutes"],
+                   now=nums["now"], times=nums["times"], by_team=nums["by_team"], by_person=nums["by_person"],
+                   history_as_of=sc["last_history"])
     if not out.get("available"):
         out["reason"] = "no ticketing scan yet"
     return out
+
+
+def people_block(store, data_dir, hub, users, day, now, team=None):
+    """Best performers of the day (``performance.people_day``): the five employees who did the most - calls answered,
+    e-mails replied, security requests handled - every team's, or (``team``) that team's."""
+    from ...storage import Store
+    rows = performance.people_day(store, Store(data_dir), hub, users, day, now, (team,) if team else None)
+    return {"available": True, "rows": rows[:PEOPLE_TOP], "people": len(rows),
+            "emails_known": any(r["emails"] is not None for r in rows) or not rows}
+
+
+PEOPLE_TOP = 5
 
 
 def crs_block(store, hub, day, now, team=None, users=None):
@@ -241,8 +222,9 @@ def collect(ctx, now, team=None):
     jobs = (("calls", lambda: calls_block(ctx.data_dir, users, day, team)),
             ("email", lambda: email_block(ctx.store, hub, day, now, team)),
             ("tickets", lambda: tickets_block(ctx.store, hub, users, day, now, team)),
-            ("crs", lambda: crs_block(ctx.store, hub, day, now, team, users)))
-    module_of = {"calls": None, "email": "email", "tickets": "sla", "crs": "itsm"}
+            ("crs", lambda: crs_block(ctx.store, hub, day, now, team, users)),
+            ("people", lambda: people_block(ctx.store, ctx.data_dir, hub, users, day, now, team)))
+    module_of = {"calls": None, "email": "email", "tickets": "sla", "crs": "itsm", "people": None}
     out = {"day": day, "at": now.strftime("%Y-%m-%dT%H:%M:%S"), "team": team or ""}
     for key, build in jobs:
         if not want.get(key, True):
@@ -439,6 +421,17 @@ def build_html(data, cfg, slot, now, next_slot=None):
     inner += er._heading("By module")
     inner += ('<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">' + "".join(grid)
               + "</table>")
+    people = data.get("people") or {}
+    if people.get("available") and people.get("rows"):
+        point = slot if slot != "manual" else now.strftime("%H:%M")
+        inner += er._heading(f"Best performers - {point} checkpoint")
+        inner += er._table(["", "Employee", "Team", "Calls answered", "E-mails replied", "Tickets handled", "Total"], [
+            er._tr(er._td(f'#{p["rank"]}', bold=True), er._td(p["name"], bold=True), er._td(p["team"] or "-"),
+                   er._td(p["calls"], align="right"), er._td("-" if p["emails"] is None else p["emails"], align="right"),
+                   er._td(p["tickets"], align="right"), er._td(p["total"], bold=True, align="right"))
+            for p in people["rows"]])
+        inner += _sub(f'Today so far, of {people["people"]} employee(s) with work: calls logged + e-mails replied + '
+                      'security requests executed, not executed or rejected.')
     if cfg.get("per_team", True) and not data.get("team"):
         team_rows = _team_rows(data)
         if team_rows:

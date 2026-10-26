@@ -1322,6 +1322,7 @@ def _history_step(run):
     stats, store, today = run.stats, run.ctx.store, run.today
     history = eng.save_today_stats_history(store, today, stats)
     stats["trend"] = eng.compute_trend(today, history, stats)
+    eng.save_today_reply_history(store, today, run.rows)
 
 
 def _quality_history_step(run):

@@ -429,11 +429,44 @@ def todays_history(ops, at=NOW):
                   {"g1": {"id": "c1"}, "g2": {"id": "c2"}, "g3": {"id": "o1"}}, at)
 
 
+def open_details(t, path, ready):
+    """The SLA Analysis opens on its main view (the security team's own numbers); the detailed analysis is behind
+    «Show the detailed analysis»."""
+    page = t.open(path, '[data-kpi="g-came"]')
+    page.click("[data-details]")
+    page.wait_for_selector(ready)
+    return page
+
+
+def test_the_sla_analysis_opens_on_the_security_teams_own_day(ops, tab, hub):
+    """What the owner reads first: what came to the security team today, what it executed, did not execute, rejected,
+    confirmed, what waits; every hour came vs done; how long execution and confirmation take; each team and each
+    employee. A registration still at the branch is not counted; the detailed analysis is one click away."""
+    todays_history(ops)
+    t = tab()
+    page = t.open("/analysis?tab=sla", '[data-kpi="g-came"]')
+    got = {k: kpi(page, k) for k in ("g-came", "g-exec", "g-notexec", "g-rejected", "g-confirmed", "g-awaiting")}
+    assert got == {"g-came": "4", "g-exec": "2", "g-notexec": "0", "g-rejected": "1", "g-confirmed": "2", "g-awaiting": "0"}
+    assert "1 request(s) still with the branch" in text(page, "[data-glance-note]")
+    hours = page.locator("[data-glance-hour-table] tbody tr")
+    assert hours.nth(0).locator("td").last.inner_text() == "4" and hours.nth(1).locator("td").last.inner_text() == "3"
+    assert "No time yet" in page.locator("[data-glance-hour-table] thead").inner_text()   # the unread rejection
+    times = page.locator('[data-glance-times] tr[data-time="execution"] td')
+    assert [times.nth(i).inner_text() for i in range(3)] == ["2", "1.8 h", "1.8 h"]     # 60 and 150 min (read ones)
+    first = page.locator(".card:has-text('Each employee') tbody tr").first          # most came first
+    cells = [c.inner_text() for c in first.locator("td").all()]
+    assert cells[0] == USERS[0] and cells[1:4] == ["4", "2", "0"]                   # came, executed, not executed
+    assert page.locator('[data-kpi="an-closed"]').count() == 0                     # the detailed analysis is closed
+    page.click("[data-details]")
+    expect(page.locator('[data-kpi="an-closed"]')).to_have_count(1)
+    t.clean()
+
+
 def test_the_sla_analysis_is_the_sla_tab_of_insights_analysis_and_compares_with_the_portal(ops, tab, hub):
     """Today's requests (by assignment day) from the status history, and the portal's own inquiry rows next to them."""
     todays_history(ops)
     t = tab()
-    page = t.open("/analysis?tab=sla", '[data-kpi="an-closed"]')
+    page = open_details(t, "/analysis?tab=sla", '[data-kpi="an-closed"]')
     assert page.locator("#ax-tab-sla").get_attribute("aria-selected") == "true"
     assert kpi(page, "an-closed") == "2"
     portal = {k: page.locator(f'[data-portal="{k}"] strong').inner_text()
@@ -447,7 +480,7 @@ def test_old_links_to_the_ticketing_analysis_tab_open_its_new_place(ops, tab, hu
     todays_history(ops)
     t = tab()
     for old in ("/sla#analysis", "/sla?tab=analysis"):
-        page = t.open(old, '[data-kpi="an-closed"]')
+        page = t.open(old, '[data-kpi="g-came"]')
         assert "/analysis?" in page.url and "tab=sla" in page.url        # the page adds its own period to the address
     page = t.open("/sla", ".sx-requests tbody tr")
     assert page.locator(".sx-analysis-link").get_attribute("href") == "/analysis?tab=sla"
@@ -459,7 +492,7 @@ def test_the_sla_analysis_is_live(ops, tab, hub):
     """A scan that records another closed request shows up without a click."""
     todays_history(ops)
     t = tab()
-    page = t.open("/analysis?tab=sla", '[data-kpi="an-closed"]')
+    page = open_details(t, "/analysis?tab=sla", '[data-kpi="an-closed"]')
     assert kpi(page, "an-closed") == "2"
     later = NOW + dt.timedelta(minutes=5)
     write_history(ops, [history_rec("c3", "2026-10-11T08:40:00", "2026-10-11T09:04:00")],
@@ -473,7 +506,7 @@ def test_the_sla_analysis_says_how_many_requests_have_no_team(ops, tab, hub):
     """Requests whose application and security user map to no team are in no manager's view: the page says so."""
     write_history(ops, [history_rec("c1", "2026-10-11T07:00:00", "2026-10-11T08:00:00", system="Unmapped App")])
     t = tab()
-    page = t.open("/analysis?tab=sla", '[data-kpi="an-closed"]')
+    page = open_details(t, "/analysis?tab=sla", '[data-kpi="an-closed"]')
     note = page.locator(".sx-banner.info:has-text('no team')")
     expect(note).to_have_count(1)
     assert "Auto Assign" in note.inner_text() and page.locator(".sx-banner.info svg path").first.get_attribute("d")
@@ -483,7 +516,7 @@ def test_the_sla_analysis_says_how_many_requests_have_no_team(ops, tab, hub):
 def test_the_sla_analysis_says_dash_not_zero_percent_before_anything_closed(ops, tab, hub):
     write_history(ops, [], [history_rec("o1", "2026-10-11T08:20:00")])
     t = tab()
-    page = t.open("/analysis?tab=sla", '[data-kpi="an-within"]')
+    page = open_details(t, "/analysis?tab=sla", '[data-kpi="an-within"]')
     within = page.locator('[data-kpi="an-within"]')
     assert kpi(page, "an-within") == "—" and "op-t-danger" not in within.get_attribute("class")
     t.clean()
@@ -1096,4 +1129,16 @@ def test_itsm_completed_implementations_are_shown_by_day_with_a_finished_icon(op
     expect(page.locator(f'[data-kpi-value="{DONE}"]')).to_have_text("4")
     page.click('[data-done="today"]')
     expect(page.locator(f'[data-kpi-value="{DONE}"]')).to_have_text("2")
+    t.clean()
+
+
+def test_the_analysis_overview_names_the_best_performers_of_a_day(ops, tab, hub):
+    """Insights › Analysis opens with "Best performers": each employee's calls answered + e-mails replied + tickets
+    handled for the day picked (today first); a day with nothing says so."""
+    t = tab()
+    page = t.open("/analysis", "[data-perf] table, [data-perf-empty]")
+    assert page.locator("[data-perf-day]").input_value() == "2026-10-11"
+    page.fill("[data-perf-day]", "2026-10-01")
+    page.locator("[data-perf-day]").dispatch_event("change")
+    expect(page.locator("[data-perf-empty]")).to_have_count(1)
     t.clean()
