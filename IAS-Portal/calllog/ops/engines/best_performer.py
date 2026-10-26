@@ -148,7 +148,7 @@ def _run(ctx):
     subject = subject.replace("{names}", names).replace("{name}", names)
     mailer = ctx.mailer or OutlookMailer()
     try:
-        ds.send_retrying(mailer, ctx.log, "best performance", {"on": True}, to=to or cc, cc=cc if to else [],
+        ds.send_retrying(mailer, ctx.log, "best performance", {"on": True, "light": False}, to=to or cc, cc=cc if to else [],
                          subject=subject, html_body=html, inline_images=er.mail_images() or None,
                          display_only=bool(cfg.get("display_only")))
     except Exception as exc:                                # noqa: BLE001 - built, not sent: say why

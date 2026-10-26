@@ -8,6 +8,7 @@ import html
 import os
 import re
 import socket
+import subprocess
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -185,6 +186,27 @@ def outlook_busy(exc):
     return bool(codes & OUTLOOK_BUSY_CODES) or any(word in text for word in OUTLOOK_BUSY_WORDS)
 
 
+_OUTLOOK_PROCESS = ("$p = Get-Process OUTLOOK -ErrorAction SilentlyContinue | Select-Object -First 1; "
+                    "if ($p) { '{0}|{1}|{2}' -f $p.Path, $p.PrivateMemorySize64, $p.VirtualMemorySize64 }")
+
+
+def outlook_memory(run=subprocess.run, windows=None):
+    """What Windows says about the running Outlook, for the message when Outlook answers "out of memory": "Outlook
+    (32-bit) uses 1,765 MB (2,048 MB of address space)" - "" when it cannot be told (not Windows, not running)."""
+    if not (os.name == "nt" if windows is None else windows):
+        return ""
+    try:
+        out = run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _OUTLOOK_PROCESS], capture_output=True,
+                  text=True, timeout=20, creationflags=0x08000000).stdout.strip()
+        path, private, virtual = out.split("|")
+        private_mb, virtual_mb = int(private) // 2 ** 20, int(virtual) // 2 ** 20
+    except Exception:                                    # noqa: BLE001 - only a hint for the message
+        return ""
+    bits = "32-bit" if "(x86)" in path.lower() else "64-bit"
+    note = f"Outlook ({bits}) uses {private_mb:,} MB ({virtual_mb:,} MB of address space)"
+    return note + (" - a 32-bit Outlook cannot go much past 2,000 MB" if bits == "32-bit" else "")
+
+
 class OutlookMailer:
     """Sends HTML mail through Outlook desktop (COM). Safe to call from any collector thread."""
 
@@ -248,33 +270,43 @@ class OutlookMailer:
             raise MailError("No recipients.")
         display = self.display_only if display_only is None else display_only
         with OUTLOOK_LOCK:
-            outlook = self._outlook()
-            mail = self._new_mail(outlook)
+            step, mail = "opening Outlook", None          # the error says where Outlook failed
             try:
+                outlook = self._outlook()
+                step = "creating the mail"
+                mail = self._new_mail(outlook)
+                step = "addressing it"
                 mail.To = "; ".join(to)
                 if cc:
                     mail.CC = "; ".join(cc)
                 if bcc:
                     mail.BCC = "; ".join(bcc)
                 mail.Subject = subject
+                step = "adding the logo"
                 for cid, path in (inline_images or {}).items():
                     if path and os.path.exists(path):
                         att = mail.Attachments.Add(path, 1, 0)
                         pa = att.PropertyAccessor
                         pa.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", cid)
                         pa.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x7FFE000B", True)
+                step = "writing its body"
                 mail.HTMLBody = html_body
+                step = "adding the attachments"
                 for path in attachments:
                     if path and os.path.exists(path):
                         mail.Attachments.Add(str(path))
+                step = "showing it" if display else "sending it"
                 if display:
                     mail.Display()
                 else:
                     mail.Send()
-            except Exception:
-                with _suppress():                        # never leave the half-made mail behind (in Drafts)
-                    mail.Close(OL_DISCARD)
-                raise
+            except Exception as exc:
+                if mail is not None:
+                    with _suppress():                    # never leave the half-made mail behind (in Drafts)
+                        mail.Close(OL_DISCARD)
+                if isinstance(exc, MailError):
+                    raise
+                raise MailError(f"{outlook_error_text(exc)} - Outlook failed while {step}") from exc
             finally:
                 att = pa = mail = outlook = None         # noqa: F841 - drop the COM references now
 

@@ -141,7 +141,8 @@ def test_outlook_too_busy_is_tried_again_and_a_failure_says_it_was_built(tmp_pat
     assert bp.run(make_ctx(tmp_path, once)).ok and len(once.sent) == 1 and pauses == [20]
     stuck = Busy(9)
     res = bp.run(make_ctx(tmp_path / "b", stuck))
-    assert not res.ok and "built but Outlook could not send it: Out of memory" in res.error and "3 tries" in res.error
+    assert not res.ok and "built but Outlook could not send it: Out of memory" in res.error
+    assert "at each of 4 tries over 80 s, the last one without the logo" in res.error
 
 
 # ---- when it goes: once a day at its time, on a working day

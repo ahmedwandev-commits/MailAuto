@@ -26,13 +26,16 @@ def out_of_memory():
 
 
 class Mail:
-    def __init__(self, where, refuse=None):
+    def __init__(self, where, refuse=None, attach_error=None):
         self.where, self.sent, self.SendUsingAccount, self.closed = where, False, None, None
         self.To = self.CC = self.BCC = self.Subject = self.HTMLBody = ""
         self.Attachments = self
         self.refuse = refuse                                  # () -> the error Send raises, or None
+        self.attach_error = attach_error
 
     def Add(self, *args):                                     # Attachments.Add
+        if self.attach_error:
+            raise self.attach_error
         raise AssertionError("no attachment expected")
 
     def Send(self):
@@ -89,17 +92,18 @@ class Collection:
 
 
 class Outlook:
-    def __init__(self, default_ok=False, accounts=(), stores=(), send_errors=(), create_errors=()):
+    def __init__(self, default_ok=False, accounts=(), stores=(), send_errors=(), create_errors=(), attach_error=None):
         self.default_ok, self.made = default_ok, []
         self.ns = type("NS", (), {"Accounts": Collection(list(accounts)), "Stores": Collection(list(stores))})()
-        self.send_errors, self.create_errors = list(send_errors), list(create_errors)
+        self.send_errors, self.create_errors, self.attach_error = list(send_errors), list(create_errors), attach_error
 
     def CreateItem(self, kind):
         if self.create_errors:
             raise self.create_errors.pop(0)
         if not self.default_ok:
             raise ComError()
-        self.made.append(Mail("default", refuse=lambda: self.send_errors.pop(0) if self.send_errors else None))
+        self.made.append(Mail("default", refuse=lambda: self.send_errors.pop(0) if self.send_errors else None,
+                              attach_error=self.attach_error))
         return self.made[-1]
 
     def GetNamespace(self, name):
@@ -166,19 +170,26 @@ def test_a_summary_outlook_cannot_send_says_it_was_built_and_why(tmp_path):
 
 
 # ---- Outlook too busy («Out of memory or system resources»: the e-mail scan or report was holding many of its items)
-def test_a_mail_outlook_refuses_is_discarded_not_left_behind(monkeypatch):
+def test_a_mail_outlook_refuses_is_discarded_and_the_error_says_where_outlook_failed(monkeypatch, tmp_path):
     outlook = Outlook(default_ok=True, send_errors=[out_of_memory()])
-    with pytest.raises(ComError):
+    with pytest.raises(common.MailError) as err:
         mailer_for(monkeypatch, outlook).send(["a@example.test"], subject="S", html_body="x")
     assert not outlook.made[0].sent and outlook.made[0].closed == common.OL_DISCARD      # never left in Drafts
+    assert str(err.value) == OUT_OF_MEMORY + " - Outlook failed while sending it" and common.outlook_busy(err.value)
+    logo = tmp_path / "logo.png"
+    logo.write_bytes(b"png")
+    outlook = Outlook(default_ok=True, attach_error=out_of_memory())
+    with pytest.raises(common.MailError) as err:
+        mailer_for(monkeypatch, outlook).send(["a@example.test"], subject="S", html_body="x", inline_images={"l": str(logo)})
+    assert str(err.value).endswith("- Outlook failed while adding the logo") and outlook.made[0].closed == common.OL_DISCARD
 
 
 def test_outlook_too_busy_to_create_a_mail_is_not_taken_for_a_missing_data_file(monkeypatch):
     mailbox = Store("mailbox")
     outlook = Outlook(default_ok=True, accounts=[Account(mailbox)], create_errors=[out_of_memory()])
-    with pytest.raises(ComError) as err:
+    with pytest.raises(common.MailError) as err:
         mailer_for(monkeypatch, outlook).send(["a@example.test"], subject="S", html_body="x")
-    assert common.outlook_error_text(err.value) == OUT_OF_MEMORY and not mailbox.items.made   # no "data file" advice
+    assert str(err.value) == OUT_OF_MEMORY + " - Outlook failed while creating the mail" and not mailbox.items.made
 
 
 def test_outlook_busy_knows_outlooks_busy_answers():
@@ -187,8 +198,22 @@ def test_outlook_busy_knows_outlooks_busy_answers():
     assert not common.outlook_busy(ComError()) and not common.outlook_busy(ValueError("plain"))
 
 
+def test_outlook_memory_says_how_much_outlook_uses_and_if_it_is_32_bit():
+    class Done:
+        def __init__(self, out):
+            self.stdout = out
+    x86 = "C:\\Program Files (x86)\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE|1850000000|2100000000"
+    note = common.outlook_memory(run=lambda *a, **kw: Done(x86), windows=True)
+    assert note == "Outlook (32-bit) uses 1,764 MB (2,002 MB of address space) - a 32-bit Outlook cannot go much past 2,000 MB"
+    x64 = "C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE|900000000|5000000000"
+    assert common.outlook_memory(run=lambda *a, **kw: Done(x64), windows=True) == "Outlook (64-bit) uses 858 MB (4,768 MB of address space)"
+    assert common.outlook_memory(run=lambda *a, **kw: Done(""), windows=True) == ""          # Outlook not running
+    assert common.outlook_memory(windows=False) == ""
+
+
 def summary_ctx(tmp_path, monkeypatch, outlook, pauses, logs, settings=None):
     monkeypatch.setattr(daily_summary, "_sleep", pauses.append)
+    monkeypatch.setattr(daily_summary, "outlook_memory", lambda: "Outlook (32-bit) uses 1,900 MB")
     monkeypatch.setattr(daily_summary.er, "mail_images", lambda extra=None: {})   # the fake mail takes no logo
     store = OpsStore(tmp_path / "data").init()
     return common.JobContext(job="daily_summary", settings=settings or {"to": ["summary@example.test"]}, general={},
@@ -213,8 +238,9 @@ def test_when_outlook_stays_out_of_memory_the_summary_says_so_and_the_next_mail_
     settings = {"to": ["summary@example.test"], "team_recipients": {"Flex Cube": {"to": ["flex@example.test"]}}}
     res = daily_summary.run(summary_ctx(tmp_path, monkeypatch, outlook, pauses, logs, settings))
     assert not res.ok and res.emails_sent == 0 and pauses == [20, 60]          # Outlook is stuck: no more pauses
-    assert "every team: " + OUT_OF_MEMORY + " (Outlook said so at each of 3 tries over 80 s" in res.error
-    assert "restarting Outlook on the collector PC" in res.error and "Flex Cube: " + OUT_OF_MEMORY in res.error
+    assert ("every team: " + OUT_OF_MEMORY + " - Outlook failed while sending it (Outlook said so at each of 3 tries "
+            "over 80 s; Outlook (32-bit) uses 1,900 MB. Close Outlook completely") in res.error
+    assert "no OUTLOOK.EXE may be left" in res.error and "Flex Cube: " + OUT_OF_MEMORY in res.error
     assert len(outlook.made) == 4 and not any(m.sent for m in outlook.made)
 
 
@@ -223,3 +249,27 @@ def test_a_summary_error_that_is_not_outlook_being_busy_is_not_tried_again(tmp_p
     outlook = Outlook(default_ok=True, send_errors=[ComError("The operation failed.", scode=-2147467259)])
     res = daily_summary.run(summary_ctx(tmp_path, monkeypatch, outlook, pauses, logs))
     assert not res.ok and pauses == [] and len(outlook.made) == 1 and "The operation failed." in res.error
+
+
+def test_a_summary_outlook_takes_only_without_the_logo_goes_without_it(tmp_path, monkeypatch):
+    """The last try leaves the logo out (less for Outlook to do); once that worked, the next mails of the run go
+    without it from the start."""
+    pauses, logs, sent = [], [], []
+
+    class LogoRefused:
+        def send(self, **mail):
+            if mail.get("inline_images"):
+                raise common.MailError(OUT_OF_MEMORY + " - Outlook failed while adding the logo")
+            sent.append(mail)
+    monkeypatch.setattr(daily_summary, "_sleep", pauses.append)
+    monkeypatch.setattr(daily_summary, "outlook_memory", lambda: "")
+    monkeypatch.setattr(daily_summary.er, "logo_available", lambda: True)
+    store = OpsStore(tmp_path / "data").init()
+    settings = {"to": ["summary@example.test"], "team_recipients": {"Flex Cube": {"to": ["flex@example.test"]}}}
+    ctx = common.JobContext(job="daily_summary", settings=settings, general={}, store=store,
+                            now=lambda: datetime(2026, 10, 25, 10, 35), log=logs.append, mailer=LogoRefused(),
+                            data_dir=str(tmp_path / "data"), options={"slot": "10:00"})
+    res = daily_summary.run(ctx)
+    assert res.ok and res.emails_sent == 2 and pauses == [20, 60]                     # the second mail: no failed tries
+    assert all("cid:" not in m["html_body"] and ">NBE</td>" in m["html_body"] for m in sent)
+    assert any("sent without the logo" in line for line in logs)

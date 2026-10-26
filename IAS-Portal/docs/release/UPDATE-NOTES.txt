@@ -366,6 +366,18 @@ HOW TO UPDATE (your data is kept)
      the day: {names}".
    - The score is the same: a call = 2 security requests, an e-mail replied = 3, a request handled = 1.
 
+34. OUTLOOK "OUT OF MEMORY": THE MAIL TRIES WITHOUT THE LOGO, AND THE MESSAGE SAYS WHY AND WHAT TO DO
+   - If Outlook still says "Out of memory or system resources" after the tries at 20 s and 60 s, the daily summary
+     (and the Best Performance e-mail) is tried once more WITHOUT the logo picture (the NBE badge instead): less work
+     for Outlook. When that works, the next mails of the run go without the logo too.
+   - Every Outlook error now says the step that failed: opening Outlook, creating the mail, adding the logo, writing
+     its body, sending it...
+   - When Outlook says it is out of memory, the log and the error say how much memory Outlook uses and whether it is
+     32-bit (a 32-bit Outlook cannot go much past 2,000 MB).
+   - What to do when it stays: close Outlook completely - in Task Manager no OUTLOOK.EXE may be left - open it again
+     and press Run now. Outlook does not give back memory it ran out of until it is restarted; this update keeps the
+     e-mail report from filling it again.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -668,3 +680,14 @@ IAS PORTAL - الجديد في هذا التحديث
    - الـ subject وكلامك: {names} بيتحط مكانها أساميهم ("A, B and C"). الـ subject الافتراضي: "Best Performance of
      the day: {names}".
    - الـ score زي ما هو: المكالمة = 2 طلب، الإيميل اللي اترد عليه = 3، الطلب = 1.
+
+34. "Out of memory" من الـ Outlook: الإيميل بيتجرب من غير اللوجو، والرسالة بتقول السبب وتعمل إيه
+   - لو الـ Outlook فضل يقول "Out of memory or system resources" بعد المحاولات بعد 20 ثانية و60 ثانية، الملخص اليومي
+     (وإيميل الـ Best Performance) بيتجرب مرة كمان من غير صورة اللوجو (بدلها كلمة NBE): شغل أقل على الـ Outlook. ولو
+     نجحت، باقي إيميلات نفس المرة بتروح من غير اللوجو كمان.
+   - كل error من الـ Outlook بقى بيقول الخطوة اللي وقفت: فتح الـ Outlook، عمل الإيميل، إضافة اللوجو، كتابة الـ body،
+     الإرسال...
+   - لما الـ Outlook يقول مفيش memory، الـ log والـ error بيقولوا الـ Outlook واخد قد إيه memory ولو هو 32-bit (الـ
+     Outlook الـ 32-bit مبيعديش 2,000 MB كتير).
+   - تعمل إيه لو فضلت: اقفل الـ Outlook خالص - في الـ Task Manager مايفضلش أي OUTLOOK.EXE - وافتحه تاني واضغط Run now.
+     الـ Outlook مبيرجعش الـ memory اللي خلصت إلا لما يتقفل ويتفتح؛ والتحديث ده بيمنع تقرير الإيميل إنه يملاها تاني.

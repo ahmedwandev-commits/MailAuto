@@ -623,8 +623,8 @@ def mail_images(extra=None):
     return images
 
 
-def _logo_html():
-    if logo_available():
+def _logo_html(image=None):
+    if logo_available() if image is None else image:
         return ('<table cellpadding="0" cellspacing="0" role="presentation" border="0"><tr>'
                 '<td width="54" height="54" align="center" valign="middle" bgcolor="#ffffff" '
                 'style="background:#ffffff;"><img src="cid:' + LOGO_CID + '" alt="NBE" width="42" height="42" '
@@ -651,6 +651,11 @@ def _page(title, subtitle_html, inner, width=780):
         '</td></tr></table></td></tr>'
         f'<tr><td style="padding:24px 28px;font-family:{FONT_STACK};">{inner}</td></tr>'
         '</table></td></tr></table></body></html>')
+
+
+def without_inline_logo(html_body):
+    """The mail with the NBE text badge instead of the inline logo image: a mail that goes without the logo attached."""
+    return html_body.replace(_logo_html(True), _logo_html(False))
 
 
 def _subtitle(day):

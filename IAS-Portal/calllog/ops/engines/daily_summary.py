@@ -26,7 +26,8 @@ from datetime import datetime, timedelta
 
 from .. import itsm_records, overlay, performance, schemas, sla_history, teams
 from ..settings import DEFAULTS, deep_merge
-from .common import FONT_STACK, NBE_GOLD, NBE_GREEN, JobResult, OutlookMailer, esc, outlook_busy, outlook_error_text
+from .common import (FONT_STACK, NBE_GOLD, NBE_GREEN, JobResult, OutlookMailer, esc, outlook_busy, outlook_error_text,
+                     outlook_memory)
 from . import email_report as er
 
 STATE_NAME = "daily_summary"                 # {"day": "YYYY-MM-DD", "sent": {slot: iso time}}
@@ -478,24 +479,47 @@ def _counts(data):
 
 
 def send_retrying(mailer, log, label, retry, **mail):
-    """``mailer.send(**mail)``, tried again after each pause of ``SEND_RETRY_SECONDS`` while Outlook answers that it is
-    too busy. ``retry["on"]`` goes off once a mail used up its tries: Outlook is stuck, the next mails try once."""
+    """``mailer.send(**mail)`` - while Outlook answers that it is too busy (out of memory or resources), tried again
+    after each pause of ``SEND_RETRY_SECONDS``, then once more without the inline logo (less for Outlook to do). The
+    log and the error say how much memory Outlook uses. ``retry``: shared by the mails of one run - "on" goes off once a
+    mail used up its tries (Outlook is stuck: the next mails try once), "light" once Outlook took a mail only without
+    the logo (the next ones go without it)."""
+    light = (dict(mail, inline_images=None, html_body=er.without_inline_logo(mail.get("html_body") or ""))
+             if mail.get("inline_images") else None)
+    if light and retry.get("light"):
+        mail = light
     pauses = list(SEND_RETRY_SECONDS) if retry["on"] else []
+    tries, note = 0, None
     while True:
+        tries += 1
         try:
-            return mailer.send(**mail)
+            result = mailer.send(**mail)
+            if mail is light and not retry.get("light"):
+                retry["light"] = True
+                log(f"{label}: sent without the logo - Outlook could not take it with the logo attached")
+            return result
         except Exception as exc:                            # noqa: BLE001 - raised again when it is not worth a try
             if not outlook_busy(exc):
                 raise
-            if not pauses:
-                if retry["on"]:
-                    retry["on"] = False
-                    raise RuntimeError(f"{outlook_error_text(exc)} (Outlook said so at each of "
-                                       f"{len(SEND_RETRY_SECONDS) + 1} tries over {sum(SEND_RETRY_SECONDS)} s; "
-                                       "restarting Outlook on the collector PC frees its memory)") from exc
-                raise
-            log(f"{label}: Outlook is busy ({outlook_error_text(exc)}) - trying again in {pauses[0]} s")
-            _sleep(pauses.pop(0))
+            if note is None:
+                note = outlook_memory()
+            if pauses:
+                log(f"{label}: Outlook is busy ({outlook_error_text(exc)}{'; ' + note if note else ''}) - trying again "
+                    f"in {pauses[0]} s")
+                _sleep(pauses.pop(0))
+                continue
+            if light and mail is not light and retry["on"]:
+                log(f"{label}: Outlook is still busy - trying once more without the logo")
+                mail = light
+                continue
+            if retry["on"]:
+                retry["on"] = False
+                raise RuntimeError(
+                    f"{outlook_error_text(exc)} (Outlook said so at each of {tries} tries over {sum(SEND_RETRY_SECONDS)} s"
+                    + (", the last one without the logo" if light else "") + (f"; {note}" if note else "")
+                    + ". Close Outlook completely - in Task Manager no OUTLOOK.EXE may be left - open it again, then "
+                      "press Run now)") from exc
+            raise
 
 
 def _run(ctx):
@@ -521,7 +545,7 @@ def _run(ctx):
                          summary="no recipient - add one (To / Cc, or a team) in System › Settings › Daily summary")
     already = set() if (force or slot == "manual") else set(done.get(slot) or [])
     mailer = None
-    built, mailed, errors, retry = [], 0, [], {"on": True}
+    built, mailed, errors, retry = [], 0, [], {"on": True, "light": False}
 
     def remember():
         try:
