@@ -38,6 +38,10 @@ from datetime import datetime
 INQUIRY_PATH = "/SecurityCodeRequest/Security_Assign_Maker/RequestDetails_Inquiry.aspx"
 GRID_TARGET = "ctl00$ContentPlaceHolder1$GridView_Inquiry"
 DETAIL_GRID_ID = "ContentPlaceHolder1_UC_RequestDeatils_Inquiry1_UC_RequestDetails1_GridView_Req"
+# The bank's names: the whole inquiry is the control «UC_RequestDeatils_Inquiry1» (search, grid, buttons, details); the
+# request's details are its inner control «UC_RequestDetails1» (as the status history grid's own id says)
+INQUIRY_UC = "ContentPlaceHolder1_UC_RequestDeatils_Inquiry1"
+DETAILS_UC = INQUIRY_UC + "_UC_RequestDetails1"
 GRID_HEADERS = ["تاريخ الطلب", "نوع النموذج", "الفرع / الادارة", "اسم الموظف", "رقم الموظف", "رقم الموظف TP",
                 "رقم المستخدم", "المسمى الوظيفي", "النظام", "المجموعة", "نوع الطلب", "موظف الاسناد", "مستخدم السرية",
                 "مراجع السرية", "ملاحظات", "الحالة"]
@@ -254,9 +258,10 @@ class FakeInquiryPortal:
             if self.pager in ("buttons", "total_only"):   # the bank's page: total line + «عرض السابق» / «عرض التالي»
                 body += f"<div class='total'>اجمالي عدد الطلبات : - {len(rows)}</div>"
                 if self.pager == "buttons":
+                    ids = (f" id='{INQUIRY_UC}_btnPrev'", f" id='{INQUIRY_UC}_btnNext'") if self.details == "in_page" else ("", "")
                     body += ("<div class='pager-buttons' style='text-align:left'>"
-                             "<input type='submit' class='btn' name='btnPrev' value='عرض السابق'> "
-                             "<input type='submit' class='btn' name='btnNext' value='عرض التالي'></div>")
+                             f"<input type='submit' class='btn' name='btnPrev'{ids[0]} value='عرض السابق'> "
+                             f"<input type='submit' class='btn' name='btnNext'{ids[1]} value='عرض التالي'></div>")
             elif last:                                 # the portal's own pager, centred under the grid
                 links = []
                 if state["page"] > 0:
@@ -276,6 +281,8 @@ class FakeInquiryPortal:
             stuck = self.history == "stuck"
             script += (f"miniDT({_js(DETAIL_GRID_ID)}, {_js(lines)}, {{api: {_js(self.history == 'api')}, "
                        f"hold: 'all', stuck: {_js(stuck)}}});")
+        if self.details == "in_page" and body:          # the bank's page: all of it inside the inquiry control
+            body = f"<div id='{INQUIRY_UC}_pnlResult'>{body}</div>"
         post = ("<script>function __doPostBack(t, a) { const f = document.getElementById('form1');"
                 " f.__EVENTTARGET.value = t; f.__EVENTARGUMENT.value = a; f.submit(); }</script>")
         return ("<!doctype html><html lang='ar' dir='rtl'><head><meta charset='utf-8'><title>الاستفسار عن الطلبات</title>"
@@ -297,10 +304,11 @@ class FakeInquiryPortal:
         elif period:
             fields += f"<div><label>الفتره من / الى</label><span>{html.escape(period)}</span></div>"
         if self.details == "in_page":                  # in the page, with the history grid's own server pager
-            return ("<div id='pnlRequest'><div><h4>تفاصيل الطلب</h4>" + fields
+            target = DETAILS_UC.replace("ContentPlaceHolder1", "ctl00$ContentPlaceHolder1").replace("_UC_", "$UC_") + "$GridView_Req"
+            return (f"<div id='{DETAILS_UC}_pnlRequest'><div><h4>تفاصيل الطلب</h4>" + fields
                     + _dt_wrapper(DETAIL_GRID_ID, HISTORY_HEADERS, lengths, 5, "<h5>الحالة التاريخية للطلب</h5>")
-                    + "<div class='gv-pager'><a href=\"javascript:__doPostBack('ctl00$ContentPlaceHolder1$gvHistory',"
-                    "'Page$Next')\">التالي</a></div></div></div>")
+                    + f"<div class='gv-pager'><a href=\"javascript:__doPostBack('{target}','Page$Next')\">التالي</a>"
+                    "</div></div></div>")
         return ("<div class='modal' role='dialog' style='display:block'><div class='modal-content'>"
                 f"<h4>تفاصيل الطلب</h4>{fields}"
                 + _dt_wrapper(DETAIL_GRID_ID, HISTORY_HEADERS, lengths, 5, "<h5>الحالة التاريخية للطلب</h5>")

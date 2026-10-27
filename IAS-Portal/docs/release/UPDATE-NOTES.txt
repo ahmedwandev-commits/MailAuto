@@ -485,6 +485,9 @@ HOW TO UPDATE (your data is kept)
      seconds, and if «عرض التالي» still does not open, the scan searches again and goes on to the next page - so every
      request of the day is counted.
    - Time is kept for the other days of the scan (a recent day and an older day), so they are searched every time.
+   - v5.13: v5.12 skipped every button named like the inquiry's own control (on the bank's page the grid and
+     «عرض التالي» carry that name too), so its log said «only 1000 of the 3406». Only the details' own control and
+     the status history's pager are skipped now, and the page's «عرض التالي» is preferred.
    - Note: your "Search the last (days)" is 7 (the log searched 21/10 in turn); the default is 3. The scan searches
      today every time and the other days one a scan in turn, so 7 is fine - each of them is only refreshed less often.
 
@@ -906,5 +909,8 @@ IAS PORTAL - الجديد في هذا التحديث
    - دلوقتي التفاصيل عمرها ما بتتاخد على إنها زرار الصفحة، والضغطة اللي ماتغيرش حاجة بتتساب بعد ثواني، ولو «عرض التالي»
      برضه مافتحش، السكان بيبحث تاني ويكمل للصفحة اللي بعدها - فكل طلبات اليوم بتتحسب.
    - فيه وقت متساب لباقي أيام السكان (يوم قريب ويوم قديم)، فبيتبحث فيهم كل مرة.
+   - v5.13: نسخة v5.12 كانت بتتجاهل أي زرار اسمه زي اسم صفحة الاستفسار نفسها (وفي البورتال الجدول و«عرض التالي» ليهم نفس
+     الاسم)، علشان كده الـ log قال «only 1000 of the 3406». دلوقتي اللي بيتجاهل بس هو جزء التفاصيل وزرار صفحات الحالة
+     التاريخية، و«عرض التالي» بتاع الصفحة هو اللي بيتختار الأول.
    - ملاحظة: "Search the last (days)" عندك 7 (الـ log بحث في 21/10 بالدور)، والافتراضي 3. السكان بيبحث في النهارده كل
      مرة والأيام التانية يوم كل سكان بالدور، فالـ 7 مفيهاش مشكلة - بس كل يوم منهم بيتحدث على فترات أطول.

@@ -210,7 +210,9 @@ def test_a_busy_portal_gets_every_request_opened_once_on_one_search(browser, tmp
 def test_the_next_result_page_opens_with_a_requests_details_shown_under_the_grid(browser, tmp_path):
     """The bank's page fills «تفاصيل الطلب» into the page under the grid, with the status history's own pager
     «التالي» (Page$Next) in it. «عرض التالي» is the page's own button: a pager inside the details is never taken for
-    it (the owner's log: «only 2000 of the 3406 requests could be read» and a minute lost waiting)."""
+    it (the owner's v5.11 log: «only 2000 of the 3406 requests could be read» and a minute lost waiting), and the
+    inquiry control's own name «UC_RequestDeatils_Inquiry1» - on the grid and on «عرض التالي» too - never hides it
+    (v5.12: «only 1000 of the 3406»)."""
     reqs = _many(7)
     with FakeInquiryPortal(reqs, server_page=3, pager="buttons", details="in_page") as portal:
         out = read(browser, portal, tmp_path)
@@ -219,12 +221,15 @@ def test_the_next_result_page_opens_with_a_requests_details_shown_under_the_grid
     assert sorted(recorded(out)) == [r["number"] for r in reqs] and "WARNING" not in "\n".join(out["logs"])
 
 
-def test_a_next_page_that_will_not_open_after_the_details_is_reached_by_a_new_search(browser, tmp_path):
+@pytest.mark.parametrize("details", ["modal", "in_page"])
+def test_a_next_page_that_will_not_open_after_the_details_is_reached_by_a_new_search(browser, tmp_path, details):
     """When «عرض التالي» does nothing right after a request's details were opened, the scan does not wait out its time:
-    it searches again (the details closed) and goes forward to the next page, so every request is still counted."""
+    it searches again (the details closed) and goes forward to the next page, so every request is still counted - on
+    the bank's page too, where the grid and «عرض التالي» are inside the inquiry control «UC_RequestDeatils_Inquiry1»
+    (v5.12 skipped every control of that name: «only 1000 of the 3406 requests could be read»)."""
     import time as _time
     reqs = _many(7)
-    with FakeInquiryPortal(reqs, server_page=3, pager="buttons", next_after_details=False) as portal:
+    with FakeInquiryPortal(reqs, server_page=3, pager="buttons", next_after_details=False, details=details) as portal:
         started = _time.monotonic()
         out = read(browser, portal, tmp_path)
         took = _time.monotonic() - started

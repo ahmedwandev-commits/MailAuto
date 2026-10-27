@@ -790,10 +790,11 @@ JS_GRID_NEXT = ("(() => {" + JS_NORM + JS_FIND_GRID + r"""
   const r = n.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; })()""")
 
 # The portal's OWN next page of results (the server sends at most a page of rows, «All» = 1000 on the bank's portal):
-# the button «عرض التالي» under the grid (next to «عرض السابق»), or a pager link «التالي» / Page$Next. Never the
-# DataTables pager, nor anything of an open «تفاصيل الطلب» - a box, or the part of the page it is filled into (the
-# bank's: under the grid, with the status history's own pager «التالي» / Page$Next): everything around the status
-# history table that does not hold the grid, and the request-details control's own names.
+# the button «عرض التالي» under the grid (next to «عرض السابق»), or a pager link «التالي» / Page$Next - the grid's own
+# Page$Next first, then «عرض التالي», then any other «التالي», then any other Page$Next. Never the DataTables pager, nor anything of an open
+# «تفاصيل الطلب»: a box, the status history table (its pager row) and its wrapper, and the request-details control
+# «UC_RequestDetails» (its status history grid «GridView_Req»). On the bank's page the WHOLE inquiry - grid and
+# «عرض التالي» included - is the control «UC_RequestDeatils_Inquiry» (spelt so): that name is never a reason to skip.
 JS_FIND_SERVER_NEXT = JS_FIND_GRID + r"""
   const PB = /__doPostBack\(\s*['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]\s*\)/;
   const src = el => (el.getAttribute('href') || '') + ' ' + (el.getAttribute('onclick') || '');
@@ -804,18 +805,22 @@ JS_FIND_SERVER_NEXT = JS_FIND_GRID + r"""
       return hwant.every(w => nh.some(h => h === w || h.includes(w))); };
     const hist = document.getElementById(""" + json.dumps(DETAIL_GRID_ID) + r""")
       || [...document.querySelectorAll('table')].find(t => t !== grid && !t.contains(grid) && hfits(t));
-    let details = null;                                  // the largest part of the page around the history, not the grid
-    if (hist && !hist.contains(grid)) { details = hist; while (details.parentElement && !details.parentElement.contains(grid)) details = details.parentElement; }
-    const own = el => /UC_RequestDe(at|ta)ils|GridView_Req/i.test((el.id || '') + ' ' + (el.getAttribute('name') || '') + ' ' + src(el));
+    const hwrap = hist && !hist.contains(grid) ? (hist.closest('.dataTables_wrapper') || hist) : null;
+    const details = el => (hwrap && hwrap.contains(el)) || !!el.closest('[id*="UC_RequestDetails"]')
+      || /UC_RequestDetails|GridView_Req/.test((el.id || '') + ' ' + (el.getAttribute('name') || '') + ' ' + src(el));
     const after = el => !!(grid.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
     const ctls = [...document.querySelectorAll('a, input[type=submit], input[type=button], button')]
       .filter(visible).filter(after)
       .filter(el => !el.closest('.dataTables_paginate, .dataTables_length, .modal, [role=dialog], .ui-dialog'))
-      .filter(el => !(details && details.contains(el)) && !el.closest('[id*="UC_RequestDeatils"], [id*="UC_RequestDetails"]') && !own(el));
+      .filter(el => !details(el));
     const NEXT = norm('التالي'), BACK = norm('السابق');
     const isNext = el => { const t = textOf(el);       // «عرض التالي», «التالي», «الصفحة التالية»..., never «عرض السابق»
       return !!t && t.length <= 24 && !t.includes(BACK) && (t === NEXT || t.endsWith(NEXT) || t === 'next' || t.includes(norm('التاليه'))); };
-    const n = ctls.find(el => /Page\$Next/i.test(src(el))) || ctls.find(isNext);
+    const pageNext = el => /Page\$Next/i.test(src(el));
+    const gridsOwn = el => { const m = PB.exec(src(el)); return !!(m && grid.id && m[1].replace(/\$/g, '_').endsWith(grid.id)); };
+    const SHOW = norm('عرض');                          // the bank's own button says «عرض التالي»
+    const n = ctls.find(el => pageNext(el) && gridsOwn(el)) || ctls.find(el => isNext(el) && textOf(el).includes(SHOW))
+      || ctls.find(isNext) || ctls.find(pageNext);
     if (!n || n.disabled || n.hasAttribute('disabled') || /aspNetDisabled|disabled/.test(n.className || '')) return null;
     return n; };
 """
