@@ -20,6 +20,7 @@ from . import schemas
 LOG_ROTATE_BYTES = 1_000_000
 HISTORY_KEEP_DAYS = 60
 _MISSING = object()        # cached "this file does not exist"
+_RETRY = object()          # a read that raced a write of this process: read again (OpsStore._load)
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$")
 
 
@@ -60,6 +61,7 @@ class OpsStore:
         self.itsm_records_path = self.root / "itsm_records.json"  # LIVE ITSM change-request recording: exec time + conclusion
         self._cache = {}                        # path -> (size/mtime signature, parsed data or _MISSING, time checked)
         self._used = {}                         # path -> time of the last request for it
+        self._writes = {}                       # path -> how many times this process wrote it (``_forget``)
         self._cache_lock = threading.Lock()
         self._refresher = None
         self._refresher_stop = threading.Event()
@@ -133,19 +135,47 @@ class OpsStore:
                 return default if hit[1] is _MISSING else hit[1]
         return self._load(key, path, hit, now, default)
 
+    def _forget(self, path):
+        """Drop ``path`` from the cache after this process changed it. A read that started before the change and ends
+        after it must not put the old content back (``_load`` checks the count), or pages would show it until the
+        next re-check - two managers marking mails done at once saw one mark come back undone."""
+        key = str(path)
+        with self._cache_lock:
+            self._cache.pop(key, None)
+            self._writes[key] = self._writes.get(key, 0) + 1
+
     def _load(self, key, path, hit, now, default):
-        """Check ``path`` on the share and (re)parse it if it changed. ``hit`` is the cache entry seen by the caller."""
+        """Check ``path`` on the share and (re)parse it if it changed. ``hit`` is the cache entry seen by the caller. A
+        file this process wrote while it was being read is read again (``_forget``)."""
+        for _ in range(3):
+            with self._cache_lock:
+                writes = self._writes.get(key, 0)
+            out = self._load_once(key, path, hit, now, default, writes)
+            if out is not _RETRY:
+                return out
+            hit = None
+        return self._load_once(key, path, None, now, default, False)
+
+    def _load_once(self, key, path, hit, now, default, writes):
+        """One ``_load`` attempt; ``_RETRY`` when this process wrote the file meanwhile (``writes`` = the count seen at
+        the start; False = still being written after the retries: give the content, do not cache it)."""
+        def keep(entry):
+            if writes is False:
+                return True
+            with self._cache_lock:
+                if self._writes.get(key, 0) != writes:
+                    return False
+                self._cache[key] = entry
+                if len(self._cache) > 400:
+                    self._cache.clear()
+                return True
         try:
             st = path.stat()
         except FileNotFoundError:
-            with self._cache_lock:
-                self._cache[key] = (None, _MISSING, now)
-            return default
+            return default if keep((None, _MISSING, now)) else _RETRY
         sig = (st.st_mtime_ns, st.st_size)
         if hit and hit[0] == sig and hit[1] is not _MISSING:
-            with self._cache_lock:
-                self._cache[key] = (sig, hit[1], now)
-            return hit[1]
+            return hit[1] if keep((sig, hit[1], now)) else _RETRY
         data = _MISSING
         last = None
         for attempt in range(12):                          # tolerate the brief window where another process is swapping
@@ -160,15 +190,9 @@ class OpsStore:
                 time.sleep(min(0.25, 0.03 * (attempt + 1)))
         if data is _MISSING:
             if isinstance(last, FileNotFoundError):        # genuinely gone now: remember it as missing
-                with self._cache_lock:
-                    self._cache[key] = (None, _MISSING, now)
-                return default
+                return default if keep((None, _MISSING, now)) else _RETRY
             raise StorageError(f"{path} is damaged and cannot be read: {last}") from last
-        with self._cache_lock:
-            self._cache[key] = (sig, data, now)
-            if len(self._cache) > 400:
-                self._cache.clear()
-        return data
+        return data if keep((sig, data, now)) else _RETRY
 
     # ------------------------------------------------------- background refresher
     def start_refresher(self, interval=1.0, warm=None):
@@ -222,15 +246,14 @@ class OpsStore:
     def write_json(self, path, data, compact=False):
         path = Path(path)
         _atomic_write_json(path, data, compact)
-        with self._cache_lock:
-            self._cache.pop(str(path), None)
+        self._forget(path)
 
     def _update_json(self, path, lock_name, default, change, compact=False):
         """Read-modify-write under a lock. ``change(data)`` mutates and/or returns the new value. ``compact``: written
         without indentation (the big machine-made recordings - a whole-year export is tens of thousands of requests)."""
         path = Path(path)
         with self._lock(lock_name)():
-            self._cache.pop(str(path), None)
+            self._forget(path)
             try:
                 with open(path, encoding="utf-8") as f:
                     data = json.load(f)
@@ -317,8 +340,7 @@ class OpsStore:
     def drop_sla_closed_day(self, day):
         with contextlib.suppress(FileNotFoundError):
             self._sla_closed_path(day).unlink()
-        with self._cache_lock:
-            self._cache.pop(str(self._sla_closed_path(day)), None)
+        self._forget(self._sla_closed_path(day))
 
     # ------------------------------------------------- analysis: long-term counters (ops/analytics/<name>.json)
     def _analytics_path(self, name):
@@ -540,8 +562,7 @@ class OpsStore:
                 continue            # another collector took it
             except OSError:
                 continue
-            with self._cache_lock:
-                self._cache.pop(str(self.requests_dir / req["file"]), None)
+            self._forget(self.requests_dir / req["file"])
             taken.append(req)
         return taken
 

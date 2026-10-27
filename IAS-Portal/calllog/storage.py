@@ -214,6 +214,7 @@ class Store:
         self._locks = {}
         self._locks_guard = threading.Lock()
         self._cache = OrderedDict()        # path -> (signature, data, checked_at)
+        self._writes = {}                  # path -> how many times this process wrote it (``_read_json`` checks it)
         self._dirs = {}                    # path -> (checked_at, names)
         self._range = OrderedDict()        # (from, to, uid) -> (computed_at, records)
         self._memo = OrderedDict()         # key -> (computed_at, value)
@@ -262,8 +263,9 @@ class Store:
         keep=False: do not add a newly read file to the cache (bulk summaries must not fill the memory)."""
         key, now = str(path), time.monotonic()
         hit = None
-        if not fresh:
-            with self._cache_lock:
+        with self._cache_lock:
+            writes = self._writes.get(key, 0)    # a write of this process while reading: the old content is not cached
+            if not fresh:
                 hit = self._cache.get(key)
                 if hit and ttl and now - hit[2] < ttl:
                     self._cache.move_to_end(key)
@@ -277,9 +279,11 @@ class Store:
         sig = (st.st_mtime_ns, st.st_size)
         if hit and hit[0] == sig:
             with self._cache_lock:
-                self._cache[key] = (sig, hit[1], now)
-                self._cache.move_to_end(key)
-            return hit[1]
+                if self._writes.get(key, 0) == writes:
+                    self._cache[key] = (sig, hit[1], now)
+                    self._cache.move_to_end(key)
+                    return hit[1]
+            return self._read_json(path, default, fresh=True)
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
@@ -287,9 +291,15 @@ class Store:
             raise StorageError(f"{path} is damaged and cannot be read: {exc}") from exc
         if not fresh and keep:
             with self._cache_lock:
-                self._cache[key] = (sig, data, now)
-                while len(self._cache) > self.CACHE_LIMIT:
-                    self._cache.popitem(last=False)
+                if self._writes.get(key, 0) != writes:
+                    stale = True
+                else:
+                    stale = False
+                    self._cache[key] = (sig, data, now)
+                    while len(self._cache) > self.CACHE_LIMIT:
+                        self._cache.popitem(last=False)
+            if stale:                     # written while it was read: read the new content (not cached)
+                return self._read_json(path, default, fresh=True)
         return data
 
     def _names(self, path, ttl):
@@ -317,6 +327,7 @@ class Store:
         _atomic_write_json(path, data)
         with self._cache_lock:        # what this process just wrote is visible immediately
             self._cache.pop(str(path), None)
+            self._writes[str(path)] = self._writes.get(str(path), 0) + 1
             self._dirs.pop(str(path.parent), None)
             self._dirs.pop(str(self.records_dir), None)
             self._range.clear()
@@ -402,6 +413,7 @@ class Store:
             _atomic_write_json(self.ip_phones_path, data, compact=True)
             with self._cache_lock:
                 self._cache.pop(str(self.ip_phones_path), None)
+                self._writes[str(self.ip_phones_path)] = self._writes.get(str(self.ip_phones_path), 0) + 1
                 self._ip_directory = None
                 self._ip_broken_until = 0.0
 

@@ -445,6 +445,10 @@ HOW TO UPDATE (your data is kept)
      still with a security user, or not counted: still with the branch) - to check each number against the portal.
    - Third Party stays out of the SLA, as asked.
 
+42. A PAGE NEVER SHOWS AN OLD STATE AFTER A CHANGE
+   - When two people changed the same list at the same moment (two managers marking e-mails done), a page could show
+     one of the changes as not made for a moment. Nothing was ever lost on disk; the page now always shows the change.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -824,3 +828,7 @@ IAS PORTAL - الجديد في هذا التحديث
      وبتتحسب في أنهي رقم (اتنفذ / ما اتنفذش، متعزز أو مستني التعزيز، مرفوض، لسه مع مستخدم سرية، أو مش محسوب: لسه عند
      الفرع) - علشان تراجع كل رقم على البورتال.
    - الـ Third Party لسه برة الـ SLA زي ما طلبت.
+
+42. الصفحة مبقتش تعرض حالة قديمة بعد أي تعديل
+   - لما اتنين بيعدلوا نفس القائمة في نفس اللحظة (مديرين بيعلموا إيميلات Done)، الصفحة كانت ممكن تعرض تعديل منهم كأنه
+     ما اتعملش لثواني. مفيش حاجة كانت بتضيع من الملفات؛ ودلوقتي الصفحة دايما بتعرض التعديل.
