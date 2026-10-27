@@ -115,14 +115,14 @@ function miniDT(id, rows, opt) {
 """
 
 
-def _dt_wrapper(table_id, head, lengths, selected, title=""):
+def _dt_wrapper(table_id, head, lengths, selected, title="", body=""):
     opts = "".join(f"<option value='{v}'{' selected' if v == selected else ''}>{'All' if v == -1 else v}</option>"
                    for v in lengths)
     heads = "".join(f"<th>{html.escape(h)}</th>" for h in head)
     return (f"<div class='dataTables_wrapper'>{title}"
             f"<div class='dataTables_length'><label>Show <select name='{table_id}_length'>{opts}</select></label></div>"
             f"<div class='dataTables_filter'><label>Search:<input type='search'></label></div>"
-            f"<table id='{table_id}'><thead><tr>{heads}</tr></thead><tbody></tbody></table>"
+            f"<table id='{table_id}'><thead><tr>{heads}</tr></thead><tbody>{body}</tbody></table>"
             f"<div class='dataTables_info'></div><div class='dataTables_paginate'>"
             f"<a class='paginate_button previous' href='#'>‹</a><a class='paginate_button next' href='#'>›</a></div></div>")
 
@@ -132,7 +132,7 @@ class FakeInquiryPortal:
 
     def __init__(self, requests, grid="client", history="api", server_page=1000, dt_len=20,
                  grid_lengths=(5, 10, 20, -1), pager="link", arrive_on_next=(), ignore_from=False, details="modal",
-                 next_after_details=True, details_delay=0.0):
+                 next_after_details=True, details_delay=0.0, background=True):
         self.requests = requests
         self.arrive_on_next = list(arrive_on_next)  # requests registered the moment the next result page is asked for
         self.ignore_from = ignore_from          # a search that lists every request up to «الى» (its «من» not taken)
@@ -142,6 +142,7 @@ class FakeInquiryPortal:
         self.next_after_details = next_after_details      # False: «عرض التالي» right after a request's details does nothing
         self._details_shown = False
         self.details_delay = details_delay      # seconds the portal takes to answer one «التفاصيل»
+        self.background = background            # False: a post-back sent by fetch (not the page itself) is refused
         self.pager = pager
         self.grid = grid
         self.grid_lengths = list(grid_lengths)
@@ -150,7 +151,8 @@ class FakeInquiryPortal:
         self.dt_len = dt_len
         self.searches = []                      # (from, to) as typed, per search
         self.refused = []                       # dates the search refused (not a plain dd-mm-yyyy)
-        self.details_opened = []                # request numbers whose «التفاصيل» was opened
+        self.details_opened = []                # request numbers whose «التفاصيل» was opened (on the page or not)
+        self.fetched = []                       # ... of them, read in the background (fetch, never shown)
         self.pages_shown = []                   # result page index of every answer with results
         self._server = None
         self.url = ""
@@ -203,6 +205,8 @@ class FakeInquiryPortal:
                 self.refused.append(typed)
                 state, message = {"from": "", "to": "", "page": 0}, "تاريخ غير صحيح"
         target, arg = form.get("__EVENTTARGET", ""), form.get("__EVENTARGUMENT", "")
+        if not self.background and h.headers.get("Sec-Fetch-Dest") == "empty":
+            return self._send(h, 500, "<p>خطأ</p>")
         stuck = not self.next_after_details and self._details_shown and "btnNext" in form
         self._details_shown = False
         if stuck:                                       # the page comes back as it was, the details closed
@@ -222,7 +226,10 @@ class FakeInquiryPortal:
             if 0 <= n < len(rows):
                 selected = rows[n]
                 self.details_opened.append(selected["number"])
-                self._details_shown = True
+                if h.headers.get("Sec-Fetch-Dest") == "empty":
+                    self.fetched.append(selected["number"])
+                else:
+                    self._details_shown = True
                 if self.details_delay:
                     time.sleep(self.details_delay)
         return self._send(h, 200, self._page(state, rows, last, selected, message))
@@ -275,9 +282,7 @@ class FakeInquiryPortal:
             script = f"miniDT('GridView_Inquiry', {_js(cells)}, {{api: {_js(api)}, hold: {_js(hold)}}});"
         if selected is not None:
             body += self._details(selected)
-            hist = sorted(selected["history"], key=lambda e: e[1])            # by user NAME, as the portal shows it
-            lines = [[html.escape(no), html.escape(name), html.escape(kind), f"{at:%d/%m/%Y}<br>{at:%H:%M:%S}",
-                      html.escape(status), html.escape(notes)] for no, name, kind, at, status, notes in hist]
+            lines = self._lines(selected)
             stuck = self.history == "stuck"
             script += (f"miniDT({_js(DETAIL_GRID_ID)}, {_js(lines)}, {{api: {_js(self.history == 'api')}, "
                        f"hold: 'all', stuck: {_js(stuck)}}});")
@@ -289,6 +294,22 @@ class FakeInquiryPortal:
                 f"</head><body><form id='form1' method='post' action='{INQUIRY_PATH}'>{hidden}{post}"
                 f"<h2>الاستفسار عن الطلبات</h2>{search}{body}</form>"
                 f"<script>{_MINI_DT}{script}</script></body></html>")
+
+    @staticmethod
+    def _lines(r):
+        hist = sorted(r["history"], key=lambda e: e[1])                      # by user NAME, as the portal shows it
+        return [[html.escape(no), html.escape(name), html.escape(kind), f"{at:%d/%m/%Y}<br>{at:%H:%M:%S}",
+                 html.escape(status), html.escape(notes)] for no, name, kind, at, status, notes in hist]
+
+    def _history_rows(self, r):
+        """The status history as the bank's GridView sends it in the page (DataTables then pages it on the screen):
+        every line - or, "stuck", the first five and the server's own pager (the history comes in pages)."""
+        lines = self._lines(r)
+        if self.history == "stuck":
+            pager = (f"<tr class='gv-pager'><td colspan='{len(HISTORY_HEADERS)}'><a href=\"javascript:__doPostBack("
+                     "'ctl00$ContentPlaceHolder1$GridView_Req','Page$2')\">2</a></td></tr>")
+            return "".join("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>" for cells in lines[:5]) + pager
+        return "".join("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>" for cells in lines)
 
     def _details(self, r):
         g = r["grid"]
@@ -306,12 +327,14 @@ class FakeInquiryPortal:
         if self.details == "in_page":                  # in the page, with the history grid's own server pager
             target = DETAILS_UC.replace("ContentPlaceHolder1", "ctl00$ContentPlaceHolder1").replace("_UC_", "$UC_") + "$GridView_Req"
             return (f"<div id='{DETAILS_UC}_pnlRequest'><div><h4>تفاصيل الطلب</h4>" + fields
-                    + _dt_wrapper(DETAIL_GRID_ID, HISTORY_HEADERS, lengths, 5, "<h5>الحالة التاريخية للطلب</h5>")
+                    + _dt_wrapper(DETAIL_GRID_ID, HISTORY_HEADERS, lengths, 5, "<h5>الحالة التاريخية للطلب</h5>",
+                                  self._history_rows(r))
                     + f"<div class='gv-pager'><a href=\"javascript:__doPostBack('{target}','Page$Next')\">التالي</a>"
                     "</div></div></div>")
         return ("<div class='modal' role='dialog' style='display:block'><div class='modal-content'>"
                 f"<h4>تفاصيل الطلب</h4>{fields}"
-                + _dt_wrapper(DETAIL_GRID_ID, HISTORY_HEADERS, lengths, 5, "<h5>الحالة التاريخية للطلب</h5>")
+                + _dt_wrapper(DETAIL_GRID_ID, HISTORY_HEADERS, lengths, 5, "<h5>الحالة التاريخية للطلب</h5>",
+                              self._history_rows(r))
                 + "<button type='button' class='close-box'>اغلاق</button></div></div>")
 
     @staticmethod

@@ -87,7 +87,10 @@ DEFAULTS = {
         "history_enabled": True,
         "inquiry_path": "/SecurityCodeRequest/Security_Assign_Maker/RequestDetails_Inquiry.aspx",
         "history_days": 3,                      # read the requests of the last N days (open ones are followed till closed)
-        "history_max_details": 60,              # at most this many request details opened per scan; the rest next scan
+        # at most this many request details read per scan - 4 at a time in the background, so the time for the history
+        # is the real limit; the rest next scan. (It replaces "history_max_details", 60 a scan when each was opened on
+        # the page: a saved 60 would keep the scan at that, so that key is no longer read.)
+        "history_details_per_scan": 1000,
         "history_seconds": 180,                 # time budget of the history read per scan: what is read is always kept
         "inquiry_date_format": "%d-%m-%Y",      # how the inquiry page's date pickers write a day (21-10-2026)
         "app_url_fragment": "securitycoderequest",
@@ -469,7 +472,7 @@ FIELDS = {
         "exclude_teams": _strs(80), "exclude_applications": _strs(200), "merge_teams": _team_merges,
         "base_url": _str(300, False), "login_path": _str(300), "reassign_path": _str(300), "app_url_fragment": _str(100),
         "history_enabled": _bool, "inquiry_path": _str(300), "history_days": _int(1, 31),
-        "history_max_details": _int(10, 2000), "history_seconds": _int(30, 3600),
+        "history_details_per_scan": _int(10, 5000), "history_seconds": _int(30, 3600),
         "inquiry_date_format": _choice("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y"),
         "package_text": _str(200), "package_link_text": _str(100), "login_button_text": _str(100),
         "search_button_text": _str(100), "sent_date_header": _str(100), "owner_header": _str(100),

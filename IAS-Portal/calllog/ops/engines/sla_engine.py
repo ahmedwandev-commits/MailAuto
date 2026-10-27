@@ -34,7 +34,7 @@ import re
 import subprocess
 import sys
 import time
-from collections import Counter
+from collections import Counter, deque
 from contextlib import suppress
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -756,6 +756,94 @@ def js_detail_snapshot(tokens=()):
 })()""")
 
 
+HISTORY_PARALLEL = 4                       # «التفاصيل» read at once in the background (one post-back each)
+FETCH_WAIT_S = 30                          # one background «التفاصيل»: the portal's own time, at most
+
+
+def js_fetch_details(batch):
+    """Read several rows' «التفاصيل» at once IN THE BACKGROUND: each row's own post-back (``batch`` = [{key, t, a,
+    tokens}]) is sent with the page's form - its view state, the dates searched - by ``fetch``, and the answer is read
+    as a document, never shown: the page and its grid stay as they are, nothing is drawn, the rows go in parallel.
+    Each answer: {key, ok, number, headers, rows, period, verified, why}. ``ok`` only with the whole status history in
+    the answer (the bank's GridView sends every line; DataTables pages it on the screen only) and the request number;
+    a history the server sends in pages, an answer without one, a failed request: ok false with ``why`` - that row is
+    then opened on the page the usual way. {error} when the page has no form to post."""
+    return ("(async () => {" + JS_NORM + r"""
+  const batch = """ + json.dumps(batch, ensure_ascii=False) + r""";
+  const form = [...document.forms].find(f => f.querySelector('input[name="__VIEWSTATE"]')) || document.forms[0];
+  if (!form || typeof fetch !== 'function' || typeof DOMParser !== 'function') return {error: 'no form to post'};
+  const want = ['رقم المستخدم', 'اسم المستخدم', 'نوع المستخدم', 'التاريخ', 'الحالة'].map(norm);
+  const txt = n => { if (!n) return ''; const c = n.cloneNode(true);
+    c.querySelectorAll('br').forEach(b => b.replaceWith(' ')); return (c.textContent || '').replace(/\s+/g, ' ').trim(); };
+  const head = t => t.tHead ? t.tHead.rows[t.tHead.rows.length - 1] : t.rows[0];
+  const fits = t => { const hr = head(t); if (!hr) return false; const nh = [...hr.cells].map(c => norm(txt(c)));
+    return want.every(w => nh.some(h => h === w || h.includes(w))); };
+  const NUM = norm('رقم الطلب');
+  const before = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const one = async it => {
+    const out = {key: it.key, ok: false, number: '', headers: [], rows: [], period: null, verified: null, why: ''};
+    const fd = new FormData(form);
+    fd.set('__EVENTTARGET', it.t); fd.set('__EVENTARGUMENT', it.a);
+    const stop = new AbortController(), timer = setTimeout(() => stop.abort(), """ + str(FETCH_WAIT_S * 1000) + r""");
+    let html = '';
+    try {
+      const r = await fetch(form.action || location.href, {method: 'POST', body: new URLSearchParams(fd),
+                                                           credentials: 'same-origin', signal: stop.signal});
+      if (!r.ok) { out.why = 'the portal answered ' + r.status; return out; }
+      html = await r.text();
+    } catch (e) { out.why = (e && e.name) || 'no answer'; return out; } finally { clearTimeout(timer); }
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    let table = doc.getElementById(""" + json.dumps(DETAIL_GRID_ID) + r""");
+    if (!(table && fits(table))) table = [...doc.querySelectorAll('table')].find(fits);
+    if (!table) { out.why = 'no status history in the answer'; return out; }
+    const hr = head(table);
+    const body = [...table.rows].filter(tr => tr !== hr && tr.cells.length > 1 && ![...tr.cells].every(c => c.tagName === 'TH'));
+    if ([...table.rows].some(tr => /Page\$/.test(tr.innerHTML) || tr.querySelector('table'))) {
+      out.why = 'the status history comes in pages'; return out; }
+    out.headers = [...hr.cells].map(txt);
+    out.rows = body.filter(tr => !tr.querySelector('td.dataTables_empty')).map(tr => [...tr.cells].map(txt));
+    let scope = table;                                   // the details around the history: up to the «رقم الطلب» label
+    for (let i = 0; i < 8 && scope.parentElement; i++) {
+      scope = scope.parentElement;
+      if ([...scope.querySelectorAll('label, span, b, strong, th, legend, td, div')].some(
+          el => !el.children.length && norm(el.textContent).replace(/[:：]/g, '').trim() === NUM)) break;
+    }
+    const findNo = sel => { for (const el of scope.querySelectorAll(sel)) {
+        if (el.children.length || norm(el.textContent).replace(/[:：]/g, '').trim() !== NUM) continue;
+        let p = el.parentElement;
+        for (let i = 0; i < 3 && p; i++, p = p.parentElement) {
+          const inp = [...p.querySelectorAll('input, textarea')].find(x => before(el, x));
+          if (inp && (inp.getAttribute('value') || inp.value || '').trim()) return (inp.getAttribute('value') || inp.value).trim();
+          const sp = [...p.querySelectorAll('span, td, div')].find(x => before(el, x) && !x.children.length && (x.textContent || '').trim());
+          if (sp && /\d/.test(sp.textContent)) return sp.textContent.trim();
+        }
+      } return ''; };
+    out.number = findNo('label, span, b, strong, th, legend') || findNo('td, div');
+    if (!out.number) { out.why = 'no request number in the answer'; return out; }
+    const parts = [], walk = doc.createTreeWalker(scope, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    for (let n = walk.currentNode; n; n = walk.nextNode()) {
+      if (n.nodeType === 3) { if (!table.contains(n)) parts.push(n.nodeValue); }
+      else if ((n.tagName === 'INPUT' && n.type !== 'hidden') || n.tagName === 'TEXTAREA') parts.push(n.getAttribute('value') || n.value || '');
+      else if (n.tagName === 'SELECT') { const o = n.options[n.selectedIndex]; parts.push(o ? o.text : ''); }
+    }
+    const flat = norm(parts.join(' | ')), D = '(\\d{1,2}[/.-]\\d{1,2}[/.-]\\d{4}|\\d{4}[/.-]\\d{1,2}[/.-]\\d{1,2})'
+      + '(?:[\\s|]*(\\d{1,2}:\\d{2}(?::\\d{2})?(?:\\s*(?:am|pm|ص|م))?))?';
+    const pf = new RegExp('الفتره\\s*(?:من)?\\s*(?:[/-]\\s*الي)?\\s*[:：]?[\\s|]*' + D).exec(flat);
+    if (pf) {
+      const rest = flat.slice(pf.index + pf[0].length);
+      const pt = new RegExp('^[\\s|:：-]*(?:(?:الفتره\\s*)?الي\\s*[:：]?[\\s|]*)?' + D).exec(rest);
+      out.period = {from: [pf[1], pf[2]].filter(Boolean).join(' '), to: pt ? [pt[1], pt[2]].filter(Boolean).join(' ') : ''};
+    }
+    const tokens = (it.tokens || []).filter(Boolean).map(String);
+    if (tokens.length) { const seen = flat + ' ' + norm(scope.textContent || '');
+      out.verified = tokens.some(t => seen.includes(norm(t))); }
+    out.ok = true;
+    return out;
+  };
+  return await Promise.all(batch.map(one));
+})()""")
+
+
 # The inquiry results grid (its headers) and its DataTables wrapper: what the grid helpers below act on - never the
 # status-history table of an open «تفاصيل الطلب»
 JS_FIND_GRID = r"""
@@ -956,7 +1044,7 @@ def history_seconds(cfg, general=None):
 
 def read_history(browser, cfg, debug, plan, log=lambda m: None):
     """Read «الاستفسار عن الطلبات» for the plan's period, then the status history of the requests that are new or whose
-    status moved (``plan['index']``): at most ``history_max_details`` per scan and only within the plan's time budget
+    status moved (``plan['index']``): at most ``history_details_per_scan`` per scan and only within the plan's time budget
     (``plan['seconds']``) - what was read is always returned, the rest follows at the next scan. Returns {"items",
     "rows", "opened", "left", "failed", "timing"}: ``items`` = [{"grid", "id", "history"}] for
     ``sla_history.fold_history`` (``failed`` marks a row whose details could not be read). Raises PortalError only when
@@ -1072,7 +1160,7 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     if not isinstance(portal_total, int):
         portal_total = None
     index = plan.get("index") or {}
-    budget = int(cfg.get("history_max_details") or DEFAULTS["sla"]["history_max_details"])
+    budget = int(cfg.get("history_details_per_scan") or DEFAULTS["sla"]["history_details_per_scan"])
     # a request still with the branch (registered / confirmed by its supervisor) has no SLA step yet: opened once it moves
     # and a request of an excluded application (the Third Party team's by default) is never opened at all
     excluded = plan.get("excluded") or (lambda system: False)
@@ -1095,6 +1183,12 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
         return (bool(live_keys) and sla_history.grid_live_key(it) in live_keys
                 and sla_history.grid_stage(it["status"], plan["cfg"], it.get("executor") or "") == "open")
 
+    def optional(it):
+        """Still with a security user and not a Live ticket waiting for its clock: its history adds only the hour it
+        came - read when time allows, never counted as left (the numbers, the times and the Live clock need the rest)."""
+        return (sla_history.grid_stage(it["status"], plan["cfg"], it.get("executor") or "") == "open"
+                and not live_wanted(it))
+
     # On the page shown: a Live ticket whose last assignment is not known yet first (the Live tab's clock), then the
     # FINISHED requests (confirmed, then rejected: one read gives every stamp of a request), then the ones awaiting the
     # reviewer, then the ones with a security user, the newest request first; a «نموذج (7)» row read before its period
@@ -1114,6 +1208,8 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     opened = failed = streak = unverified = partial = 0
     prev_sig, stopped, held, resume_next = "", "", "", None
     opened_on = set()                # the pages whose requests this pass opened (where the next scan does not start)
+    background = {"on": True}        # «التفاصيل» read in the background (js_fetch_details) until the portal shows it cannot
+    solo = set()                     # rows the background could not read: opened on the page
     page_s = search_s                # what one more result page costs (shown and read): the search's own time at first
     pages_s = search_s               # the time spent showing and reading the result pages (the details' not counted)
 
@@ -1202,9 +1298,59 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
                 shown[key] = pbs[i] if i < len(pbs) else None
         return shown
 
+    def record(it, number, headers, rows, period, verified):
+        """One request's whole status history read: what ``fold_history`` records for its grid row."""
+        nonlocal unverified
+        read_numbers[number] = it["key"]
+        unverified += verified is False
+        got = {"grid": it, "id": number, "history": sla_history.events_from_table(headers, rows, plan["cfg"])}
+        span = period or {}
+        if span.get("from"):                              # «الفترة من / الى»: its clocks start there
+            got["period_from"] = sla_history.period_start(span["from"], plan.get("day_start") or "08:00")
+            got["period_to"] = sla_history.period_start(span.get("to"), "00:00") if span.get("to") else ""
+        return got
+
+    def open_batch(batch, page, shown):
+        """Read the «التفاصيل» of the rows ``batch`` (on result page ``page``) at once in the background
+        (``js_fetch_details``): the page is never redrawn and the rows go in parallel. Returns the rows to open on the
+        page the usual way instead; when not one row of a batch could be read so, background reading is off for the rest
+        of the scan (said once in the log)."""
+        nonlocal opened, streak
+        t1 = time.monotonic()
+        ask = [{"key": it["key"], "t": shown[it["key"]]["t"], "a": shown[it["key"]]["a"],
+                "tokens": [x for x in (it.get("employee_no"), it.get("user_no")) if x]} for it in batch]
+        try:
+            res = browser.eval(js_fetch_details(ask), timeout_ms=(FETCH_WAIT_S + 15) * 1000)
+        except Exception as exc:                          # noqa: BLE001 - the usual way still works
+            res = {"error": type(exc).__name__}
+        if not isinstance(res, list) or len(res) != len(batch):
+            background["on"] = False
+            log("SLA history: «التفاصيل» cannot be read in the background here ("
+                + str((res or {}).get("error") if isinstance(res, dict) else "no answer") + "); one at a time")
+            return list(batch)
+        per = (time.monotonic() - t1) / len(batch)
+        again, why = [], ""
+        for it, r in zip(batch, res):
+            r = r if isinstance(r, dict) else {}
+            number = str(r.get("number") or "").strip()
+            if r.get("ok") and r.get("rows") and number and read_numbers.get(number, it["key"]) == it["key"]:
+                done[it["key"]] = record(it, number, r.get("headers") or [], r["rows"], r.get("period"), r.get("verified"))
+                opened += 1
+                streak = 0
+                opened_on.add(page)
+                drill_s.append(per)
+            else:
+                again.append(it)
+                why = why or str(r.get("why") or "")
+        if again and len(again) == len(batch):
+            background["on"] = False
+            log(f"SLA history: «التفاصيل» could not be read in the background ({why or 'no answer'}); they are opened "
+                "one at a time")
+        return again
+
     def open_one(it, pb, page):
         """Open one row's «التفاصيل» (on result page ``page``) and read its whole status history into ``done``."""
-        nonlocal prev_sig, opened, failed, streak, unverified, partial
+        nonlocal prev_sig, opened, failed, streak, partial
         t1 = time.monotonic()
         tokens = [it.get("employee_no"), it.get("user_no")]
         fresh = lambda s: bool(s.get("open") and s.get("number") and s.get("ready") == "complete"   # noqa: E731
@@ -1235,14 +1381,7 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
                     log(f"SLA history: request {number} - only {len(snap['rows'])} of its {snap.get('total')} history "
                         "lines could be read; it is read again next scan (nothing partial is recorded)")
                 else:
-                    read_numbers[number] = it["key"]
-                    unverified += snap.get("verified") is False
-                    got = {"grid": it, "id": number,
-                           "history": sla_history.events_from_table(whole["headers"], whole["rows"], plan["cfg"])}
-                    span = snap.get("period") or {}
-                    if span.get("from"):                  # «الفترة من / الى»: its clocks start there
-                        got["period_from"] = sla_history.period_start(span["from"], plan.get("day_start") or "08:00")
-                        got["period_to"] = sla_history.period_start(span.get("to"), "00:00") if span.get("to") else ""
+                    got = record(it, number, whole["headers"], whole["rows"], snap.get("period"), snap.get("verified"))
             if snap and snap.get("open") and not in_page:
                 _close_details(browser)
         except Exception as exc:                          # one request must not stop the others
@@ -1267,8 +1406,10 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
         page after this one when this one had its turn (some of its requests opened), so no page keeps the others
         waiting scan after scan; this one when none of its requests could be opened."""
         nonlocal stopped, held, resume_next
-        for it in sorted((item_of[k] for k in shown if k in todo and k not in done), key=first):
-            if it["key"] not in shown:                    # not on the page shown again after a lost grid
+        queue = deque(sorted((item_of[k] for k in shown if k in todo and k not in done), key=first))
+        while queue:
+            it = queue.popleft()
+            if it["key"] not in shown or it["key"] in done:   # not on the page shown again after a lost grid
                 continue
             keep = 0 if live_wanted(it) else hold
             per = sum(drill_s) / len(drill_s) if drill_s else DRILL_GUESS_S
@@ -1282,6 +1423,21 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
                 if rotate and resume_next is None and it["key"] not in late:
                     resume_next = n + 1 if n in opened_on else n      # the next scan starts here
                 return shown
+            if background["on"] and shown[it["key"]] and it["key"] not in solo:
+                room = max(1, budget - (opened + failed) - keep)
+                batch = [it]
+                while queue and len(batch) < min(HISTORY_PARALLEL, room):
+                    x = queue[0]
+                    if x["key"] in done or x["key"] not in shown:
+                        queue.popleft()
+                    elif shown[x["key"]] and x["key"] not in solo and live_wanted(x) == live_wanted(it):
+                        batch.append(queue.popleft())
+                    else:
+                        break
+                for x in reversed(open_batch(batch, n, shown)):   # the ones it could not read: on the page
+                    solo.add(x["key"])
+                    queue.appendleft(x)
+                continue
             open_one(it, shown[it["key"]], n)
             try:                                          # a post-back that lost the grid: search again, back to page n
                 if not browser.eval(JS_GRID_PRESENT):
@@ -1394,7 +1550,9 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
             shown = known_again(nxt)
 
     items = [done.get(it["key"]) or {"grid": it, "id": "", "history": None} for it in grid]
-    left = sum(1 for k in todo if k not in done and k not in drop)
+    unread = [k for k in todo if k not in done and k not in drop]
+    later = sum(1 for k in unread if optional(item_of[k]))
+    left = len(unread) - later
     total_s = time.monotonic() - started
     timing = {"seconds": round(total_s, 1), "search_seconds": round(search_s, 1), "searches": searches,
               "walk_seconds": round(walk_s, 1), "page_seconds": round(pages_s / len(pages), 1) if pages else None,
@@ -1404,12 +1562,17 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
               "partial": partial, "grid_total": grid_total, "grid_pages": len(pages), "grid_short": bool(short),
               "repeats": len(drop)}
     log(f"SLA history: {len(grid)} request(s) on the inquiry page, {opened} status histor(ies) read"
-        + (f", {failed} could not be read" if failed else "") + (f", {left} left for the next scan" if left else "")
+        + (f", {failed} could not be read" if failed else "")
+        + (f", {left} left for the next scan" if left else ", nothing left")
+        + (f" ({later} still with a security user: read when time allows)" if later else "")
         + f" - {timing['seconds']} s (search {timing['search_seconds']} s"
         + (f", {timing['drill_avg_seconds']} s a request, slowest {timing['drill_max_seconds']} s" if drill_s else "")
         + ")" + (f"; stopped: {stopped or held}" if (stopped or held) and left else "")
         + (f"; {unverified} detail(s) could not be matched to their row by number" if unverified else ""))
+    size = len(pages[0]["rows"]) if pages and pages[0]["rows"] else 0
     return {"items": items, "rows": len(grid), "opened": opened, "left": left, "failed": failed, "timing": timing,
+            "optional_left": later, "background": background["on"],
+            "pages_total": -(-portal_total // size) if portal_total and size else len(pages),
             "portal_total": portal_total,
             "complete": walked_all and not short and not (portal_total is not None and rows_read() < portal_total),
             "resume_page": resume_next if resume_next is not None and resume_next < len(pages) else 0,
@@ -2033,6 +2196,8 @@ def _notify(ctx, cfg, requests, by_user, columns, now):
 HISTORY_REACH_DAYS = 31        # how far back a request still in progress is followed (one older day a scan)
 PAGE_RESERVE_S = 20            # seconds kept for the details and the fold when the result pages are walked
 SLICE_RESERVE_S = 20           # seconds kept, while one slice's details are opened, for each slice still to search
+DEFAULT_PAGE_S = 6.5           # one result page of the portal (shown and read), until a scan has timed its own
+DEFAULT_DAY_PAGES = 3          # the result pages of a day not searched before
 LIVE_REACH_MARGIN_DAYS = 3     # a live ticket's request date can be this many days before it was sent to the team
 
 
@@ -2061,12 +2226,13 @@ def left_out_count(ctx, cfg, requests):
 
 
 def history_plan(ctx, cfg, now):
-    """What the inquiry read covers this scan: {date_from, date_to (the recent window), slices, recent_day, older_day,
-    index, cfg, ...}. Each scan searches TODAY, ONE other day of the last ``history_days`` days (``recent_day``, in
-    turn) and ONE older day (at most ``HISTORY_REACH_DAYS`` back) that still has a request in progress - the oldest such
-    day first, then the next one at the next scan, in turn - each its own search. A request is followed until it closes
-    without the search ever covering many days at once: every result page costs the portal seconds (37 pages took the
-    whole scan; 20 pages of a busy window took two minutes before a single request could be opened). None when the SLA
+    """What the inquiry read covers this scan: {date_from, date_to (the recent window), slices, slice_reserve,
+    recent_day, older_day, index, cfg, ...}. Each scan searches TODAY and ONE other day, each its own search: in turn,
+    a day of the last ``history_days`` days (``recent_day``) and an older day (at most ``HISTORY_REACH_DAYS`` back)
+    that still has a request in progress - the oldest such day first, then the next one, in turn. A request is
+    followed until it closes without the search ever covering many days at once: every result page costs the portal
+    seconds (37 pages took the whole scan; 20 pages of a busy window took two minutes before a single request could be
+    opened). ``slice_reserve`` = {day: seconds its search will take}, from its pages as last read. None when the SLA
     history is switched off."""
     from .. import sla_history, sla_records
     if not cfg.get("history_enabled", True):
@@ -2118,9 +2284,23 @@ def history_plan(ctx, cfg, now):
     window = [date_from + timedelta(days=n) for n in range(days - 1)]
     last_recent = str(state.get("history_recent_day") or "")
     recent = next((d for d in window if d.isoformat() > last_recent), window[0] if window else None)
-    slices = [(today, today)] + ([(recent, recent)] if recent else []) + ([(pick, pick)] if pick else [])
-    return {"date_from": date_from, "date_to": today, "slices": slices,
-            "recent_day": recent.isoformat() if recent else "", "older_day": pick.isoformat() if pick else "",
+    # besides today, ONE other day a scan - a recent day and an older day in turn: every result page costs the portal
+    # seconds, and three days a scan left little time for the requests' details
+    kinds = [k for k, d in (("older", pick), ("recent", recent)) if d]
+    kind = next((k for k in kinds if k != str(state.get("history_extra_kind") or "")), kinds[0]) if kinds else ""
+    extra = pick if kind == "older" else recent if kind == "recent" else None
+    slices = [(today, today)] + ([(extra, extra)] if extra else [])
+    # what that day's search will cost: its pages as last read (a big day is never cut for want of time again)
+    sizes = state.get("history_day_pages") or {}
+    timing = (state.get("history_stats") or {}).get("timing") or {}
+    page_s = float(timing.get("page_seconds") or DEFAULT_PAGE_S)
+    search_s = float(timing.get("search_seconds") or DEFAULT_PAGE_S)
+    reserve = {d.isoformat(): round(search_s + page_s * WALK_MARGIN
+                                    * max(1, int(sizes.get(d.isoformat()) or DEFAULT_DAY_PAGES)), 1)
+               for d, _ in slices[1:]}
+    return {"date_from": date_from, "date_to": today, "slices": slices, "slice_reserve": reserve,
+            "recent_day": recent.isoformat() if kind == "recent" else "",
+            "older_day": pick.isoformat() if kind == "older" else "",
             "older_days": len(older), "live_days": len(live_days), "live_keys": live_keys, "live_spans": live_spans,
             "index": dict(state.get("index") or {}), "cfg": rules,
             "excluded": sla_excluder(ctx, cfg), "seconds": history_seconds(cfg, getattr(ctx, "general", None)),
@@ -2138,8 +2318,9 @@ def read_history_slices(browser, cfg, debug, plan, log=lambda m: None):
     out = {"items": [], "rows": 0, "opened": 0, "left": 0, "failed": 0, "timing": {}, "portal_total": None,
            "resume_page": 0, "covered": [], "date_from": plan["date_from"].isoformat(),
            "recent_day": plan.get("recent_day", ""), "older_day": plan.get("older_day", "")}
-    covered = set()
+    covered, out["day_pages"] = set(), {}
     slices = plan.get("slices") or [(plan["date_from"], plan["date_to"])]
+    reserves = plan.get("slice_reserve") or {}
 
     def not_read(dfrom):                                 # a day not read: its turn comes again
         for key in ("recent_day", "older_day"):
@@ -2153,23 +2334,26 @@ def read_history_slices(browser, cfg, debug, plan, log=lambda m: None):
                 not_read(later)
             break
         # kept for the slices still to search: their own time, and PAGE_RESERVE_S so the next one may still start
-        later = len(slices) - n - 1
+        later = slices[n + 1:]
         sub = {**plan, "date_from": dfrom, "date_to": dto, "deadline": deadline,
-               "after_s": later * SLICE_RESERVE_S + (PAGE_RESERVE_S if later else 0),
+               "after_s": sum(float(reserves.get(d.isoformat(), SLICE_RESERVE_S)) for d, _ in later)
+               + (PAGE_RESERVE_S if later else 0),
                "resume_page": plan.get("resume_page", 0) if n == 0 else 0}
         got = read_history(browser, cfg, debug, sub, log)
         out["items"] += got["items"]
-        for key in ("rows", "opened", "left", "failed"):
-            out[key] += got[key]
+        for key in ("rows", "opened", "left", "failed", "optional_left"):
+            out[key] = out.get(key, 0) + got.get(key, 0)
         if n == 0:
             out.update(timing=got["timing"], portal_total=got["portal_total"], resume_page=got["resume_page"])
+        if dfrom == dto and got.get("pages_total"):
+            out["day_pages"][dfrom.isoformat()] = int(got["pages_total"])
         if got.get("complete"):
             d = dfrom
             while d <= dto:
                 covered.add(d.isoformat())
                 d += timedelta(days=1)
-        else:
-            not_read(dfrom)
+        # a day walked only as far as the time allowed has had its turn too (the next visit starts on its first page
+        # again, with the time its pages need): a day bigger than one scan never holds the others back
     out["covered"] = sorted(covered)
     return out
 
@@ -2249,10 +2433,20 @@ def fold_history_result(store, sink, now_iso, system_team=None):
             d["history_older_day"] = sink["older_day"]
         if sink.get("recent_day"):
             d["history_recent_day"] = sink["recent_day"]
+            d["history_extra_kind"] = "recent"
+        if sink.get("older_day"):
+            d["history_extra_kind"] = "older"
+        if sink.get("day_pages"):                         # each day's result pages: the time its next search needs
+            cutoff = (datetime.strptime(now_iso[:10], "%Y-%m-%d")
+                      - timedelta(days=HISTORY_REACH_DAYS + 14)).strftime("%Y-%m-%d")
+            pages = {k: v for k, v in (d.get("history_day_pages") or {}).items() if k >= cutoff}
+            pages.update(sink["day_pages"])
+            d["history_day_pages"] = pages
         d["last_history"] = now_iso
         d["history_stats"] = {"at": now_iso, "rows": sink.get("rows", 0), "portal_total": sink.get("portal_total"),
                               "opened": sink.get("opened", 0), "resume_page": int(sink.get("resume_page") or 0),
-                              "left": sink.get("left", 0), "failed": sink.get("failed", 0),
+                              "left": sink.get("left", 0), "optional_left": sink.get("optional_left", 0),
+                              "failed": sink.get("failed", 0),
                               "timing": sink.get("timing") or {}, **out}
         d.pop("history_error", None)
     store.update_sla_history_state(change)

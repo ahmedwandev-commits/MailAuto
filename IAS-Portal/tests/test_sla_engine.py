@@ -1262,3 +1262,50 @@ def test_the_recent_window_is_never_searched_at_once_today_every_scan_and_one_ot
     assert sla.history_plan(ctx, settings_, NOW)["slices"] == [(day(0), day(0))]        # today only
 
 
+
+
+def test_each_scan_searches_today_and_one_other_day_in_turn_with_the_time_its_pages_need(store):
+    """Three days a scan left little time for the details (the owner: «nothing left for the next run»): besides today,
+    one other day - an older day with a request in progress and a recent day, in turn - and the time kept for it is
+    what its pages took when it was last read (18/10's 8 pages were cut with 20 s)."""
+    ctx = make_ctx(store, None, NOW)
+    store.write_snapshot("sla", {"requests": [{"key": "old", "sent_at": (NOW - timedelta(days=9)).isoformat()}]},
+                         generated_at=NOW.isoformat(timespec="seconds"))
+    day = lambda n: NOW.date() - timedelta(days=n)                                      # noqa: E731
+    plan = sla.history_plan(ctx, sla_settings(), NOW)
+    assert plan["slices"] == [(day(0), day(0)), (day(12), day(12))]
+    assert (plan["older_day"], plan["recent_day"]) == (day(12).isoformat(), "")
+    assert plan["slice_reserve"] == {day(12).isoformat(): round(6.5 + 6.5 * 1.5 * 3, 1)}       # never read: 3 pages
+    store.update_sla_history_state(lambda d: d.update(history_extra_kind="older", history_older_day=day(12).isoformat()))
+    plan = sla.history_plan(ctx, sla_settings(), NOW)
+    assert plan["slices"] == [(day(0), day(0)), (day(2), day(2))] and plan["older_day"] == ""
+    store.update_sla_history_state(lambda d: d.update(
+        history_extra_kind="recent", history_recent_day=day(2).isoformat(), history_day_pages={day(11).isoformat(): 8},
+        history_stats={"timing": {"page_seconds": 6.0, "search_seconds": 6.0}}))
+    plan = sla.history_plan(ctx, sla_settings(), NOW)
+    assert plan["slices"][1] == (day(11), day(11)) and plan["slice_reserve"] == {day(11).isoformat(): 78.0}
+
+
+def test_a_day_walked_only_as_far_as_the_time_allowed_has_had_its_turn(monkeypatch):
+    """A day bigger than what one scan can walk is still visited (its pages remembered for the next time), so it never
+    holds the other days back; a day never started keeps its turn."""
+    today, older = NOW.date(), NOW.date() - timedelta(days=9)
+
+    def fake_read(browser, cfg, debug, plan, log):
+        cut = plan["date_from"] == older
+        return {"items": [], "rows": 3000 if cut else 10, "opened": 0, "left": 0, "failed": 0, "timing": {},
+                "portal_total": 7599 if cut else 10, "resume_page": 0, "complete": not cut, "pages_total": 8 if cut else 1}
+    monkeypatch.setattr(sla, "read_history", fake_read)
+    plan = {"date_from": today, "date_to": today, "slices": [(today, today), (older, older)], "older_day": older.isoformat(),
+            "recent_day": "", "seconds": 120}
+    out = sla.read_history_slices(None, {}, None, plan)
+    assert out["older_day"] == older.isoformat() and out["covered"] == [today.isoformat()]
+    assert out["day_pages"] == {today.isoformat(): 1, older.isoformat(): 8}
+
+
+def test_the_scan_keeps_which_kind_of_day_it_searched_and_each_days_pages(store):
+    sla.fold_history_result(store, {"items": [], "older_day": "2026-10-02", "day_pages": {"2026-10-02": 8},
+                                    "covered": []}, "2026-10-11T09:00:00")
+    state = store.read_sla_history_state()
+    assert (state["history_extra_kind"], state["history_older_day"], state["history_day_pages"]) == (
+        "older", "2026-10-02", {"2026-10-02": 8})

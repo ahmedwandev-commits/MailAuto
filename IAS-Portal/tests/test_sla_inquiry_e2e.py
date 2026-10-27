@@ -102,7 +102,9 @@ def test_a_status_history_that_cannot_be_read_whole_is_not_recorded(browser, tmp
     reqs = [request(8100002, DAY, "تم التعزيز على التنفيذ", executor="ج مستخدم سرية", history=six_line_history())]
     with FakeInquiryPortal(reqs, history="stuck") as portal:
         out = read(browser, portal, tmp_path)
-    assert portal.details_opened == ["8100002"]
+    # the background read sees the server's own pager (the history comes in pages): the row is opened on the page
+    assert portal.fetched == ["8100002"] and portal.details_opened == ["8100002", "8100002"]
+    assert any("comes in pages" in line for line in out["logs"])
     assert recorded(out) == {} and out["opened"] == 0 and out["timing"]["partial"] == 1
     assert [it.get("failed") for it in out["items"]] == [True]
     assert any("only 5 of its 6 history lines" in line for line in out["logs"])
@@ -138,7 +140,7 @@ def test_the_log_says_the_dates_searched_and_warns_when_the_portal_lists_other_d
     assert "WARNING the portal listed requests dated 16/10/2026 – 21/10/2026 for a search of 21-10-2026 – 21-10-2026" in text
 
 
-def _many(n, dup_at=None):
+def _many(n, dup_at=None, status="اسناد لمستخدم السرية"):
     """``n`` open requests of one day, each its own employee; two identical rows at ``dup_at`` (two requests the grid
     cannot tell apart: same employee, application and type the same day)."""
     out = []
@@ -146,7 +148,7 @@ def _many(n, dup_at=None):
         name = f"موظف رقم {i}"
         if dup_at is not None and i == dup_at + 1:
             name = f"موظف رقم {dup_at}"
-        out.append(request(8200000 + i, DAY, "اسناد لمستخدم السرية", executor="مستخدم اول", employee=name,
+        out.append(request(8200000 + i, DAY, status, executor="مستخدم اول", employee=name,
                            history=open_history()))
     return out
 
@@ -229,14 +231,63 @@ def test_a_next_page_that_will_not_open_after_the_details_is_reached_by_a_new_se
     (v5.12 skipped every control of that name: «only 1000 of the 3406 requests could be read»)."""
     import time as _time
     reqs = _many(7)
-    with FakeInquiryPortal(reqs, server_page=3, pager="buttons", next_after_details=False, details=details) as portal:
+    with FakeInquiryPortal(reqs, server_page=3, pager="buttons", next_after_details=False, details=details,
+                           background=False) as portal:
         started = _time.monotonic()
         out = read(browser, portal, tmp_path)
         took = _time.monotonic() - started
         searches = len(portal.searches)
     assert out["rows"] == 7 and out["complete"] is True and sorted(recorded(out)) == [r["number"] for r in reqs]
     assert searches == 3 and took < 30                      # pages 2 and 3 each reached by a new search
+    assert sum("background" in line for line in out["logs"]) == 1     # said once: the background is refused here
     assert sum("shown again from the first" in line for line in out["logs"]) == 2
+
+
+def test_the_details_are_read_four_at_a_time_in_the_background_and_nothing_needed_is_left(browser, tmp_path):
+    """The owner: «I want nothing left for the next run». Each «التفاصيل» is the portal's own post-back, sent in the
+    background (fetch, the page never redrawn) four at a time - here a portal taking half a second a request reads 12
+    in about two seconds, not six. «left» counts only what the numbers need (finished, waiting for confirmation, a Live
+    ticket's clock); a request still with a security user is read when time allows."""
+    done_ = [request(8600000 + i, DAY, "تم التعزيز على التنفيذ", executor="ج مستخدم سرية", employee=f"موظف {i}",
+                     history=six_line_history()) for i in range(12)]
+    still = [request(8600100 + i, DAY, "اسناد لمستخدم السرية", executor="مستخدم اول", employee=f"موظف ب {i}",
+                     history=open_history()) for i in range(3)]
+    with FakeInquiryPortal(done_ + still, details_delay=0.5) as portal:
+        out = read(browser, portal, tmp_path)
+        fetched, opened = list(portal.fetched), list(portal.details_opened)
+    assert sorted(fetched) == sorted(opened) == sorted(r["number"] for r in done_ + still)    # never on the page
+    assert out["opened"] == 15 and out["left"] == 0 and out["background"] is True
+    assert sorted(recorded(out)) == sorted(r["number"] for r in done_ + still)
+    assert out["timing"]["drill_avg_seconds"] < 0.4                 # 0.5 s a request on the portal, four at a time
+    assert any("15 status histor(ies) read, nothing left" in line for line in out["logs"])
+
+
+def test_only_what_the_numbers_need_counts_as_left(browser, tmp_path):
+    """With no time for the details at all, the finished requests are «left»; the ones still with a security user are
+    not (said apart: read when time allows)."""
+    reqs = [request(8700000, DAY, "تم التعزيز على التنفيذ", executor="ج مستخدم سرية", history=six_line_history()),
+            request(8700001, DAY, "اسناد لمستخدم السرية", executor="مستخدم اول", employee="موظف ب",
+                    history=open_history())]
+    with FakeInquiryPortal(reqs) as portal:
+        out = read(browser, portal, tmp_path, history_details_per_scan=10)
+        raw = settings.deep_merge({"sla": {"username": "700101", "base_url": portal.url}}, {})
+        cfg = settings.validate(raw)[0]["sla"]
+        cfg["timeout_seconds"] = 8
+        logs = []
+        plan = {"date_from": DAY, "date_to": DAY, "index": {}, "cfg": CFG, "excluded": None,
+                "deadline": __import__("time").monotonic() - 1}                        # the time is spent already
+        late = sla.read_history(browser, cfg, sla.Debug(False, tmp_path / "debug2"), plan, logs.append)
+    assert out["left"] == 0 and out["opened"] == 2
+    assert late["opened"] == 0 and late["left"] == 1 and late["optional_left"] == 1
+    assert any("1 left for the next scan (1 still with a security user: read when time allows)" in line for line in logs)
+
+
+def test_a_portal_that_refuses_the_background_gets_every_request_opened_on_the_page(browser, tmp_path):
+    reqs = _many(5, status="تم التعزيز على التنفيذ")
+    with FakeInquiryPortal(reqs, background=False) as portal:
+        out = read(browser, portal, tmp_path)
+    assert sorted(recorded(out)) == [r["number"] for r in reqs] and out["background"] is False
+    assert sum("background" in line for line in out["logs"]) == 1
 
 
 def test_two_requests_that_look_the_same_across_two_pages_stay_two(browser, tmp_path):
@@ -329,13 +380,13 @@ def test_a_scan_that_cannot_read_every_row_starts_the_next_one_after_the_page_wh
     2, and says the next scan starts on page 3; that one reads page 3 and four rows of page 4 (and wraps to page 1
     next); a scan that starts on page 4 reads it first, then page 1 by a new search - so with more to read than a scan
     can, no page keeps the others waiting scan after scan (the first pages keep changing on a busy portal)."""
-    reqs = _many(24)
+    reqs = _many(24, status="تم التعزيز على التنفيذ")       # finished: each one's times are needed
     numbers = [r["number"] for r in reqs]
 
     def scan(resume, budget):
         with FakeInquiryPortal(reqs, server_page=6) as portal:
             raw = settings.deep_merge({"sla": {"username": "700101", "base_url": portal.url,
-                                               "history_max_details": budget}}, {})
+                                               "history_details_per_scan": budget}}, {})
             cfg, errors = settings.validate(raw)
             assert errors == []
             cfg = cfg["sla"]
@@ -345,11 +396,13 @@ def test_a_scan_that_cannot_read_every_row_starts_the_next_one_after_the_page_wh
             out = sla.read_history(browser, cfg, sla.Debug(False, tmp_path / f"debug{resume}"), plan, lambda m: None)
             return out, list(portal.details_opened), len(portal.searches)
     first, opened, searches = scan(0, 10)
-    assert opened == numbers[:10] and first["left"] == 14 and first["resume_page"] == 2 and searches == 1
+    # read 4 at a time in the background: the order within a page is the portal's, page after page is fixed
+    assert sorted(opened) == numbers[:10] and first["left"] == 14 and first["resume_page"] == 2 and searches == 1
     second, opened, searches = scan(first["resume_page"], 10)
-    assert opened == numbers[12:22] and second["resume_page"] == 0 and searches == 1
+    assert sorted(opened) == numbers[12:22] and second["resume_page"] == 0 and searches == 1
     third, opened, searches = scan(3, 10)
-    assert opened == numbers[18:24] + numbers[:4] and third["resume_page"] == 1 and searches == 2
+    assert sorted(opened[:6]) == numbers[18:24] and sorted(opened[6:]) == numbers[:4]
+    assert third["resume_page"] == 1 and searches == 2
 
 
 def test_the_rows_held_back_so_the_walk_could_finish_are_read_by_a_second_search(browser, tmp_path, monkeypatch):
@@ -363,7 +416,8 @@ def test_the_rows_held_back_so_the_walk_could_finish_are_read_by_a_second_search
         opened = list(portal.details_opened)
         searches = len(portal.searches)
     numbers = [r["number"] for r in reqs]
-    assert opened == numbers[12:] + numbers[:12] and searches == 2       # the last page, then pages 1-4 again
+    assert sorted(opened[:3]) == numbers[12:] and searches == 2           # the last page, then pages 1-4 again
+    assert [sorted(opened[3 + 3 * p:6 + 3 * p]) for p in range(4)] == [numbers[3 * p:3 * p + 3] for p in range(4)]
     assert out["opened"] == 15 and out["left"] == 0 and out["complete"] is True and out["resume_page"] == 0
 
 
@@ -377,7 +431,7 @@ def test_a_live_ticket_whose_assignment_is_not_read_is_never_left_behind_by_the_
     reqs.append(request(8300099, DAY, "اسناد لمستخدم السرية", executor="مستخدم اول", employee="موظف حي",
                         user_no="700299", history=open_history()))
     with FakeInquiryPortal(reqs, server_page=3) as portal:
-        raw = settings.deep_merge({"sla": {"username": "700101", "base_url": portal.url, "history_max_details": 10}}, {})
+        raw = settings.deep_merge({"sla": {"username": "700101", "base_url": portal.url, "history_details_per_scan": 10}}, {})
         cfg = settings.validate(raw)[0]["sla"]
         cfg["timeout_seconds"] = 8
         live = {sla_history.live_key({"fields": {"رقم المستخدم": "700299", "النظام": "Flexcube", "نوع الطلب": "اضافة صلاحية"}})}
@@ -386,7 +440,7 @@ def test_a_live_ticket_whose_assignment_is_not_read_is_never_left_behind_by_the_
         out = sla.read_history(browser, cfg, sla.Debug(False, tmp_path / "debug"), plan, lambda m: None)
         opened = list(portal.details_opened)
     assert out["opened"] == 10 and "8300099" in recorded(out) and opened[-1] == "8300099"
-    assert opened[:9] == [r["number"] for r in reqs[:9]] and out["resume_page"] == 3 and out["left"] == 5
+    assert sorted(opened[:9]) == [r["number"] for r in reqs[:9]] and out["resume_page"] == 3 and out["left"] == 5
 
 
 @pytest.mark.parametrize("span, last, resume", [(("2026-10-18", "2026-10-21"), "8300012", 3),
@@ -398,14 +452,14 @@ def test_only_the_live_tickets_this_search_can_list_keep_a_detail(browser, tmp_p
                     employee=f"موظف رقم {i}", history=six_line_history()) for i in range(15)]
     key = ("700999", "Flexcube", "اضافة صلاحية")
     with FakeInquiryPortal(reqs, server_page=3) as portal:
-        raw = settings.deep_merge({"sla": {"username": "700101", "base_url": portal.url, "history_max_details": 10}}, {})
+        raw = settings.deep_merge({"sla": {"username": "700101", "base_url": portal.url, "history_details_per_scan": 10}}, {})
         cfg = settings.validate(raw)[0]["sla"]
         cfg["timeout_seconds"] = 8
         plan = {"date_from": DAY, "date_to": DAY, "index": {}, "cfg": CFG, "excluded": None, "seconds": 120,
                 "live_keys": {key}, "live_spans": {key: span}}
         out = sla.read_history(browser, cfg, sla.Debug(False, tmp_path / "debug"), plan, lambda m: None)
         opened = list(portal.details_opened)
-    assert out["opened"] == 10 and opened[:9] == [r["number"] for r in reqs[:9]] and opened[-1] == last
+    assert out["opened"] == 10 and sorted(opened[:9]) == [r["number"] for r in reqs[:9]] and opened[-1] == last
     assert out["resume_page"] == resume       # held back on page 4: it starts there; else page 4 had its turn
 
 

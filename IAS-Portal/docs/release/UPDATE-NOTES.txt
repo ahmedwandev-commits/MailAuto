@@ -488,6 +488,22 @@ HOW TO UPDATE (your data is kept)
    - v5.13: v5.12 skipped every button named like the inquiry's own control (on the bank's page the grid and
      «عرض التالي» carry that name too), so its log said «only 1000 of the 3406». Only the details' own control and
      the status history's pager are skipped now, and the page's «عرض التالي» is preferred.
+
+46. SLA SCAN: AS LITTLE AS POSSIBLE LEFT FOR THE NEXT RUN
+   - Your counts are complete at every run (3408 of 3408): they come from the inquiry grid. "Left for the next scan"
+     is only the requests whose status history (their times) is not read yet. Each one is the portal's own
+     «التفاصيل»; there are thousands a day, so the first runs after an update catch up, and then each run reads what
+     changed since the last one.
+   - Faster: the requests' details are read in the background, 4 at a time, without redrawing the page. If the portal
+     does not allow it, the log says so once and they are opened one at a time as before.
+   - "Left" counts only what the numbers need: finished requests, the ones waiting for confirmation and the Live
+     tickets whose clock is not known. A request still with a security user is read when time allows and is shown
+     apart («still with a security user: read when time allows»). The log says «nothing left» when nothing is.
+   - Your log stopped at «detail budget»: the old limit of 60 details a scan. The new setting "Request details read
+     per scan (max)" is 1000 by default (the old 60, saved with your other settings, is no longer used).
+   - Each scan searches today and ONE other day - a recent day and an older day in turn - instead of three days, so
+     more time goes to the details. The time kept for that day is what its pages took last time; a day too big for one
+     scan (18/10, 7599 requests) no longer holds the others back.
    - Note: your "Search the last (days)" is 7 (the log searched 21/10 in turn); the default is 3. The scan searches
      today every time and the other days one a scan in turn, so 7 is fine - each of them is only refreshed less often.
 
@@ -912,5 +928,20 @@ IAS PORTAL - الجديد في هذا التحديث
    - v5.13: نسخة v5.12 كانت بتتجاهل أي زرار اسمه زي اسم صفحة الاستفسار نفسها (وفي البورتال الجدول و«عرض التالي» ليهم نفس
      الاسم)، علشان كده الـ log قال «only 1000 of the 3406». دلوقتي اللي بيتجاهل بس هو جزء التفاصيل وزرار صفحات الحالة
      التاريخية، و«عرض التالي» بتاع الصفحة هو اللي بيتختار الأول.
+
+46. سكان الـ SLA: أقل حاجة ممكنة بتفضل للسكان اللي بعده
+   - الأعداد بتطلع كاملة في كل سكان (3408 من 3408) لأنها من جدول الاستفسار نفسه. "left for the next scan" معناها بس
+     الطلبات اللي الحالة التاريخية بتاعتها (أوقاتها) لسه ماتقرتش. كل طلب منهم هو «التفاصيل» بتاعته في البورتال، وفيه
+     آلاف في اليوم، فأول سكانات بعد التحديث بتلحق اللي فات، وبعد كده كل سكان بيقرا اللي اتغير من آخر سكان بس.
+   - أسرع: تفاصيل الطلبات بتتقري في الخلفية، 4 مع بعض، من غير ما الصفحة تتعاد. ولو البورتال مسمحش بده، الـ log
+     بيقول كده مرة واحدة وبتتفتح واحد واحد زي الأول.
+   - "left" بقت بتعد بس اللي الأرقام محتاجاه: الطلبات اللي خلصت، واللي مستنية التعزيز، وتذاكر الـ Live اللي وقتها لسه
+     مش معروف. الطلب اللي لسه مع مستخدم سرية بيتقري لو فيه وقت وبيتكتب لوحده («still with a security user: read when
+     time allows»). والـ log بيقول «nothing left» لما مايفضلش حاجة.
+   - الـ log بتاعك وقف عند «detail budget»: الحد القديم 60 تفاصيل في السكان. الإعداد الجديد "Request details read per
+     scan (max)" افتراضيه 1000 (الـ 60 القديمة اللي اتحفظت مع إعداداتك مبقتش بتستخدم).
+   - كل سكان بيبحث في النهارده ويوم واحد تاني - يوم قريب ويوم قديم بالدور - بدل 3 أيام، فوقت أكتر بيروح للتفاصيل.
+     والوقت المتساب لليوم ده على قد صفحاته آخر مرة؛ واليوم الكبير على سكان واحد (18/10، 7599 طلب) مبقاش بيعطل باقي
+     الأيام.
    - ملاحظة: "Search the last (days)" عندك 7 (الـ log بحث في 21/10 بالدور)، والافتراضي 3. السكان بيبحث في النهارده كل
      مرة والأيام التانية يوم كل سكان بالدور، فالـ 7 مفيهاش مشكلة - بس كل يوم منهم بيتحدث على فترات أطول.
