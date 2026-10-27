@@ -1129,7 +1129,8 @@ def sla_analysis_get():
         older_to = (date.fromisoformat(window) - timedelta(days=1)).isoformat()
         older_to = min(older_to, filt["date_to"]) if filt["date_to"] else older_to
         team_scope = (filt["team"],) if filt.get("team") else scope
-        performance.add_logged_status(period["glance"], ops(), filt["date_from"], older_to, team_scope)
+        performance.add_logged_status(period["glance"], ops(), filt["date_from"], older_to, team_scope,
+                                      team_resolver().merges)
     # the portal's own «الاستفسار عن الطلبات» rows of the period's request dates, next to what the history holds
     period["portal"] = {**sla_history.portal_comparison(view["grid"], view["index"], filt["date_from"], filt["date_to"],
                                                         cfg),
@@ -1190,10 +1191,12 @@ def sla_days_get():
     d_from = parse_day(request.args.get("from")) if request.args.get("from") else (
         date.fromisoformat(d_to) - timedelta(days=29)).isoformat()
     scope = auth.team_scope()
+    merges = team_resolver().merges
     team = str(request.args.get("team") or "").strip()[:80]
-    if team and (scope is None or teams.in_scope(scope, team)):
+    if team and (scope is None or teams.in_scope(teams.merged_scope(scope, merges), team)):
         scope = (team,)
-    rows = performance.read_day_logs(ops(), d_from, d_to, scope, str(request.args.get("executor") or "").strip()[:150])
+    rows = performance.read_day_logs(ops(), d_from, d_to, scope, str(request.args.get("executor") or "").strip()[:150],
+                                     merges)
     return jsonify(days=rows, date_from=d_from, date_to=d_to, scope=overlay.scope_label(scope))
 
 
@@ -1329,6 +1332,13 @@ def analytics_get():
         keep = (lambda t: teams.in_scope(scope, t))
     else:
         keep = None
+    merges = team_resolver().merges                         # the security requests: a merged team as the team it joined
+    if team:
+        keep_tickets = (lambda t, into=teams.merged_team(team, merges): overlay._key(t) == overlay._key(into))
+    elif scope is not None:
+        keep_tickets = (lambda t, wide=teams.merged_scope(scope, merges): teams.in_scope(wide, t))
+    else:
+        keep_tickets = None
     stamps = (ops().read_analytics(analytics.EMAIL_STORE).get("last_folded") or "",
               (ops().read_sla_history_state() or {}).get("last_history") or "",
               (ops().read_itsm_records() or {}).get("last_generated") or "")
@@ -1351,17 +1361,18 @@ def analytics_get():
             continue
         arrived, done = (now_days if isinstance(now_days, tuple) else (now_days, None))
         p_arrived, p_done = (prev_days if isinstance(prev_days, tuple) else (prev_days, None))
-        current = analytics.series(arrived, d_from, d_to, keep)
-        before = analytics.series(p_arrived, p_from, p_to, keep)
+        mine = keep_tickets if module == "tickets" else keep
+        current = analytics.series(arrived, d_from, d_to, mine)
+        before = analytics.series(p_arrived, p_from, p_to, mine)
         entry = {"label": label, "in_label": in_label, "available": True, **current,
                  "previous": {"from": p_from, "to": p_to, "total": before["total"], "avg_per_day": before["avg_per_day"]},
                  "change_pct": analytics.change(current["total"], before["total"]),
                  "avg_change_pct": analytics.change(current["avg_per_day"], before["avg_per_day"])}
         if done is not None:
-            closed = analytics.series(done, d_from, d_to, keep)
+            closed = analytics.series(done, d_from, d_to, mine)
             entry["done"] = {"label": done_label, "total": closed["total"], "daily": closed["daily"],
                              "hours": closed["hours"], "peak_hour": closed["peak_hour"],
-                             "previous_total": analytics.series(p_done, p_from, p_to, keep)["total"]}
+                             "previous_total": analytics.series(p_done, p_from, p_to, mine)["total"]}
             # hour by hour, each team: what arrived and what was finished (the page's "arrived vs finished" table)
             names = [t["team"] for t in current["by_team"][:15]]
             names += [t["team"] for t in closed["by_team"] if t["team"] not in names][:max(0, 15 - len(names))]
@@ -1475,9 +1486,10 @@ def sla_history_view(scope, date_from="", date_to=""):
         team = team_of(row.get("system"), number_of.get(sla_history._norm(holder), ""), holder)
         if str(team).casefold() not in out_teams:
             grid[key] = {**row, "team": team}
-    if scope is not None:
-        records = {k: r for k, r in records.items() if teams.in_scope(scope, r["team"])}
-        grid = {k: r for k, r in grid.items() if teams.in_scope(scope, r["team"])}
+    if scope is not None:                                 # a manager of a merged team sees the team it joined
+        wide = resolver.sla_scope(scope)
+        records = {k: r for k, r in records.items() if teams.in_scope(wide, r["team"])}
+        grid = {k: r for k, r in grid.items() if teams.in_scope(wide, r["team"])}
     snap, _ = read_snapshot("sla")                       # the Live tickets (Re-Assign page), limited like the Live tab
     live = [r for r in (scoped_data("sla", (snap or {}).get("data"), scope) or {}).get("requests") or []
             if isinstance(r, dict) and not excluded(teams.sla_system(r, sla_system_header()))]
@@ -1510,6 +1522,7 @@ def sla_config_get():
     if scope is not None:                                    # a manager's count is their own team's, like the analysis
         resolver = team_resolver()
         people = sla_people()
+        scope = resolver.sla_scope(scope)
 
         def mine(r):                                         # the analysis's rule: any of the request's applications
             who = r.get("assignee") or people.get(str(r.get("executor") or "").strip(), r.get("executor"))
@@ -1627,6 +1640,8 @@ def _scope_event(event, scope):
     if module not in ("email", "sla", "itsm"):
         return event
     resolver = team_resolver()
+    if module == "sla":                                      # a manager of a merged team sees the team it joined
+        scope = resolver.sla_scope(scope)
     groups = event.get("groups")
     items = [i for i in event.get("items") or [] if isinstance(i, dict)]
     mine = [i for i in items if teams.in_scope(scope, _event_item_team(module, i))]

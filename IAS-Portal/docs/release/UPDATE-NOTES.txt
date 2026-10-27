@@ -400,6 +400,15 @@ HOW TO UPDATE (your data is kept)
      opened before any other, and their request days are searched every other scan. The collector's log says how many
      are still not read.
 
+37. THE MFA TEAM'S SECURITY REQUESTS COUNT UNDER OPEN SYSTEM
+   - In the SLA only - the Live tickets, Home, the SLA Analysis, Insights › Analysis, the timeline, the daily
+     summary's tickets and the day-by-day log - the requests of the MFA Team (its applications, and the ones its
+     people hold or executed) count as Open System. Days kept before this update count the same way.
+   - A manager of the MFA Team sees the whole of Open System there; a manager of Open System sees the MFA requests.
+   - E-mails, ITSM and the accounts keep their own teams: nothing changes in the E-mail pages or for the employees.
+   - System › Settings › Ticketing › "Teams counted as one" holds the rule (MFA Team -> Open System); remove the line
+     to count the MFA Team on its own again.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -734,3 +743,12 @@ IAS PORTAL - الجديد في هذا التحديث
        - الطلب اللي لسه محدش ماسكه بس هو اللي بيتحسب من «تاريخ الارسال للسرية» ("not assigned yet").
    - الـ scan بقى بيقرا الأول الحالة التاريخية لتذاكر الـ Live اللي وقت إسنادها مش معروف: بتتفتح قبل أي طلب تاني، وأيام
      طلبها بتتدور عليها scan آه وscan لأ. والـ log بتاع الـ collector بيقول كام لسه ما اتقراش.
+
+37. طلبات السرية بتاعة MFA Team بقت بتتحسب تحت Open System
+   - في الـ SLA بس - تذاكر الـ Live، والـ Home، والـ SLA Analysis، وInsights › Analysis، والـ timeline، والتيكتات في
+     الملخص اليومي، والسجل يوم بيوم - طلبات MFA Team (تطبيقاتها، واللي ماسكها أو نفذها حد من الفريق) بتتحسب
+     Open System. والأيام اللي اتسجلت قبل التحديث بتتحسب بنفس الطريقة.
+   - مدير MFA Team بيشوف Open System كله هناك، ومدير Open System بيشوف طلبات MFA.
+   - الإيميلات والـ ITSM والحسابات زي ما هي بفرقها: مفيش حاجة اتغيرت في صفحات الإيميل ولا للموظفين.
+   - القاعدة في System › Settings › Ticketing › "Teams counted as one" (MFA Team -> Open System)؛ لو شلت السطر،
+     MFA Team يرجع يتحسب لوحده.

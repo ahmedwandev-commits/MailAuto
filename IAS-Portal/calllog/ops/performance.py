@@ -34,9 +34,11 @@ def sla_scope(store, hub, users, day_from, day_to, scope=None):
     """The SLA history ``scope`` (None = every team) may see over ``day_from``..``day_to``: {records (closed on those
     days or up to two weeks later, and every open one), grid, index, cfg, live, resolver, people, available}. A
     request's team is the team of the person who executed or holds it (their account), else its application's -
-    the SLA Analysis' rule; Third Party left out."""
+    the SLA Analysis' rule; Third Party left out; a team merged into another (``sla.merge_teams``) as that team, and
+    a scope of the merged team sees it whole."""
     sla_cfg = hub.get("sla") or {}
     resolver = _resolver(store, hub, users)
+    scope = resolver.sla_scope(scope)
     excluded = teams.sla_exclusion(sla_cfg, resolver) or (lambda system: False)
     people = teams.sla_people(users)
     out_teams = {str(t).strip().casefold() for t in sla_cfg.get("exclude_teams") or [] if str(t).strip()}
@@ -237,16 +239,23 @@ def _sum_rows(rows, key):
     return list(out.values())
 
 
-def add_logged_status(glance, store, day_from, day_to, scope=None):
+def _merged_rows(rows, merges):
+    """Kept team / person rows with a merged team (``sla.merge_teams``) under the team it is merged into - a day kept
+    before the merge counts like the days after it."""
+    return [{**r, "team": teams.merged_team(r.get("team"), merges)} if merges else r for r in rows or []]
+
+
+def add_logged_status(glance, store, day_from, day_to, scope=None, merges=None):
     """Add to ``glance`` (``status_numbers``) the kept numbers of the days ``day_from``..``day_to`` (older than the
-    inquiry window), as ``scope`` may see them."""
+    inquiry window), as ``scope`` may see them (``merges`` = ``teams.team_merges`` of the settings)."""
     teams_rows, people_rows = [], []
+    scope = teams.merged_scope(scope, merges)
     for day in store.history_days("sla"):
         if day < day_from or day > day_to:
             continue
         log = (store.read_history("sla", day) or {}).get("day_log") or {}
-        teams_rows += [r for r in log.get("by_team") or [] if teams.in_scope(scope, r.get("team"))]
-        people_rows += [r for r in log.get("by_person") or [] if teams.in_scope(scope, r.get("team"))]
+        teams_rows += [r for r in _merged_rows(log.get("by_team"), merges) if teams.in_scope(scope, r.get("team"))]
+        people_rows += [r for r in _merged_rows(log.get("by_person"), merges) if teams.in_scope(scope, r.get("team"))]
     if not teams_rows:
         return glance
     for k in COUNT_KEYS:
@@ -268,11 +277,13 @@ def _team_sum(rows, scope):
     return out
 
 
-def read_day_logs(store, day_from, day_to, scope=None, person=""):
+def read_day_logs(store, day_from, day_to, scope=None, person="", merges=None):
     """The kept days between ``day_from`` and ``day_to`` (newest first) as ``scope`` may see them: [{day, at, came,
     executed, not_executed, rejected, waiting, confirmed, open, exec_average_minutes, exec_within_pct, best}] - every
-    team's totals, a manager's own teams summed, or (``person``) one security user's own row."""
+    team's totals, a manager's own teams summed, or (``person``) one security user's own row. ``merges`` =
+    ``teams.team_merges`` of the settings: a merged team's rows count as the team it is merged into."""
     want = sla_history._norm(person) if person else ""
+    sla_scope = teams.merged_scope(scope, merges)
     out = []
     for day in reversed(store.history_days("sla")):
         if (day_from and day < day_from) or (day_to and day > day_to):
@@ -281,8 +292,9 @@ def read_day_logs(store, day_from, day_to, scope=None, person=""):
         if not isinstance(log, dict) or "came" not in (log.get("totals") or {}):
             continue                                      # an older kind of log: not comparable
         if want:
-            row = next((r for r in log.get("by_person") or [] if sla_history._norm(r.get("person")) == want), None)
-            if row is None or (scope is not None and not teams.in_scope(scope, row.get("team"))):
+            row = next((r for r in _merged_rows(log.get("by_person"), merges)
+                        if sla_history._norm(r.get("person")) == want), None)
+            if row is None or (scope is not None and not teams.in_scope(sla_scope, row.get("team"))):
                 continue
             nums = {k: row.get(k, 0) for k in COUNT_KEYS}
             nums.update(exec_n=row.get("exec_n", 0), exec_average_minutes=row.get("exec_average_minutes"),
@@ -293,7 +305,7 @@ def read_day_logs(store, day_from, day_to, scope=None, person=""):
             nums.update(exec_n=ex.get("n", 0), exec_average_minutes=ex.get("average_minutes"),
                         exec_within_pct=ex.get("within_pct"))
         else:
-            nums = _team_sum(log.get("by_team"), scope)
+            nums = _team_sum(_merged_rows(log.get("by_team"), merges), sla_scope)
         best = next((p for p in log.get("people") or []
                      if scope is None or teams.in_scope(scope, p.get("team"))), None)
         out.append({"day": day, "at": log.get("at", ""), **nums,

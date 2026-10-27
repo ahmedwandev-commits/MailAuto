@@ -77,6 +77,9 @@ DEFAULTS = {
         # left out of the SLA, its alerts and the SLA Analysis: these teams' applications, and these applications
         "exclude_teams": ["Third Party"],
         "exclude_applications": [],
+        # counted as one team in the SLA only (its pages, numbers and the daily summary's tickets): team -> the team its
+        # requests count under; a manager of the merged team sees that team. E-mails, ITSM and the accounts keep theirs
+        "merge_teams": {"MFA Team": "Open System"},
         "base_url": "https://nbesrv.nbe.ahly.bank",
         "login_path": "/App_Security_Login/Login.aspx",
         "reassign_path": "/SecurityCodeRequest/Security_Assign_Maker/Request_ReAssign.aspx",
@@ -219,7 +222,7 @@ def _merge_into(out, over):
 
 # dict-valued settings whose KEYS are data (teams, names), so a saved dict must replace the default, not merge into it
 _FREE_DICTS = {"team_members_by_team", "team_link_groups", "team_recipients", "owner_emails", "categories",
-               "selectors", "advanced", "system_team_map", "address_team_map", "role_teams"}
+               "selectors", "advanced", "system_team_map", "address_team_map", "role_teams", "merge_teams"}
 
 
 # --------------------------------------------------------------- field checkers
@@ -387,6 +390,17 @@ def _regex(ctx, path, v):
     return v
 
 
+def _team_merges(ctx, path, v):
+    """team -> the team it counts under in the SLA: never itself, and never into a team that is merged too."""
+    out = _map(_str(80, allow_empty=False), key_max=80)(ctx, path, v)
+    for team, into in out.items():
+        if into and into.casefold() == team.casefold():
+            ctx.err(f"{path}.{team}", "cannot be merged into itself")
+        elif into and into.casefold() in {t.casefold() for t in out}:
+            ctx.err(f"{path}.{team}", f"is merged into {into}, which is itself merged into another team")
+    return out
+
+
 def _addr_map(ctx, path, v):
     """business mailbox -> team; the mailbox is lower-cased and must be an address."""
     if v is None:
@@ -452,7 +466,7 @@ FIELDS = {
         "warning_minutes": _int(1, 10080), "breach_minutes": _int(1, 10080), "repeat_minutes": _int(0, 10080),
         "mail": {**_MAIL_BASE, "subject": _str(150), "display_only": _bool, "cc_security_users": _bool},
         "owner_emails": _map(_email_one),
-        "exclude_teams": _strs(80), "exclude_applications": _strs(200),
+        "exclude_teams": _strs(80), "exclude_applications": _strs(200), "merge_teams": _team_merges,
         "base_url": _str(300, False), "login_path": _str(300), "reassign_path": _str(300), "app_url_fragment": _str(100),
         "history_enabled": _bool, "inquiry_path": _str(300), "history_days": _int(1, 31),
         "history_max_details": _int(10, 2000), "history_seconds": _int(30, 3600),

@@ -6,6 +6,9 @@ A security request (its application «النظام» and the security user «م�
   2. the team of the employee whose "security name" is that security user;
   3. the e-mail classification keywords (built-in map + the administrator's rules) found in the application name;
   otherwise no team: only administrators and managers of every team see it.
+  A team merged into another for the SLA (``sla.merge_teams``: MFA Team -> Open System by default) counts as that
+  team - in every SLA page, export and number - and a manager of the merged team sees the team it is merged into
+  (``Resolver.sla_scope``). E-mails, ITSM and the accounts keep their own teams.
 
 An ITSM role (a CA SDM role such as "IMP Card Management"):
   1. the administrator's map ``itsm.role_teams`` {role: team};
@@ -31,11 +34,35 @@ def _real_team(name):
     return bool(name) and name != schemas.ALL_TEAMS_MARK and name.casefold() != overlay.UNCLASSIFIED.casefold()
 
 
+def team_merges(settings):
+    """{team (normalised): the team its security requests count under} from ``sla.merge_teams`` - the SLA only."""
+    raw = ((settings or {}).get("sla") or {}).get("merge_teams") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {_key(k).casefold(): str(v).strip() for k, v in raw.items()
+            if _key(k) and _key(v) and _key(k).casefold() != _key(v).casefold()}
+
+
+def merged_team(team, merges):
+    """The team a security request of ``team`` counts under (itself unless it is merged into another)."""
+    return (merges or {}).get(_key(team).casefold(), team) if team else team
+
+
+def merged_scope(scope, merges):
+    """``scope`` as it sees the SLA: a manager of a merged team also sees the team it is merged into. None = every
+    team."""
+    if scope is None or not merges:
+        return scope
+    extra = [merges[_key(t).casefold()] for t in scope if _key(t).casefold() in merges]
+    return tuple(dict.fromkeys(list(scope) + extra))
+
+
 class Resolver:
     def __init__(self, settings=None, users=None, applications=None):
         settings = settings or {}
         email = settings.get("email") or {}
         self.teams = [t for t in (email.get("teams") or []) if _real_team(t)]
+        self.merges = team_merges(settings)
         self._apps = {_key(a.get("name")): str(a.get("team"))
                       for a in (applications or []) if a.get("name") and a.get("team")}
         self._security = {}
@@ -61,7 +88,7 @@ class Resolver:
                 team = self._security.get(key[2], "")
             if not team and key[1]:
                 team = self._keywords(system)
-            self._cache[key] = team
+            self._cache[key] = merged_team(team, self.merges)
         return self._cache[key]
 
     def application_team(self, system):
@@ -69,8 +96,13 @@ class Resolver:
         classification keywords in its name ("" = none)."""
         key = ("app", _key(system))
         if key not in self._cache:
-            self._cache[key] = self._apps.get(key[1], "") or (self._keywords(system) if key[1] else "")
+            team = self._apps.get(key[1], "") or (self._keywords(system) if key[1] else "")
+            self._cache[key] = merged_team(team, self.merges)
         return self._cache[key]
+
+    def sla_scope(self, scope):
+        """``scope`` widened for the SLA (``merged_scope``)."""
+        return merged_scope(scope, self.merges)
 
     def itsm_team(self, role):
         """The team of one ITSM role ("" = no team found)."""
@@ -131,11 +163,11 @@ def sla_people(users):
 def sla_person_team(system, number, name, people, resolver):
     """The team of one SLA request in the SLA Analysis (and the daily summary): the team of the PERSON who executed it
     or holds it (their account, by number, else by security name), else the application's / the security user's team
-    (``Resolver.sla_team``), else ``NO_TEAM``."""
+    (``Resolver.sla_team``), else ``NO_TEAM`` - a merged team as the team it is merged into."""
     by_no, by_name = people
     acct = (by_no.get(str(number or "").strip()) or by_name.get(norm_arabic(name))) if (number or name) else None
     mine = [t for t in overlay.user_teams(acct or {}) if _real_team(t)]
-    return (mine[0] if mine else "") or resolver.sla_team(system, name) or NO_TEAM
+    return merged_team(mine[0], resolver.merges) if mine else (resolver.sla_team(system, name) or NO_TEAM)
 
 
 def in_scope(scope, team):
@@ -161,6 +193,7 @@ def scope_sla(data, scope, resolver, header=SLA_SYSTEM_HEADER):
     if scope is None or not isinstance(data, dict):
         return data
     from .engines import sla_engine
+    scope = resolver.sla_scope(scope)
     reqs = [r for r in data.get("requests") or [] if in_scope(scope, sla_request_team(r, resolver, header))]
     return {**data, "requests": reqs, "totals": sla_engine.totals_of(reqs), "by_user": sla_engine.summarize(reqs)}
 
@@ -193,6 +226,7 @@ def scope_history_day(module, doc, scope, resolver, header=SLA_SYSTEM_HEADER):
     if scope is None or not isinstance(doc, dict):
         return doc
     out = {"day": doc.get("day"), "points": []}
+    sla_scope = resolver.sla_scope(scope) if module == "sla" else scope
     for point in doc.get("points") or []:
         if module == "itsm":
             per_role = {role: counts for role, counts in (point.get("per_role") or {}).items()
@@ -207,7 +241,7 @@ def scope_history_day(module, doc, scope, resolver, header=SLA_SYSTEM_HEADER):
         if not isinstance(groups, list):
             continue
         if module == "sla":
-            mine = [g for g in groups if in_scope(scope, resolver.sla_team(g.get("system"), g.get("user")))]
+            mine = [g for g in groups if in_scope(sla_scope, resolver.sla_team(g.get("system"), g.get("user")))]
             out["points"].append({"ts": point.get("ts"), **_sum_groups(mine, SLA_COUNTS)})
         elif module == "email":
             mine = [g for g in groups if any(in_scope(scope, t) for t in g.get("teams") or [])]
