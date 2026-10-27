@@ -471,12 +471,13 @@ def grid_rows(headers, rows):
     return [item for _, item in grid_rows_indexed(headers, rows)]
 
 
-def grid_rows_indexed(headers, rows):
+def grid_rows_indexed(headers, rows, seen=None):
     """``grid_rows`` as [(index of the row in ``rows``, item)]: the page row each request came from (its own
-    «التفاصيل» post-back), footer lines left out."""
+    «التفاصيل» post-back), footer lines left out. ``seen`` (kept by the caller) carries the key occurrences of the
+    rows before these - the result pages of one search, read one after another, key as one grid."""
     col = {k: find_col(headers, v) for k, v in GRID_COLUMNS.items()}
     # «رقم الموظف» must not be taken by «رقم الموظف TP»: find_col prefers the exact header, so it is not
-    out, seen = [], {}
+    out, seen = [], ({} if seen is None else seen)
     for n, r in enumerate(rows or []):
         item = {k: (_clean(r[i]) if i is not None and i < len(r) else "") for k, i in col.items()}
         if not any(item[k] for k in ("date", "employee_no", "system", "status")):

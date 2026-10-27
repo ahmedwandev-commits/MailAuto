@@ -1210,31 +1210,53 @@ def test_the_days_of_live_tickets_whose_assignment_is_not_read_come_every_other_
          "sent_at": (NOW - timedelta(days=20)).isoformat()}]}, generated_at=NOW.isoformat(timespec="seconds"))
     day = lambda n: NOW.date() - timedelta(days=n)                                      # noqa: E731
     plan = sla.history_plan(ctx, sla_settings(), NOW)
-    assert plan["slices"][1] == (day(9), day(9)) and plan["live_days"] == 4          # sent 6 days ago, 3 before
+    assert plan["slices"][-1] == (day(9), day(9)) and plan["live_days"] == 4         # sent 6 days ago, 3 before
     assert plan["live_keys"] == {("1001", "نظام", "نوع")}
+    assert plan["live_spans"] == {("1001", "نظام", "نوع"): (day(9).isoformat(), day(6).isoformat())}
     store.update_sla_history_state(lambda d: d.update(history_older_day=day(6).isoformat()))
-    assert sla.history_plan(ctx, sla_settings(), NOW)["slices"][1] == (day(23), day(23))   # then the others, in turn
+    assert sla.history_plan(ctx, sla_settings(), NOW)["slices"][-1] == (day(23), day(23))  # then the others, in turn
     store.update_sla_history_state(lambda d: d.update(history_older_day=day(23).isoformat()))
-    assert sla.history_plan(ctx, sla_settings(), NOW)["slices"][1] == (day(9), day(9))     # and the Live ones again
+    assert sla.history_plan(ctx, sla_settings(), NOW)["slices"][-1] == (day(9), day(9))    # and the Live ones again
 
 
 def test_the_inquiry_follows_older_live_tickets_one_day_a_scan_never_a_month_at_once(store):
     """The analysis must know every open request, but a search a month back took 37 result pages and the whole scan:
-    each scan searches the last ``history_days`` days plus ONE older day that still has a request in progress (a Live
-    ticket's request date is a few days before it was sent), the oldest first and the next one at the next scan; never
-    further back than HISTORY_REACH_DAYS."""
+    each scan searches today, one other day of the last ``history_days`` days and ONE older day that still has a
+    request in progress (a Live ticket's request date is a few days before it was sent), the oldest first and the next
+    one at the next scan; never further back than HISTORY_REACH_DAYS."""
     ctx = make_ctx(store, None, NOW)
     plain = sla.history_plan(ctx, sla_settings(), NOW)
-    assert plain["date_from"] == NOW.date() - timedelta(days=2) and plain["slices"] == [(plain["date_from"], NOW.date())]
+    today, start = NOW.date(), NOW.date() - timedelta(days=2)
+    assert plain["date_from"] == start and plain["slices"] == [(today, today), (start, start)]
     store.write_snapshot("sla", {"requests": [{"key": "old", "sent_at": (NOW - timedelta(days=9)).isoformat()},
                                               {"key": "ancient", "sent_at": (NOW - timedelta(days=90)).isoformat()}]},
                          generated_at=NOW.isoformat(timespec="seconds"))
     plan = sla.history_plan(ctx, sla_settings(), NOW)
     assert plan["date_from"] == NOW.date() - timedelta(days=2)                          # the recent window stays
     first = NOW.date() - timedelta(days=12)                                              # sent 9 days ago, 3 before
-    assert plan["slices"][1] == (first, first) and plan["older_days"] == 4               # the 90-day one is too old
+    assert plan["slices"][-1] == (first, first) and plan["older_days"] == 4              # the 90-day one is too old
     store.update_sla_history_state(lambda d: d.update(history_older_day=first.isoformat()))
     after = sla.history_plan(ctx, sla_settings(), NOW)
-    assert after["slices"][1] == (first + timedelta(days=1),) * 2                       # the next one, in turn
+    assert after["slices"][-1] == (first + timedelta(days=1),) * 2                      # the next one, in turn
+
+
+def test_the_recent_window_is_never_searched_at_once_today_every_scan_and_one_other_day_in_turn(store):
+    """20 result pages of a busy window took two minutes of every scan: today is searched at every scan, and the other
+    days of the last ``history_days`` days one a scan, in turn (a day the last scan could not read keeps its turn)."""
+    ctx = make_ctx(store, None, NOW)
+    day = lambda n: NOW.date() - timedelta(days=n)                                      # noqa: E731
+    settings_ = sla_settings()
+    settings_["history_days"] = 4
+    plan = sla.history_plan(ctx, settings_, NOW)
+    assert plan["date_from"] == day(3) and plan["slices"] == [(day(0), day(0)), (day(3), day(3))]
+    assert plan["recent_day"] == day(3).isoformat()
+    turns = []
+    for _ in range(4):
+        store.update_sla_history_state(lambda d: d.update(history_recent_day=plan["recent_day"]))
+        plan = sla.history_plan(ctx, settings_, NOW)
+        turns.append(plan["slices"][1][0])
+    assert turns == [day(2), day(1), day(3), day(2)]                                    # in turn, then again
+    settings_["history_days"] = 1
+    assert sla.history_plan(ctx, settings_, NOW)["slices"] == [(day(0), day(0))]        # today only
 
 

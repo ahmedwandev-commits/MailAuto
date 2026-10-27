@@ -812,6 +812,10 @@ JS_SERVER_NEXT = ("(() => {" + JS_NORM + JS_FIND_GRID + r"""
   const r = n.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; })()""")
 
 MAX_SERVER_PAGES = 50                      # the portal's own result pages walked per search (1000 rows each)
+MAX_REPEAT_ROWS = 50                       # rows a result page can repeat from the one before (requests came in meanwhile)
+DRILL_GUESS_S = 3.0                        # one request's details, until the scan has timed its own
+LIVE_HOLD_MAX_S = 30                       # at most this long kept for the Live tickets the pages to come may list
+WALK_MARGIN, WALK_SLACK_S = 1.5, 3.0       # the pages still to come x their measured time x this, plus this
 
 # The portal's own grand total under the grid: «اجمالي عدد الطلبات : - 4351» (every result page together), or null
 JS_PORTAL_TOTAL = ("(() => {" + JS_NORM + r"""
@@ -822,6 +826,11 @@ JS_PORTAL_TOTAL = ("(() => {" + JS_NORM + r"""
 
 def _rows_sig(rows):
     return "\x1f".join("\x1e".join(map(str, r)) for r in rows or [])
+
+
+def _cells(row):
+    """One grid row's cells, to know the row again on a page shown anew."""
+    return tuple(str(c).strip() for c in row or ())
 
 
 JS_GRID_PRESENT = ("(() => {" + JS_NORM
@@ -923,6 +932,13 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     ``sla_history.fold_history`` (``failed`` marks a row whose details could not be read). Raises PortalError only when
     the page itself cannot be used; one request that cannot be read is skipped.
 
+    The rows of each result page are opened WHILE that page is shown: the portal's next page is only reached by
+    «التالي» from the first one, and on a busy portal the first page changes between two searches, so a page left
+    to be found again later is not found at all. Time is kept for the pages still to come (the walk always finishes:
+    every row is counted) and the details budget for the Live tickets they may list; the pages before the one where
+    the last scan stopped (``plan['resume_page']``) are opened after the others - with the rows held back so the walk
+    could finish - by a second search, while time is left.
+
     Fast path (the bank's portal): a row's «التفاصيل» is a ``__doPostBack`` link, so each drill is ONE call of that
     post-back and ONE cheap look per ``POLL_MS`` until a NEW status history with a fresh request number shows - no
     mouse, no re-drawing the grid, no closing, no fixed sleep. Rows without such a link are clicked (and their box
@@ -1015,121 +1031,143 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     if table is None:
         raise PortalError("The inquiry results table did not appear after the search.")
     headers = table["headers"]
-    # the portal's result pages: {sig (its rows as first shown: to know it again), rows, pbs, total}; the portal's
-    # own «اجمالي عدد الطلبات» says how many there are in all, so the last page is known without one click too many
+    # the portal's own grand total «اجمالي عدد الطلبات» says how many requests there are in all: the last result page
+    # is known without one click too many, and the pages still to come are known while the details are opened
     portal_total = None
     with suppress(Exception):
         portal_total = browser.eval(JS_PORTAL_TOTAL)
-    pages, walk_cut = [], False
-    while True:
-        rows, pbs, total = whole_page(table)
-        pages.append({"sig": _rows_sig(table["rows"]), "rows": rows, "pbs": pbs, "total": total})
-        if len(pages) >= MAX_SERVER_PAGES:
-            break
-        if isinstance(portal_total, int) and sum(len(p["rows"]) for p in pages) >= portal_total:
-            break
-        if time.monotonic() >= deadline - PAGE_RESERVE_S:   # the run must never outlive its time limit
-            walk_cut = True
-            break
-        table = server_next(_rows_sig(table["rows"]))
-        if table is None:
-            break
-    current_page = len(pages) - 1
-    rows = [r for p in pages for r in p["rows"]]
-    page_of_row = [n for n, p in enumerate(pages) for _ in p["rows"]]
-    pb_rows = [b for p in pages for b in p["pbs"]]
-    indexed = sla_history.grid_rows_indexed(headers, rows)
-    grid = [it for _, it in indexed]
-    page_of = {it["key"]: page_of_row[n] for n, it in indexed}
-    pb_of = {it["key"]: pb_rows[n] for n, it in indexed if pb_rows[n]}     # each row's own «التفاصيل» post-back
-    totals = [p["total"] for p in pages]
-    grid_total = sum(totals) if totals and all(t is not None for t in totals) else None
-    short = [(n + 1, len(p["rows"]), p["total"]) for n, p in enumerate(pages)
-             if p["total"] is not None and len(p["rows"]) < p["total"]]
-    log(f"SLA history: inquiry grid {len(rows)} row(s)" + (f" over {len(pages)} result pages" if len(pages) > 1 else "")
-        + (f", the portal lists {portal_total} in all («اجمالي عدد الطلبات»)" if isinstance(portal_total, int)
-           else f", the portal lists {grid_total}" if grid_total is not None else "")
-        + ("".join(f"; page {n}: only {got} of its {want} rows could be read" for n, got, want in short)))
-    if walk_cut:
-        log(f"SLA history: the time budget ran out after {len(pages)} result page(s) ({len(rows)} rows) - the rows of the "
-            "other pages keep what the earlier scans read")
-    elif isinstance(portal_total, int) and len(rows) < portal_total:
-        log(f"SLA history: WARNING only {len(rows)} of the {portal_total} requests could be read - the next result page "
-            "(«عرض التالي») did not open; the rest are read at the next scan")
-
-    def goto(page):
-        """Show result page ``page``: forward with «التالي», back by a new search (it starts on the first page). True
-        when the page shown is the one read before (same rows)."""
-        nonlocal current_page, searches
-        if page == current_page:
-            return True
-        if current_page < 0 or page < current_page:
-            t = search()
-            searches += 1
-            current_page = 0
-            if t is None or _rows_sig(t["rows"]) != pages[0]["sig"]:
-                current_page = -1
-                return False
-        while current_page < page:
-            t = server_next(pages[current_page]["sig"])
-            if t is None or _rows_sig(t["rows"]) != pages[current_page + 1]["sig"]:
-                current_page = -1                         # not known: the next page wanted starts with a new search
-                return False
-            current_page += 1
-        return True
+    if not isinstance(portal_total, int):
+        portal_total = None
     index = plan.get("index") or {}
     budget = int(cfg.get("history_max_details") or DEFAULTS["sla"]["history_max_details"])
     # a request still with the branch (registered / confirmed by its supervisor) has no SLA step yet: opened once it moves
     # and a request of an excluded application (the Third Party team's by default) is never opened at all
     excluded = plan.get("excluded") or (lambda system: False)
-    todo = {it["key"] for it in grid if sla_history.needs_details(it, index, plan["cfg"])
-            and sla_history.detail_priority(it["status"], plan["cfg"], it.get("executor") or "") is not None
-            and not excluded(it["system"])}
-    # a «نموذج (7)» row read before its period was taken from the details: read again, after every other row
-    late = {it["key"] for it in grid if it["key"] in todo
-            and not sla_history.needs_details(it, index, plan["cfg"], period=False)}
-    # a Live ticket whose last assignment is not known yet first (the Live tab's clock: ``plan['live_keys']``), then
-    # the FINISHED requests (confirmed, then rejected: one read gives every stamp of a request), then the ones awaiting
-    # the reviewer, then the ones with a security user; within each, page by page starting on the page where the last
-    # scan stopped (``resume_page``: a row's post-back opens it on ITS result page only, and no page waits scan after
-    # scan), the newest request first
-    npages = max(1, len(pages))
-    resume = int(plan.get("resume_page") or 0) % npages
     live_keys = plan.get("live_keys") or set()
+    # the Live tickets this search can list (their request date is a few days before they were sent): only those are
+    # waited for while the pages before them are opened
+    spans = plan.get("live_spans") or {}
+    lo_day, hi_day = plan.get("date_from"), plan.get("date_to")
+    live_here = {k for k in live_keys if k not in spans or not hasattr(lo_day, "isoformat")
+                 or (spans[k][0] <= hi_day.isoformat() and spans[k][1] >= lo_day.isoformat())}
+    resume = max(0, int(plan.get("resume_page") or 0))
+    after_s = float(plan.get("after_s") or 0)            # kept for the slices read after this one (their pages)
+
+    def wanted(it):
+        return (sla_history.needs_details(it, index, plan["cfg"])
+                and sla_history.detail_priority(it["status"], plan["cfg"], it.get("executor") or "") is not None
+                and not excluded(it["system"]))
 
     def live_wanted(it):
         return (bool(live_keys) and sla_history.grid_live_key(it) in live_keys
                 and sla_history.grid_stage(it["status"], plan["cfg"], it.get("executor") or "") == "open")
-    ordered = sorted(grid, key=lambda it: (it["key"] not in todo, it["key"] in late, not live_wanted(it),
-                                           sla_history.detail_priority(it["status"], plan["cfg"], it.get("executor") or "") or 0,
-                                           (page_of[it["key"]] - resume) % npages,
-                                           -((sla_history.parse_time(it["date"]) or datetime.min).toordinal())))
-    resume_next = None
-    lost_pages = set()
-    items, opened, failed, streak, unverified, partial = [], 0, 0, 0, 0, 0
-    read_numbers = {}                                     # request number -> grid key, this scan
-    prev_sig = ""
+
+    # On the page shown: a Live ticket whose last assignment is not known yet first (the Live tab's clock), then the
+    # FINISHED requests (confirmed, then rejected: one read gives every stamp of a request), then the ones awaiting the
+    # reviewer, then the ones with a security user, the newest request first; a «نموذج (7)» row read before its period
+    # was taken from the details comes last (``late``)
+    def first(it):
+        return (it["key"] in late, not live_wanted(it),
+                sla_history.detail_priority(it["status"], plan["cfg"], it.get("executor") or "") or 0,
+                -((sla_history.parse_time(it["date"]) or datetime.min).toordinal()))
+
+    pages = []                       # the result pages walked: {"rows", "total", "keys", "repeats", "postbacks", "listed"}
+    grid, item_of, page_of, by_cells = [], {}, {}, {}
+    seen = {}                        # grid key occurrences so far: two identical rows stay two requests, across pages
+    todo, late, repeats, live_found = set(), set(), [], set()
+    done = {}                        # grid key -> its item (read, or could not be read)
+    read_numbers = {}                # request number -> grid key, this scan
     drill_s = []
-    stopped = ""
-    for it in ordered:
-        if it["key"] not in todo:
-            items.append({"grid": it, "id": "", "history": None})
-            continue
-        if opened + failed >= budget or streak >= 3 or time.monotonic() >= deadline or stopped:
-            if not stopped:
-                stopped = ("time budget" if time.monotonic() >= deadline else "3 failures in a row" if streak >= 3
-                           else "detail budget")
-            if resume_next is None and it["key"] not in late:
-                resume_next = page_of[it["key"]]          # the next scan starts here
-            items.append({"grid": it, "id": "", "history": None})
-            continue
-        if page_of[it["key"]] in lost_pages or not goto(page_of[it["key"]]):
-            if page_of[it["key"]] not in lost_pages:
-                lost_pages.add(page_of[it["key"]])
-                log(f"SLA history: result page {page_of[it['key']] + 1} could not be shown again; its rows are read "
-                    "next scan")
-            items.append({"grid": it, "id": "", "history": None})
-            continue
+    opened = failed = streak = unverified = partial = 0
+    prev_sig, stopped, held, resume_next = "", "", "", None
+    opened_on = set()                # the pages whose requests this pass opened (where the next scan does not start)
+    page_s = search_s                # what one more result page costs (shown and read): the search's own time at first
+    pages_s = search_s               # the time spent showing and reading the result pages (the details' not counted)
+
+    def rows_read():
+        return sum(len(p["rows"]) - p["repeats"] for p in pages)
+
+    def take_page(table):
+        """Read the result page shown now into the grid. Returns its rows' «التفاصيل» post-backs by grid key (None
+        for a row without one). Requests registered while the pages are walked push the last rows of a page onto the
+        next one: when a page starts with the rows the page before ended with AND the portal's total grew in between,
+        those rows are kept apart (``repeats``) - never opened, and left out when the walk counts more rows than the
+        portal's total. Two real requests that look the same (the total did not grow) stay two."""
+        rows, pbs, total = whole_page(table)
+        skip, listed = 0, (pages[-1]["listed"] if pages else portal_total)
+        if pages and portal_total is not None:
+            prev = pages[-1]["rows"]
+            same = next((k for k in range(min(len(prev), len(rows), MAX_REPEAT_ROWS), 0, -1)
+                         if prev[-k:] == rows[:k]), 0)
+            if same:
+                now_listed = None
+                with suppress(Exception):
+                    now_listed = browser.eval(JS_PORTAL_TOTAL)
+                if isinstance(now_listed, int) and isinstance(listed, int) and now_listed > listed:
+                    skip, listed = min(same, now_listed - listed), now_listed
+        n, keys, shown = len(pages), [], {}
+        for i, it in sla_history.grid_rows_indexed(headers, rows, seen):
+            key = it["key"]
+            grid.append(it)
+            keys.append(key)
+            item_of[key], page_of[key] = it, n
+            by_cells.setdefault(_cells(rows[i]), []).append(key)
+            shown[key] = pbs[i] if i < len(pbs) else None
+            if i < skip:
+                repeats.append(key)
+            elif wanted(it):
+                todo.add(key)
+                if not sla_history.needs_details(it, index, plan["cfg"], period=False):
+                    late.add(key)
+                if live_wanted(it):
+                    live_found.add(sla_history.grid_live_key(it))
+        pages.append({"rows": rows, "total": total, "keys": keys, "repeats": skip, "listed": listed,
+                      "postbacks": sum(1 for pb in shown.values() if pb)})
+        return shown
+
+    def pages_left():
+        """How many result pages are still to come (the portal's total says it; else whether «التالي» is there)."""
+        if len(pages) >= MAX_SERVER_PAGES:
+            return 0
+        if portal_total is not None:
+            left = portal_total - rows_read()
+            return -(-left // max(1, len(pages[0]["rows"]))) if left > 0 else 0
+        try:
+            return 1 if browser.eval(JS_SERVER_NEXT) else 0
+        except Exception:
+            return 1
+
+    def reshow(n):
+        """Show result page ``n`` again (a new search starts on the first page, then «التالي» forward) and know its
+        rows again by their cells: a busy portal moves rows between pages and changes statuses, so a row is never
+        taken by its place. Its rows' post-backs by grid key, or None when it cannot be shown in the time left."""
+        nonlocal searches, prev_sig
+        if time.monotonic() + page_s * (n + 1) >= deadline:
+            return None
+        t = search()
+        searches += 1
+        prev_sig = ""
+        for _ in range(n):
+            if t is None or time.monotonic() >= deadline:
+                return None
+            t = server_next(_rows_sig(t["rows"]))
+        if t is None:
+            return None
+        return known_again(t)
+
+    def known_again(t):
+        """The rows of the page shown now (``t``) known again by their cells: their post-backs by grid key."""
+        rows, pbs, _ = whole_page(t)
+        shown = {}
+        for i, row in enumerate(rows):
+            key = next((k for k in by_cells.get(_cells(row), ()) if k not in shown), None)
+            if key is not None:
+                shown[key] = pbs[i] if i < len(pbs) else None
+        return shown
+
+    def open_one(it, pb, page):
+        """Open one row's «التفاصيل» (on result page ``page``) and read its whole status history into ``done``."""
+        nonlocal prev_sig, opened, failed, streak, unverified, partial
         t1 = time.monotonic()
         tokens = [it.get("employee_no"), it.get("user_no")]
         fresh = lambda s: bool(s.get("open") and s.get("number") and s.get("ready") == "complete"   # noqa: E731
@@ -1137,7 +1175,6 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
                                and read_numbers.get(s["number"], it["key"]) == it["key"])
         got, snap, in_page = None, None, False
         try:
-            pb = pb_of.get(it["key"])
             if pb and browser.eval(js_postback(pb["t"], pb["a"])):
                 snap = _poll(lambda: browser.eval(js_detail_snapshot(tokens)) or {}, fresh, DETAILS_WAIT_S)
                 in_page = True                            # never closed: the next post-back replaces it
@@ -1175,43 +1212,166 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
             log(f"SLA history: one request could not be read ({type(exc).__name__})")
         drill_s.append(time.monotonic() - t1)
         if got:
-            items.append(got)
+            done[it["key"]] = got
             opened += 1
             streak = 0
+            opened_on.add(page)
         else:
-            items.append({"grid": it, "id": "", "history": None, "failed": True})
+            done[it["key"]] = {"grid": it, "id": "", "history": None, "failed": True}
             failed += 1
             streak += 1
-        try:                                              # a post-back that lost the grid: search again
-            if not browser.eval(JS_GRID_PRESENT):
-                prev_sig = ""
-                if time.monotonic() >= deadline:          # no time left for a new search: the rest is next scan's
-                    stopped = "time budget"
-                    continue
-                table = search()
-                searches += 1
-                current_page = 0                          # a new search shows the first result page
-                if table is None:
-                    stopped = "the inquiry grid did not come back"
-        except Exception as exc:                          # keep what was read: the rest waits for the next scan
-            stopped = f"the inquiry page stopped answering ({type(exc).__name__})"
-    left = max(0, len(todo) - opened - failed)
+
+    def drill(shown, n, reserve, hold=0, rotate=True):
+        """Open the details of the wanted rows of the page shown now (``shown``: its rows' post-backs by grid key), the
+        most wanted first, while the detail budget and the time allow - ``reserve`` seconds are kept for the result pages
+        and the slices still to come, and ``hold`` details (with their time) for the Live tickets the pages to come may
+        still list. Returns the page's post-backs as shown now; None when a post-back lost the grid and the page could
+        not be shown again. A row left for lack of budget or time marks where the next scan starts (``rotate``): the
+        page after this one when this one had its turn (some of its requests opened), so no page keeps the others
+        waiting scan after scan; this one when none of its requests could be opened."""
+        nonlocal stopped, held, resume_next
+        for it in sorted((item_of[k] for k in shown if k in todo and k not in done), key=first):
+            if it["key"] not in shown:                    # not on the page shown again after a lost grid
+                continue
+            keep = 0 if live_wanted(it) else hold
+            per = sum(drill_s) / len(drill_s) if drill_s else DRILL_GUESS_S
+            why = stopped or ("detail budget" if opened + failed + keep >= budget else "3 failures in a row"
+                              if streak >= 3 else "time budget"
+                              if time.monotonic() >= deadline - reserve - min(keep * per, LIVE_HOLD_MAX_S) else "")
+            if why:
+                if why == "3 failures in a row" or (not keep and (why != "time budget" or reserve <= after_s)):
+                    stopped = why                         # final: no later page can do better
+                held = why
+                if rotate and resume_next is None and it["key"] not in late:
+                    resume_next = n + 1 if n in opened_on else n      # the next scan starts here
+                return shown
+            open_one(it, shown[it["key"]], n)
+            try:                                          # a post-back that lost the grid: search again, back to page n
+                if not browser.eval(JS_GRID_PRESENT):
+                    shown = reshow(n)
+                    if shown is None:
+                        stopped = "the inquiry grid did not come back"
+                        if rotate and resume_next is None:
+                            resume_next = n
+                        return None
+            except Exception as exc:                      # keep what was read: the rest waits for the next scan
+                stopped = f"the inquiry page stopped answering ({type(exc).__name__})"
+                return None
+        return shown
+
+    # 1) Walk the result pages, opening the wanted rows of each page WHILE it is shown: a busy portal changes its first
+    #    page between two searches (new requests, statuses moving), so a page is never left to be found again later.
+    #    The pages before the one where the last scan stopped (``resume_page``) only get their Live tickets opened here.
+    walk_cut, walked_all = False, False
+    shown = take_page(table)
+    if portal_total and pages[0]["rows"] and resume * len(pages[0]["rows"]) >= portal_total:
+        resume = 0                                        # fewer pages than when the last scan stopped
+    while True:
+        n = len(pages) - 1
+        more = pages_left()
+        # generous: what the early pages leave is opened on the last one, while a walk cut short is a day not counted
+        reserve = after_s + (more * page_s * WALK_MARGIN + PAGE_RESERVE_S + WALK_SLACK_S if more else 0.0)
+        hold = len(live_here - live_found) if more else 0  # Live tickets the pages to come may list
+        mine = {k: pb for k, pb in shown.items() if n >= resume or live_wanted(item_of[k])}
+        drilled = not stopped and any(k in todo and k not in done for k in mine)
+        if drilled and drill(mine, n, reserve, hold, rotate=n >= resume) is None:
+            walked_all = not more
+            break
+        if not more:
+            walked_all = True
+            break
+        if time.monotonic() >= deadline - PAGE_RESERVE_S:   # the run must never outlive its time limit
+            walk_cut = True
+            break
+        t1 = time.monotonic()
+        nxt = server_next(_rows_sig(((read_table() if drilled else None) or table)["rows"]))
+        if nxt is None:
+            walked_all = True                             # the last page (or «التالي» did not open: reported below)
+            break
+        table = nxt
+        shown = take_page(table)
+        page_s = time.monotonic() - t1
+        pages_s += page_s
+    walk_s = time.monotonic() - t0
+
+    # 2) The rows the walk counted twice (pushed onto the next page while it was walked) are left out when the walk
+    #    counted more rows than the portal's total; else they are real requests that look the same (read next scan)
+    raw = sum(len(p["rows"]) for p in pages)
+    drop = set(repeats[:raw - portal_total]) if portal_total is not None and raw > portal_total else set()
+    if drop:
+        grid = [it for it in grid if it["key"] not in drop]
+    todo |= {k for k in repeats if k not in drop and wanted(item_of[k])}
+
+    totals = [p["total"] for p in pages]
+    grid_total = sum(totals) if totals and all(t is not None for t in totals) else None
+    short = [(n + 1, len(p["rows"]), p["total"]) for n, p in enumerate(pages)
+             if p["total"] is not None and len(p["rows"]) < p["total"]]
+    days = [d for d in (sla_history.parse_time(it["date"]) for it in grid) if d]
+    log(f"SLA history: inquiry {dfrom} – {dto}: {raw - len(drop)} row(s)"
+        + (f" over {len(pages)} result pages" if len(pages) > 1 else "")
+        + (f", the portal lists {portal_total} in all («اجمالي عدد الطلبات»)" if portal_total is not None
+           else f", the portal lists {grid_total}" if grid_total is not None else "")
+        + (f"; request dates {min(days):%d/%m/%Y} – {max(days):%d/%m/%Y}" if days else "")
+        + (f"; {len(drop)} row(s) seen twice left out (requests came in while the pages were read)" if drop else "")
+        + (f"; the pages took {pages_s:.0f} s ({pages_s / len(pages):.1f} s a page)" if len(pages) > 1 else "")
+        + "".join(f"; page {n}: only {got} of its {want} rows could be read" for n, got, want in short))
+    d_from, d_to = plan["date_from"], plan["date_to"]
+    if days and hasattr(d_from, "year") and (min(days).date() < d_from or max(days).date() > d_to):
+        log(f"SLA history: WARNING the portal listed requests dated {min(days):%d/%m/%Y} – {max(days):%d/%m/%Y} for a "
+            f"search of {dfrom} – {dto}: the dates typed may not have been taken (System › Settings › Ticketing › the "
+            "inquiry's date format)")
+    if walk_cut:
+        log(f"SLA history: the time budget ran out after {len(pages)} result page(s) ({raw} rows) - the rows of the "
+            "other pages keep what the earlier scans read")
+    elif portal_total is not None and rows_read() < portal_total:
+        log(f"SLA history: WARNING only {rows_read()} of the {portal_total} requests could be read - the next result "
+            "page («عرض التالي») did not open; the rest are read at the next scan")
+
+    # 3) A second pass while time is left: the rows still unread - on the pages before the resume page, and the ones
+    #    held back so the walk could finish (what the early pages leave is used here). A new search (it starts on the
+    #    first page), then «التالي» up to the last page with such a row, each page known again by its rows' cells
+    waiting = lambda: [k for k in todo if k not in done and k not in drop]       # noqa: E731
+    if (walked_all and not stopped and waiting()
+            and deadline - after_s - time.monotonic() > search_s + 2 * page_s):
+        last_page = max(page_of.get(k, 0) for k in waiting())
+        opened_on.clear()
+        resume_next = None                                # this pass decides where the next scan starts
+        m, shown = 0, reshow(0)
+        while shown is not None and not stopped:
+            shown = drill(shown, m, after_s)
+            if shown is None or stopped or not waiting() or m + 1 > last_page:
+                break
+            if time.monotonic() + page_s >= deadline - after_s:
+                stopped = "time budget"
+                if resume_next is None:
+                    resume_next = m + 1
+                break
+            nxt = server_next(_rows_sig((read_table() or {}).get("rows") or []))
+            if nxt is None:
+                break
+            m += 1
+            shown = known_again(nxt)
+
+    items = [done.get(it["key"]) or {"grid": it, "id": "", "history": None} for it in grid]
+    left = sum(1 for k in todo if k not in done and k not in drop)
     total_s = time.monotonic() - started
     timing = {"seconds": round(total_s, 1), "search_seconds": round(search_s, 1), "searches": searches,
+              "walk_seconds": round(walk_s, 1), "page_seconds": round(pages_s / len(pages), 1) if pages else None,
               "drills": len(drill_s), "drill_avg_seconds": round(sum(drill_s) / len(drill_s), 2) if drill_s else None,
-              "drill_max_seconds": round(max(drill_s), 2) if drill_s else None, "postback_rows": len(pb_of),
-              "stopped": stopped, "partial": partial, "grid_total": grid_total, "grid_pages": len(pages),
-              "grid_short": bool(short)}
+              "drill_max_seconds": round(max(drill_s), 2) if drill_s else None,
+              "postback_rows": sum(p["postbacks"] for p in pages), "stopped": (stopped or held) if left else "",
+              "partial": partial, "grid_total": grid_total, "grid_pages": len(pages), "grid_short": bool(short),
+              "repeats": len(drop)}
     log(f"SLA history: {len(grid)} request(s) on the inquiry page, {opened} status histor(ies) read"
         + (f", {failed} could not be read" if failed else "") + (f", {left} left for the next scan" if left else "")
         + f" - {timing['seconds']} s (search {timing['search_seconds']} s"
         + (f", {timing['drill_avg_seconds']} s a request, slowest {timing['drill_max_seconds']} s" if drill_s else "")
-        + ")" + (f"; stopped: {stopped}" if stopped and left else "")
+        + ")" + (f"; stopped: {stopped or held}" if (stopped or held) and left else "")
         + (f"; {unverified} detail(s) could not be matched to their row by number" if unverified else ""))
     return {"items": items, "rows": len(grid), "opened": opened, "left": left, "failed": failed, "timing": timing,
-            "portal_total": portal_total if isinstance(portal_total, int) else None,
-            "complete": not walk_cut and not short and not (isinstance(portal_total, int) and len(rows) < portal_total),
-            "resume_page": resume_next if resume_next is not None else 0,
+            "portal_total": portal_total,
+            "complete": walked_all and not short and not (portal_total is not None and rows_read() < portal_total),
+            "resume_page": resume_next if resume_next is not None and resume_next < len(pages) else 0,
             "date_from": plan["date_from"].isoformat() if hasattr(plan.get("date_from"), "isoformat") else ""}
 
 
@@ -1831,6 +1991,7 @@ def _notify(ctx, cfg, requests, by_user, columns, now):
 
 HISTORY_REACH_DAYS = 31        # how far back a request still in progress is followed (one older day a scan)
 PAGE_RESERVE_S = 20            # seconds kept for the details and the fold when the result pages are walked
+SLICE_RESERVE_S = 20           # seconds kept, while one slice's details are opened, for each slice still to search
 LIVE_REACH_MARGIN_DAYS = 3     # a live ticket's request date can be this many days before it was sent to the team
 
 
@@ -1844,11 +2005,13 @@ def sla_excluder(ctx, cfg):
 
 
 def history_plan(ctx, cfg, now):
-    """What the inquiry read covers this scan: {date_from, date_to (the recent window), slices, older_day, index, cfg,
-    ...}. Each scan searches the last ``history_days`` days, and ONE older day (at most ``HISTORY_REACH_DAYS`` back)
-    that still has a request in progress - the oldest such day first, then the next one at the next scan, in turn - so
-    a request is followed until it closes without the search ever reaching a month back at once (37 result pages took
-    the whole scan). None when the SLA history is switched off."""
+    """What the inquiry read covers this scan: {date_from, date_to (the recent window), slices, recent_day, older_day,
+    index, cfg, ...}. Each scan searches TODAY, ONE other day of the last ``history_days`` days (``recent_day``, in
+    turn) and ONE older day (at most ``HISTORY_REACH_DAYS`` back) that still has a request in progress - the oldest such
+    day first, then the next one at the next scan, in turn - each its own search. A request is followed until it closes
+    without the search ever covering many days at once: every result page costs the portal seconds (37 pages took the
+    whole scan; 20 pages of a busy window took two minutes before a single request could be opened). None when the SLA
+    history is switched off."""
     from .. import sla_history, sla_records
     if not cfg.get("history_enabled", True):
         return None
@@ -1858,7 +2021,7 @@ def history_plan(ctx, cfg, now):
     date_from = today - timedelta(days=days - 1)
     floor = today - timedelta(days=HISTORY_REACH_DAYS - 1)
     rules = sla_records.clean_config((ctx.store.read_sla_records() or {}).get("config"))
-    older, live_days, live_keys = set(), set(), set()
+    older, live_days, live_keys, live_spans = set(), set(), set(), {}
     still_open = [r.get("request_date") for r in (state.get("open") or {}).values()]
     still_open += [g.get("request_date") for g in (state.get("grid") or {}).values()   # a branch-only request has no
                    if sla_history.row_stage(g, rules) in ("open", "awaiting")]         # SLA yet
@@ -1879,6 +2042,10 @@ def history_plan(ctx, cfg, now):
             key = sla_history.live_key(r)
             if wanted and key[0]:
                 live_keys.add(key)
+                if sent:                                  # the request days it can have («تاريخ الطلب»)
+                    span = ((sent.date() - timedelta(days=LIVE_REACH_MARGIN_DAYS)).isoformat(), sent.date().isoformat())
+                    old = live_spans.get(key)
+                    live_spans[key] = (min(old[0], span[0]), max(old[1], span[1])) if old else span
             if sent:
                 for back in range(LIVE_REACH_MARGIN_DAYS + 1):
                     day = sent.date() - timedelta(days=back)
@@ -1890,9 +2057,15 @@ def history_plan(ctx, cfg, now):
     pool = sorted(live_days) if live_days and last not in {d.isoformat() for d in live_days} else sorted(older)
     turn = [d for d in pool if d.isoformat() > last] or pool
     pick = turn[0] if turn else None
-    slices = [(date_from, today)] + ([(pick, pick)] if pick else [])
-    return {"date_from": date_from, "date_to": today, "slices": slices, "older_day": pick.isoformat() if pick else "",
-            "older_days": len(older), "live_days": len(live_days), "live_keys": live_keys,
+    # the other days of the recent window, one a scan in turn (oldest first); a day the last scan could not read keeps
+    # its turn
+    window = [date_from + timedelta(days=n) for n in range(days - 1)]
+    last_recent = str(state.get("history_recent_day") or "")
+    recent = next((d for d in window if d.isoformat() > last_recent), window[0] if window else None)
+    slices = [(today, today)] + ([(recent, recent)] if recent else []) + ([(pick, pick)] if pick else [])
+    return {"date_from": date_from, "date_to": today, "slices": slices,
+            "recent_day": recent.isoformat() if recent else "", "older_day": pick.isoformat() if pick else "",
+            "older_days": len(older), "live_days": len(live_days), "live_keys": live_keys, "live_spans": live_spans,
             "index": dict(state.get("index") or {}), "cfg": rules,
             "excluded": sla_excluder(ctx, cfg), "seconds": history_seconds(cfg, getattr(ctx, "general", None)),
             "day_start": day_start(cfg, getattr(ctx, "general", None)),
@@ -1900,22 +2073,31 @@ def history_plan(ctx, cfg, now):
 
 
 def read_history_slices(browser, cfg, debug, plan, log=lambda m: None):
-    """``read_history`` for each slice of the plan (the recent window, then the older day), all within ONE time budget:
-    the items of every slice, and ``covered`` = the request days whose rows were all read (a slice cut short keeps its
-    other rows as the earlier scans read them)."""
+    """``read_history`` for each slice of the plan (today, a recent day, an older day), all within ONE time budget: the
+    items of every slice, and ``covered`` = the request days whose rows were all read (a slice cut short keeps its
+    other rows as the earlier scans read them). While one slice's details are opened, time is kept for the searches of
+    the slices after it, so every day of the plan is counted."""
     started = time.monotonic()
     deadline = started + float(plan.get("seconds") or history_seconds(cfg))
     out = {"items": [], "rows": 0, "opened": 0, "left": 0, "failed": 0, "timing": {}, "portal_total": None,
-           "resume_page": 0, "covered": [], "date_from": plan["date_from"].isoformat(), "older_day": plan.get("older_day", "")}
+           "resume_page": 0, "covered": [], "date_from": plan["date_from"].isoformat(),
+           "recent_day": plan.get("recent_day", ""), "older_day": plan.get("older_day", "")}
     covered = set()
-    for n, (dfrom, dto) in enumerate(plan.get("slices") or [(plan["date_from"], plan["date_to"])]):
+    slices = plan.get("slices") or [(plan["date_from"], plan["date_to"])]
+
+    def not_read(dfrom):                                 # a day not read: its turn comes again
+        for key in ("recent_day", "older_day"):
+            if out[key] and out[key] == dfrom.isoformat():
+                out[key] = ""
+    for n, (dfrom, dto) in enumerate(slices):
         if time.monotonic() >= deadline - PAGE_RESERVE_S:
-            log(f"SLA history: no time left for {dfrom:%d/%m}" + (f" – {dto:%d/%m}" if dto != dfrom else "")
-                + "; it is read at a next scan")
-            if n:
-                out["older_day"] = ""                    # not read: its turn comes again
+            for later, later_to in slices[n:]:
+                log(f"SLA history: no time left for {later:%d/%m}"
+                    + (f" – {later_to:%d/%m}" if later_to != later else "") + "; it is read at a next scan")
+                not_read(later)
             break
         sub = {**plan, "date_from": dfrom, "date_to": dto, "deadline": deadline,
+               "after_s": (len(slices) - n - 1) * SLICE_RESERVE_S,
                "resume_page": plan.get("resume_page", 0) if n == 0 else 0}
         got = read_history(browser, cfg, debug, sub, log)
         out["items"] += got["items"]
@@ -1928,8 +2110,8 @@ def read_history_slices(browser, cfg, debug, plan, log=lambda m: None):
             while d <= dto:
                 covered.add(d.isoformat())
                 d += timedelta(days=1)
-        elif n:
-            out["older_day"] = ""
+        else:
+            not_read(dfrom)
     out["covered"] = sorted(covered)
     return out
 
@@ -2007,6 +2189,8 @@ def fold_history_result(store, sink, now_iso, system_team=None):
             out["unknown_wordings"] = sla_history.unknown_wordings(fresh, cfg)
         if sink.get("older_day"):
             d["history_older_day"] = sink["older_day"]
+        if sink.get("recent_day"):
+            d["history_recent_day"] = sink["recent_day"]
         d["last_history"] = now_iso
         d["history_stats"] = {"at": now_iso, "rows": sink.get("rows", 0), "portal_total": sink.get("portal_total"),
                               "opened": sink.get("opened", 0), "resume_page": int(sink.get("resume_page") or 0),

@@ -126,8 +126,10 @@ class FakeInquiryPortal:
     """``with FakeInquiryPortal(requests) as portal: portal.url + INQUIRY_PATH``. Public knobs can be changed."""
 
     def __init__(self, requests, grid="client", history="api", server_page=1000, dt_len=20,
-                 grid_lengths=(5, 10, 20, -1), pager="link"):
+                 grid_lengths=(5, 10, 20, -1), pager="link", arrive_on_next=(), ignore_from=False):
         self.requests = requests
+        self.arrive_on_next = list(arrive_on_next)  # requests registered the moment the next result page is asked for
+        self.ignore_from = ignore_from          # a search that lists every request up to «الى» (its «من» not taken)
         self.pager = pager
         self.grid = grid
         self.grid_lengths = list(grid_lengths)
@@ -189,6 +191,9 @@ class FakeInquiryPortal:
                 self.refused.append(typed)
                 state, message = {"from": "", "to": "", "page": 0}, "تاريخ غير صحيح"
         target, arg = form.get("__EVENTTARGET", ""), form.get("__EVENTARGUMENT", "")
+        if self.arrive_on_next and ((target == GRID_TARGET and arg == "Page$Next") or "btnNext" in form):
+            self.requests = self.arrive_on_next + list(self.requests)    # the newest first: the rows move down
+            self.arrive_on_next = []
         rows = self._results(state)
         last = max(0, (len(rows) - 1) // self.server_page)
         if (target == GRID_TARGET and arg == "Page$Next") or "btnNext" in form:
@@ -206,6 +211,8 @@ class FakeInquiryPortal:
         if not state["from"]:
             return []
         lo, hi = (datetime.strptime(state[k], "%d-%m-%Y").date() for k in ("from", "to"))
+        if self.ignore_from:
+            lo = datetime.min.date()
         return [r for r in self.requests if lo <= datetime.strptime(r["grid"]["date"], "%d/%m/%Y").date() <= hi]
 
     def _page(self, state, rows, last, selected, message):

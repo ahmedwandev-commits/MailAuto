@@ -449,6 +449,23 @@ HOW TO UPDATE (your data is kept)
    - When two people changed the same list at the same moment (two managers marking e-mails done), a page could show
      one of the changes as not made for a moment. Nothing was ever lost on disk; the page now always shows the change.
 
+43. SLA SCAN: STATUS HISTORIES READ AGAIN ON A BUSY PORTAL, AND A SHORTER SCAN
+   - The collector log showed «inquiry grid 19706 row(s) over 20 result pages ... result page N could not be shown
+     again ... 0 status histor(ies) read». The scan walked all 20 result pages first (two minutes), then went back to
+     each page to open its requests. Going back means a new search, and on a busy portal the first page is never the
+     same twice (new requests, statuses moving), so no page was found again and nothing was read.
+   - Now the requests of each result page are opened while that page is on the screen: one search, no going back.
+     Time is kept for the pages still to come, so every request is still counted, and a detail is kept for the Live
+     tickets those pages may list; what that leaves unread is read after the walk while the scan has time. The next
+     scan starts on the page after the one where this one stopped, so no page waits scan after scan.
+   - Shorter scan: each scan searches TODAY, one other day of "Search the last (days)" in turn, and one older day
+     with a request still in progress - never the whole window at once.
+   - A row the portal pushed onto the next page while the pages were read (the 19706 / 19705) is counted once.
+   - The log now says the dates searched, the request dates the portal listed (with a WARNING when they are outside
+     the search) and how long the pages took. If a search still shows many pages, check System › Settings ›
+     Ticketing › "Search the last (days)" (3 by default). "Time for the history per scan (seconds)" (180 by default)
+     is the longest a scan spends opening requests: lower it for a shorter scan; the rest follows at the next scans.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -832,3 +849,19 @@ IAS PORTAL - الجديد في هذا التحديث
 42. الصفحة مبقتش تعرض حالة قديمة بعد أي تعديل
    - لما اتنين بيعدلوا نفس القائمة في نفس اللحظة (مديرين بيعلموا إيميلات Done)، الصفحة كانت ممكن تعرض تعديل منهم كأنه
      ما اتعملش لثواني. مفيش حاجة كانت بتضيع من الملفات؛ ودلوقتي الصفحة دايما بتعرض التعديل.
+
+43. سكان الـ SLA: الحالات التاريخية بتتقري تاني والبورتال زحمة، والسكان بقى أقصر
+   - الـ log كان بيقول «inquiry grid 19706 row(s) over 20 result pages ... result page N could not be shown again ...
+     0 status histor(ies) read». السكان كان بيلف على الـ 20 صفحة الأول (دقيقتين)، وبعدين يرجع لكل صفحة علشان يفتح
+     طلباتها. الرجوع معناه بحث جديد، والبورتال زحمة فالصفحة الأولى عمرها ما بتبقى زي ما هي (طلبات جديدة وحالات بتتغير)،
+     فمفيش ولا صفحة اتلاقت تاني ومفيش حاجة اتقرت.
+   - دلوقتي طلبات كل صفحة بتتفتح وهي معروضة: بحث واحد ومفيش رجوع. وفيه وقت متساب للصفحات اللي جاية علشان كل طلب
+     يتحسب، ومتساب كمان مكان لتذاكر الـ Live اللي ممكن تكون في الصفحات دي؛ واللي يفضل من غير ما يتقري بيتقري بعد
+     اللفة لو لسه فيه وقت. والسكان اللي بعده بيبدأ من الصفحة اللي بعد اللي وقف عندها، فمفيش صفحة بتستنى سكان ورا سكان.
+   - السكان بقى أقصر: كل سكان بيبحث في النهارده، ويوم واحد تاني من "Search the last (days)" بالدور، ويوم قديم واحد
+     فيه طلب لسه مفتوح - عمره ما بيبحث في كل الأيام مرة واحدة.
+   - السطر اللي البورتال زقه للصفحة اللي بعدها وإحنا بنقرا (الـ 19706 / 19705) بيتحسب مرة واحدة.
+   - الـ log بقى بيقول التواريخ اللي اتبحث فيها، وتواريخ الطلبات اللي البورتال عرضها (ومعاها WARNING لو برة البحث)،
+     والصفحات خدت قد إيه. لو البحث لسه بيطلع صفحات كتير، راجع System › Settings › Ticketing › "Search the last
+     (days)" (الافتراضي 3). و"Time for the history per scan (seconds)" (الافتراضي 180) هو أقصى وقت السكان بيفتح فيه
+     طلبات: قلله لو عايز السكان أقصر، والباقي بيكمل في السكانات اللي بعده.

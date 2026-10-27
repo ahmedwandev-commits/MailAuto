@@ -472,9 +472,9 @@
           kv: { key: "team", value: "team", add: "Merge a team", empty: "No team merged - every team counts on its own." } }] },
       { title: "SLA history (live analysis source)", text: "At every scan the collector also opens «الاستفسار عن الطلبات» and reads the status history («الحالة التاريخية للطلب») of the requests that moved: who assigned, executed and confirmed each one, and exactly when. Nothing is uploaded.", fields: [
         { path: "sla.history_enabled", type: "switch", label: "Read the status history at every scan" },
-        { path: "sla.history_days", type: "number", min: 1, max: 31, label: "Search the last (days)", hint: "Requests still open are followed until they close, even when older." },
+        { path: "sla.history_days", type: "number", min: 1, max: 31, label: "Search the last (days)", hint: "Today is searched at every scan, the other days one a scan in turn. Requests still open are followed until they close, even when older." },
         { path: "sla.history_max_details", type: "number", min: 10, max: 2000, label: "Request details opened per scan (max)", hint: "The rest are read at the next scan." },
-        { path: "sla.history_seconds", type: "number", min: 30, max: 3600, label: "Time for the history per scan (seconds)", hint: "Stops opening details after this; everything read is kept and the rest follows at the next scan. Kept inside the scan's own time limit." },
+        { path: "sla.history_seconds", type: "number", min: 30, max: 3600, label: "Time for the history per scan (seconds)", hint: "Stops opening details after this; everything read is kept and the rest follows at the next scan. Kept inside the scan's own time limit. Lower it for a shorter scan." },
         { path: "sla.inquiry_path", type: "text", max: 300, label: "Inquiry page", dir: "ltr" },
         { path: "sla.inquiry_date_format", type: "select", label: "Date format of the inquiry page", options: () => [["%d-%m-%Y", "21-10-2026"], ["%d/%m/%Y", "21/10/2026"], ["%Y-%m-%d", "2026-10-21"], ["%m/%d/%Y", "10/21/2026"]] }] },
       { title: "SLA recording (live analysis)", slaRecording: true, fields: [],
