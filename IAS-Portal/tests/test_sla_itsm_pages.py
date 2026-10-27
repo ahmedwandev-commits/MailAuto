@@ -446,6 +446,8 @@ def test_the_sla_analysis_opens_on_the_security_teams_own_day(ops, tab, hub):
     got = {k: kpi(page, k) for k in ("g-came", "g-exec", "g-notexec", "g-rejected", "g-open", "g-awaiting", "g-confirmed")}
     assert got == {"g-came": "4", "g-exec": "2", "g-notexec": "0", "g-rejected": "1", "g-open": "1", "g-awaiting": "0",
                    "g-confirmed": "2"}
+    # the portal's own total for these dates = came to us + the registration still with the branch
+    assert (kpi(page, "g-portal"), kpi(page, "g-branch")) == ("5", "1")
     live_now = len(sla_snapshot()["requests"])
     assert kpi(page, "g-now") == str(live_now)                                     # = the Live tab
     assert "1 request(s) of these dates still with the branch" in text(page, "[data-glance-note]")

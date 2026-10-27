@@ -159,6 +159,39 @@ _FINAL_DONE = _norm("تم")
 _FINAL_SENT = (_norm("الرد"), "sms")
 
 
+# the reviewer's confirmation and the employee's (not) executing it, in the other words the portal uses for them (the
+# owner's rule: «تم التعزيز …» / «لم يتم …» always count) - never a confirmation by the branch, its region or sector
+_CONFIRM_WORD = _norm("تعزيز")
+_WAITING_WORD = _norm("انتظار")
+_BRANCH_WORDS = tuple(_norm(w) for w in ("مشرف", "الفرع", "المنطقة", "القطاع", "Platinum"))
+_DONE_WORD = _norm("تنفيذ")
+_DONE_START = _norm("تم")
+
+
+def _negative(s):
+    """Does a normalised status say "not" («عدم», «بعدم», «لم», «لم يتم»)?"""
+    return any(w == _norm("لم") or w.endswith(_norm("عدم")) for w in s.split())
+
+
+def _family_step(s):
+    """The step of a normalised status in the words of the confirmation / execution families the settings' labels do
+    not spell exactly: «تم التعزيز بعدم التنفيذ», «تم التعزيز على لم يتم التنفيذ» -> confirmed, not executed; «تم
+    التعزيز» -> confirmed, executed; «بانتظار التعزيز» -> executed, waiting for the reviewer; «لم يتم», «لم يتم تنفيذ»,
+    «تم عدم التنفيذ» -> not executed; «تم تنفيذ» -> executed. None for anything else (a confirmation by the branch,
+    region or sector included, and a current-status word like «تحت التنفيذ»)."""
+    if _CONFIRM_WORD in s:
+        if any(w in s for w in _BRANCH_WORDS):
+            return None
+        if _WAITING_WORD in s:
+            return "not_executed" if _negative(s) else "executed"
+        return "confirmed_not" if _negative(s) else "confirmed_executed"
+    if _negative(s) and (_DONE_WORD in s or s.split()[:2] == _norm("لم يتم").split()):
+        return "not_executed"
+    if s.split()[:1] == [_DONE_START] and _DONE_WORD in s:
+        return "executed"
+    return None
+
+
 def _final_step(s):
     """The step of a normalised status no settings label names, when it plainly ENDS the request; else None."""
     if _FINAL_NOT in s:
@@ -172,9 +205,11 @@ def _final_step(s):
 
 def step_of(status, cfg):
     """The lifecycle step a status label means (``STEP_KEYS``), or None for a label that is not a step. An exact label
-    wins; else the LONGEST label the status contains («تم التعزيز من قبل مشرف الفرع و بانتظار رد المنطقة» is a branch
-    confirmation, «إعادة اسناد لمسخدم السرية» a re-assignment, «لم يتم التنفيذ» is not «تم التنفيذ»); else a final
-    state in other words (``_final_step``). A current-status word («تحت التنفيذ», «قيد الإجراء») is never a step."""
+    wins; else a reviewer's confirmation in other words (``_family_step``: «تم التعزيز على لم يتم التنفيذ» is a
+    confirmation, not «لم يتم التنفيذ»); else the LONGEST label the status contains («تم التعزيز من قبل مشرف الفرع و
+    بانتظار رد المنطقة» is a branch confirmation, «إعادة اسناد لمسخدم السرية» a re-assignment, «لم يتم التنفيذ» is not
+    «تم التنفيذ»); else the other (not) executed wordings (``_family_step``) and a final state in other words
+    (``_final_step``). A current-status word («تحت التنفيذ», «قيد الإجراء») is never a step."""
     s = _norm(status)
     if not s:
         return None
@@ -182,10 +217,12 @@ def step_of(status, cfg):
     if s in memo:
         return memo[s]
     step = next((st for label, st in pairs if s == label), "")
+    if step == "" and _CONFIRM_WORD in s:
+        step = _family_step(s) or ""
     if step == "":
         step = next((st for label, st in pairs if label in s), "")
     if step == "":
-        step = _final_step(s)
+        step = _family_step(s) or _final_step(s)
     if len(memo) > 2000:
         memo.clear()
     memo[s] = step

@@ -113,8 +113,12 @@
   }
   function glanceKpis(d) {
     const G = d.glance || {};
+    // the portal's own «الاستفسار عن الطلبات» total for these dates = came to us + still with the branch (Third Party,
+    // left out of the SLA, never counted)
     return h("div", { class: "sx-kpis", "data-glance": "" },
-      OPS.kpi({ key: "g-came", label: "Came to us", value: fmtNum(G.came || 0), sub: "requests of these dates with the security team", icon: "activity", hero: true }),
+      OPS.kpi({ key: "g-portal", label: "On the portal", value: fmtNum((G.came || 0) + (G.pre || 0)), sub: "«الاستفسار عن الطلبات» lists for these dates (Third Party left out)", icon: "database", hero: true }),
+      OPS.kpi({ key: "g-branch", label: "Still with the branch", value: fmtNum(G.pre || 0), sub: "registration / supervisor: not with the security team yet", tone: G.pre ? "warn" : null, icon: "clock" }),
+      OPS.kpi({ key: "g-came", label: "Came to us", value: fmtNum(G.came || 0), sub: "of them, with the security team", icon: "activity" }),
       OPS.kpi({ key: "g-exec", label: "Executed", value: fmtNum(G.executed || 0), sub: "«تم التنفيذ» / «التعزيز على التنفيذ»", tone: "ok", icon: "check" }),
       OPS.kpi({ key: "g-notexec", label: "Not executed", value: fmtNum(G.not_executed || 0), sub: "«لم يتم التنفيذ» / «التعزيز على عدم التنفيذ»", tone: G.not_executed ? "warn" : null, icon: "alert" }),
       OPS.kpi({ key: "g-rejected", label: "Rejected", value: fmtNum(G.rejected || 0), sub: "«رفض» by the assigner", tone: G.rejected ? "warn" : null, icon: "x" }),
@@ -125,14 +129,20 @@
   }
   function glanceNote(d) {
     const G = d.glance || {}, R = (d.recorder || {}).stats || {}, T = R.timing || {};
-    const bits = ["Counted as the portal's «الاستفسار عن الطلبات» lists the requests of these «تاريخ الطلب» dates, by their status now: came = executed + not executed + rejected + still with a security user"];
-    if (G.pre) bits.push(`${fmtNum(G.pre)} request(s) of these dates still with the branch (registration, supervisor): not counted`);
+    const bits = ["Counted as the portal's «الاستفسار عن الطلبات» lists the requests of these «تاريخ الطلب» dates, by their status now: on the portal = came to us + still with the branch; came = executed + not executed + rejected + still with a security user"];
+    if (G.pre) bits.push(`${fmtNum(G.pre)} request(s) of these dates still with the branch (registration, supervisor): not with the security team yet, so not in the other numbers`);
     if (R.at) {
       bits.push(`last scan ${String(R.at).slice(11, 16)}: ${fmtNum(R.opened || 0)} status histor(ies) read, ${fmtNum(R.left || 0)} waiting to be read (times and hours come from them)`
         + (T.stopped ? ` - stopped: ${T.stopped}` : ""));
     }
     if ((G.logged_days || []).length) bits.push(`days before the inquiry window come from the numbers kept those days`);
-    return h("p", { class: "hint", "data-glance-note": "" }, bits.join(" · ") + ".");
+    const odd = d.unknown_statuses || [];
+    const note = h("p", { class: "hint", "data-glance-note": "" }, bits.join(" · ") + ".");
+    if (!odd.length) return note;
+    return h("div", {}, note, h("p", { class: "hint warn", "data-unknown-statuses": "", dir: "auto" },
+      `Statuses no SLA status names (counted only by whether a security user holds them, so maybe as still with the branch): `
+      + odd.map((x) => `«${x.status}» ${fmtNum(x.requests)}`).join(" · ")
+      + ". Add each one to the right step in System › Settings › Ticketing › SLA recording."));
   }
   function glanceHours(d) {
     const hours = ((d.glance || {}).hours) || [];

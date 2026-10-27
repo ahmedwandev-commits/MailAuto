@@ -1142,6 +1142,10 @@ def sla_analysis_get():
                 name = str(r["system"]).strip()
                 apps[name] = apps.get(name, 0) + 1
         period["no_team_apps"] = [{"system": k, "requests": n} for k, n in sorted(apps.items(), key=lambda kv: -kv[1])][:100]
+        # the grid wordings no SLA status names: placed only by whether a security user holds them, so they may be
+        # counted as still with the branch - the administrator names them in Settings › Ticketing › SLA recording
+        period["unknown_statuses"] = [{"status": w, "requests": n} for w, n in
+                                      sla_history.unknown_wordings(view["grid"], cfg, top=10)]
         period["team_names"] = [t for t in hub_cfg()["email"]["teams"] if t not in (overlay.UNCLASSIFIED,)]
     answer = dict(available=True, server_time=now, scope=overlay.scope_label(scope), unmapped=view["unmapped"],
                   scan_interval=health.module_interval(hub_cfg(), "sla"), recorder=view["recorder"],
