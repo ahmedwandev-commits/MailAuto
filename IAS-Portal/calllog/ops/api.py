@@ -2572,6 +2572,49 @@ def classification_suggestion_reject():
     return jsonify(ok=True)
 
 
+# -------------------------------------------------------------- keywords learned from replies (automatic)
+@bp.get("/email/classification/learned")
+@auth.ops_view_required
+def classification_learned():
+    """The keywords the e-mail scan learned from team members' replies to Unclassified mails (``email_engine.
+    learn_from_replies``), newest first, and whether the learning is on (``auto``). A manager sees their own team(s)'
+    keywords only."""
+    scope = auth.team_scope()
+    doc = ops().read_classify_learned()
+    out = [{"keyword": kw, "team": (v or {}).get("team", ""), "subject": (v or {}).get("subject", ""),
+            "message_id": (v or {}).get("message_id", ""), "reply_by": (v or {}).get("reply_by", ""),
+            "learned_at": (v or {}).get("learned_at", "")}
+           for kw, v in (doc.get("rules") or {}).items()
+           if scope is None or overlay.team_in(scope, (v or {}).get("team"))]
+    out.sort(key=lambda r: (str(r["learned_at"]), r["keyword"].casefold()), reverse=True)
+    auto = bool(hub_cfg()["email"]["classification"].get("learn_from_replies", True))
+    return jsonify(auto=auto, learned=out, scope=overlay.scope_label(scope))
+
+
+@bp.delete("/email/classification/learned")
+@auth.ops_act_required
+def classification_learned_remove():
+    """Forget a learned keyword: mails with it are no longer classified by it (from the next scan), and it is never
+    learned again. The administrator, or a manager of the keyword's team."""
+    keyword = " ".join(str(request.args.get("keyword") or optional_body().get("keyword") or "").split())
+    doc = ops().read_classify_learned()
+    found = next((k for k in doc.get("rules") or {} if k.casefold() == keyword.casefold()), None) if keyword else None
+    if not found:
+        raise ApiError("That learned keyword is not in the list. Reload the page.", 404)
+    team = (doc["rules"][found] or {}).get("team", "")
+    if not auth.may_act_on_team(team):
+        raise ApiError("You can only remove keywords learned for your own team.", 403)
+
+    def change(d):
+        rule = (d.setdefault("rules", {})).pop(found, None)
+        if rule is not None:
+            d.setdefault("blocked", {})[found] = {"team": team, "by": _who(), "at": _stamp()}
+        return d
+    ops().update_classify_learned(change)
+    auth.audit("ops_classification_learned", target=found, details={"op": "remove", "team": team})
+    return jsonify(ok=True)
+
+
 # ----------------------------------------------------------------------------- auto-assign (docs/HUB-DESIGN auto-assign)
 def _aa_config():
     return ops().read_auto_assign()

@@ -703,7 +703,8 @@ def view_email_data(data, overrides, scope_team=None, now=None, rows=None, hide_
         out["teams"] = [t for t in data.get("teams") or [] if keep(t)]
         by = Counter(r.get("classified_by") for r in rows)          # how THESE rows were classified, not every team's
         out["classification"] = {**(data.get("classification") or {}),
-                                  "counts": {k: by.get(k, 0) for k in ("system", "address", "default_team", "override", "none")},
+                                  "counts": {k: by.get(k, 0) for k in ("system", "address", "learned", "reply",
+                                                                       "default_team", "override", "none")},
                                   "unclassified": sum(1 for r in rows if is_unclassified(r))}
     return out
 

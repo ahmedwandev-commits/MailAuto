@@ -596,6 +596,100 @@ def candidate_words(subject, limit=6):
     return out
 
 
+# Words never learned from a reply on top of _HINT_STOPWORDS: they name the bank, a place or the mail itself, not a team.
+_LEARN_STOPWORDS = frozenset((
+    "branch", "bank", "nbe", "ahly", "alahly", "dept", "department", "sector", "office", "today", "tomorrow", "morning",
+    "thanks", "thank", "regards", "best", "attached", "attachment", "file", "files", "report", "list", "data", "info",
+    "information", "follow", "followup", "reminder", "case", "ticket", "number", "ref", "subject", "important", "high",
+    "priority", "customer", "client", "account", "staff", "employee", "employees", "manager", "required", "done",
+    "فرع", "الفرع", "بنك", "البنك", "الاهلي", "الأهلي", "شكرا", "مرفق", "تقرير", "متابعة", "رقم", "العميل", "عميل",
+    "الموظف", "موظف", "الادارة", "إدارة", "ادارة", "قطاع", "اليوم", "مطلوب", "السيد", "الاستاذ", "الأستاذ",
+    "system", "systems", "application", "app", "program", "service", "screen", "login", "password", "daily",
+    "weekly", "monthly", "branches", "permission", "permissions", "privilege", "privileges", "role", "roles",
+    "activate", "activation", "deactivate", "disable", "enable", "reset", "unlock", "locked", "create", "creation",
+    "delete", "remove", "add", "modify", "change", "grant", "revoke", "pending", "approve", "approval",
+    "برنامج", "البرنامج", "نظام", "النظام", "سيستم", "السيستم", "تطبيق", "التطبيق", "خدمة", "شاشة", "دخول", "يومي",
+    "صلاحية", "صلاحيات", "الصلاحية", "الصلاحيات", "تفعيل", "الغاء", "إلغاء", "اضافة", "إضافة", "تعديل", "حذف", "كلمة",
+    "السر", "مستخدم", "المستخدم", "يوزر", "باسورد", "جديد", "جديدة", "فتح", "غلق", "ايقاف", "إيقاف", "تحديث", "طلبات",
+    "الطلب", "الطلبات", "خاص", "بشأن", "عدم", "امكانية", "إمكانية", "البنكي", "البنكية", "بنكي"))
+_LEARN_SKIP = frozenset(normalize_arabic(w.lower()) for w in _HINT_STOPWORDS | _LEARN_STOPWORDS)
+LEARNED_KEYWORD_MAX = 80
+
+
+def _name_words(names):
+    return {normalize_arabic(w.lower()) for n in names or () for w in re.findall(r"[A-Za-z]+|[؀-ۿ]+", str(n or ""))}
+
+
+def learn_keyword(subject, other_subjects=(), names=()):
+    """The keyword to learn from an Unclassified mail a team member answered, so the next mail like it classifies
+    itself: the most system-like word of its subject - an acronym or a CamelCase name first ("CRM", "FileNet"), then
+    another Latin word, then an Arabic one, each in subject order - that is not generic (``_HINT_STOPWORDS``,
+    ``_LEARN_STOPWORDS``), not part of a person's name (``names``: the customer, the replier), not a ticket number and
+    not in the subject of any mail another team got (``other_subjects``: it would not tell this team's mail apart).
+    Without such a word, the longest run of plain words of the subject (no number, no sign between them) when it has
+    two words or more: only a mail with that same wording matches it again. "" when there is nothing usable."""
+    text = _SUBJECT_PREFIX.sub("", str(subject or ""))
+    blocked = _name_words(names)
+    others = [normalize_arabic(detection_text(str(o or ""))) for o in other_subjects or () if str(o or "").strip()]
+    picks = []
+    for pos, token in enumerate(re.findall(r"[A-Za-z][A-Za-z0-9_.\-]+|[؀-ۿ]{3,}", text)):
+        token = token.strip(".-_")
+        low = normalize_arabic(token.lower())
+        if len(token) < 3 or low in _LEARN_SKIP or low in blocked:
+            continue
+        if sum(c.isdigit() for c in token) >= 4:                     # INC0012345, REQ-2026-1101: a ticket, not a system
+            continue
+        pattern = _system_pattern(token, strict=True)
+        if any(pattern.search(o) for o in others):
+            continue
+        latin = token[0].isascii()
+        system_like = latin and (token.isupper() or any(c.isupper() for c in token[1:]))
+        picks.append((0 if system_like else 1 if latin else 2, pos, token))
+    if picks:
+        return min(picks)[2]
+    runs, run = [], []
+    for word in text.split() + [""]:
+        plain = re.fullmatch(r"[A-Za-z]+|[؀-ۿ]+", word.strip(".,;:!?-"))
+        if plain and len(word.strip(".,;:!?-")) > 1:
+            run.append(word.strip(".,;:!?-"))
+            if word != word.strip(".,;:!?-"):               # a sign after it ends the run
+                runs.append(run)
+                run = []
+        else:
+            runs.append(run)
+            run = []
+    best = max(runs, key=len) if runs else []
+    phrase = " ".join(best)
+    real = any(normalize_arabic(w.lower()) not in _LEARN_SKIP | blocked for w in best)   # never generic words or names only
+    return phrase if len(best) >= 2 and real and len(phrase) <= LEARNED_KEYWORD_MAX else ""
+
+
+class Learned:
+    """Keywords learned from team members' replies (``{keyword: team}``, see ``learn_keyword``): used only for a mail
+    nothing else classifies - the built-in map, the administrator's rules and the mailbox rules always come first.
+    The longest keyword that matches wins."""
+
+    def __init__(self, learned=None):
+        items = [(str(k).strip(), str(t).strip()) for k, t in (learned or {}).items() if str(k).strip() and str(t).strip()]
+        items.sort(key=lambda kt: (-len(kt[0]), kt[0].casefold()))
+        self._rules = [(kw, team, _system_pattern(kw, strict=True), _needle(kw)) for kw, team in items]
+
+    def __bool__(self):
+        return bool(self._rules)
+
+    def match(self, subject, body=""):
+        """(keyword, team) of the first learned keyword in the subject or the body, else None."""
+        if not self._rules:
+            return None
+        for part in (subject, body):
+            text = normalize_arabic(detection_text(part))
+            lowered = text.lower()
+            for kw, team, pattern, needle in self._rules:
+                if (not needle or needle in lowered) and pattern.search(text):
+                    return kw, team
+        return None
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # The compiled rules
 # ---------------------------------------------------------------------------------------------------------------------

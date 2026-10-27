@@ -26,7 +26,9 @@ read happens only for mail that is a team reply or is addressed to a business ma
 
 Classification precedence (a row's ``classified_by``): manual team override ("override") > a business mailbox the mail was
 sent TO that is in ``address_team_map`` ("address") > system words found in the text ("system"; the admin's
-``system_team_map`` beats the built-in map) > ``unclassified_team`` ("default_team") > "Unclassified" ("none").
+``system_team_map`` beats the built-in map) > a keyword learned from an earlier reply ("learned") > the team of the team
+member who answered it ("reply") > ``unclassified_team`` ("default_team") > "Unclassified" ("none"). "learned" and
+"reply" only while ``classification.learn_from_replies`` is on (``learn_from_replies`` learns the keywords).
 
 A row's ``message_id`` is the internet message id (identical for every copy of the mail and every scan); when Outlook
 cannot give it, the entry id is used instead so every row has a stable key for the override lists. A mail addressed to
@@ -44,9 +46,9 @@ from .. import mailbox, teams
 from ..settings import DEFAULT_TEAMS
 from .common import OUTLOOK_LOCK, JobResult, fmt_minutes
 from .email_rules import (
-    UNCLASSIFIED, Directory, build_quality_leaderboard, build_quality_scorecard, build_rules,
+    UNCLASSIFIED, Directory, Learned, build_quality_leaderboard, build_quality_scorecard, build_rules,
     build_speed_quality_matrix, build_team_quality_index, candidate_words, clean_subject, format_duration,
-    get_effective_body_text, norm_email, norm_set, safe_percent, strip_signatures_per_message, to_int)
+    get_effective_body_text, learn_keyword, norm_email, norm_set, safe_percent, strip_signatures_per_message, to_int)
 
 PR_SMTP_ADDRESS = "http://schemas.microsoft.com/mapi/proptag/0x39FE001E"
 PR_INTERNET_MESSAGE_ID = "http://schemas.microsoft.com/mapi/proptag/0x1035001E"
@@ -59,6 +61,9 @@ BODY_KEEP_CHARS = 2500                       # the new text of a mail, kept for 
 THREAD_KEEP_CHARS = 6000                     # the whole text including the quoted history (system detection fallback)
 PREVIEW_CHARS = 300                          # body text in the snapshot
 NEAREST_REPLY_MAX_GAP_MINUTES = 240
+# how a row was classified (``classify`` / ``_rows_for_customer``), the order of the snapshot's counts
+CLASSIFIED_BY = ("system", "address", "learned", "reply", "default_team", "override", "none")
+LEARNED_SEEN_KEEP = 5000                     # mails remembered as already learned from (the oldest are forgotten)
 TREND_METRICS = ("business_emails", "replied", "pending", "no_action_needed", "reply_rate", "average_response",
                  "sla_breached")
 STATS_HISTORY_FILES = 10                     # newest history day files read per scan: the trend looks back 7 days...
@@ -94,6 +99,10 @@ class EmailConfig:
         self.lookback_days = max(0, to_int(s.get("backlog_lookback_days"), 1))
         self.archive_name = str(s.get("target_archive_name") or "").strip()
         self.rules = build_rules(s)
+        # an Unclassified mail a team member answers goes to their team; keywords learned from such mails (``learned``,
+        # loaded from the store by ``scan_and_analyze``) classify the next ones
+        self.learn_from_replies = bool(cls.get("learn_from_replies", True))
+        self.learned = Learned()
         self.address_team_map = {norm_email(a): str(t).strip() for a, t in (cls.get("address_team_map") or {}).items()
                                  if norm_email(a) and str(t).strip()}
         default_team = str(cls.get("unclassified_team") or "").strip()
@@ -654,28 +663,47 @@ def _diagnose_unmatched_reply(customer, candidate, gap_minutes):
 def classify(cfg, customer, team_override=None):
     """Team of one customer mail. Returns ``{systems, team, all_teams, classified_by, hint}``.
 
-    Precedence: manual team override > address_team_map > system words (built-in + admin rules) > unclassified_team >
-    "Unclassified". ``hint`` is what was found (the systems) or, when nothing was, a few words of the subject an admin
-    could turn into a rule.
+    Precedence: manual team override > address_team_map > system words (built-in + admin rules) > a keyword learned
+    from a reply > unclassified_team > "Unclassified" (the reply's own team is taken by ``_rows_for_customer``, which
+    knows the replies). ``hint`` is what was found (the systems, the learned keyword) or, when nothing was, a few words
+    of the subject an admin could turn into a rule.
     """
     systems, team, all_teams = cfg.rules.detect_for_thread(customer.get("thread_messages") or [customer])
     classified_by = "system" if systems else "none"
     sent_to = norm_set(customer.get("business_addresses_in_to"))
     address_teams = list(dict.fromkeys(t for addr, t in cfg.address_team_map.items() if addr in sent_to))
+    learned = (cfg.learned.match(customer.get("subject", ""), customer.get("body", ""))
+               if not systems and not address_teams and cfg.learn_from_replies else None)
+    hint = ""
     if address_teams:
         classified_by = "address"
         team = address_teams[0]
         systems = systems + [f"{t} (recipient address)" for t in address_teams]
         all_teams = address_teams + [t for t in all_teams if t not in address_teams]
+    elif learned:
+        classified_by = "learned"
+        team, all_teams = learned[1], [learned[1]]
+        hint = f"learned keyword: {learned[0]}"
     elif not systems and cfg.unclassified_team:
         classified_by = "default_team"
         team, all_teams = cfg.unclassified_team, [cfg.unclassified_team]
-    hint = "; ".join(systems) if systems else "; ".join(candidate_words(customer.get("subject", "")))
+    hint = hint or ("; ".join(systems) if systems else "; ".join(candidate_words(customer.get("subject", ""))))
     if team_override:
         classified_by = "override"
         team, all_teams = str(team_override), [str(team_override)]
     return {"systems": systems, "team": team, "all_teams": all_teams or [team], "classified_by": classified_by,
             "hint": hint}
+
+
+def _reply_team(cfg, replies):
+    """The team of the first team member (by reply time) who answered a mail, "" when no reply is from a member of a
+    real team (a generic team address, the default team or Unclassified do not count)."""
+    default = str(cfg.unclassified_team or "").casefold()
+    for reply in sorted(replies, key=lambda r: r.get("received_time") or datetime.min):
+        team = cfg.directory.member_team(reply.get("sender_email", ""))
+        if team and str(team).casefold() not in (default, UNCLASSIFIED.casefold()):
+            return team
+    return ""
 
 
 def _attribute_replies(directory, replies, all_teams):
@@ -696,6 +724,69 @@ def _attribute_replies(directory, replies, all_teams):
 # ---------------------------------------------------------------------------------------------------------------------
 # Rows
 # ---------------------------------------------------------------------------------------------------------------------
+def _load_learned(ctx, cfg):
+    """The keywords learned from replies (``learn_from_replies``) as a matcher; none while the learning is off, there is
+    no store, or the file cannot be read (a scan never fails over them)."""
+    store = getattr(ctx, "store", None)
+    if not cfg.learn_from_replies or store is None:
+        return Learned()
+    try:
+        rules = store.read_classify_learned().get("rules") or {}
+    except Exception as exc:
+        ctx.log(f"Learned classification keywords could not be read: {type(exc).__name__}: {exc}")
+        return Learned()
+    return Learned({kw: (v or {}).get("team") for kw, v in rules.items()})
+
+
+def learn_from_replies(ctx, cfg, rows):
+    """Learn a keyword from every mail of this scan that was Unclassified until a team member answered it
+    (``classified_by`` "reply"), so the next mail like it classifies itself: ``email_rules.learn_keyword`` on its
+    subject, the subjects of the other teams' mails telling it apart. Each mail is learned from once; a keyword already
+    learned, or removed by a person (``blocked``), is never learned again. Returns [(keyword, team)] learned now."""
+    store = getattr(ctx, "store", None)
+    if not cfg.learn_from_replies or store is None or getattr(ctx, "dry_run", False):
+        return []
+    fresh = [r for r in rows if r.get("classified_by") == "reply" and r.get("message_id")]
+    if not fresh:
+        return []
+    by_team = defaultdict(list)
+    for r in rows:
+        if r.get("team") and r.get("team") != UNCLASSIFIED and r.get("classified_by") != "none":
+            by_team[r["team"]].append(r.get("subject", ""))
+    stamp = ctx.now().isoformat(timespec="seconds")
+    learned = []
+
+    def change(doc):
+        rules, seen, blocked = doc.setdefault("rules", {}), doc.setdefault("seen", {}), doc.setdefault("blocked", {})
+        taken = {k.casefold() for k in rules} | {k.casefold() for k in blocked}
+        for r in fresh:
+            mid = r["message_id"]
+            if mid in seen:
+                continue
+            seen[mid] = stamp
+            others = [subj for team, subjects in by_team.items() if team != r["team"] for subj in subjects]
+            keyword = learn_keyword(r.get("subject", ""), others, (r.get("customer_name"), r.get("first_reply_by")))
+            if not keyword or keyword.casefold() in taken:
+                continue
+            taken.add(keyword.casefold())
+            rules[keyword] = {"team": r["team"], "subject": str(r.get("subject") or "")[:200], "message_id": mid,
+                              "reply_by": r.get("first_reply_by", ""), "learned_at": stamp}
+            learned.append((keyword, r["team"]))
+        if len(seen) > LEARNED_SEEN_KEEP:                # the oldest mails are forgotten
+            for mid, _ in sorted(seen.items(), key=lambda kv: kv[1])[:len(seen) - LEARNED_SEEN_KEEP]:
+                seen.pop(mid, None)
+        return doc
+    try:
+        store.update_classify_learned(change)
+    except Exception as exc:                             # learning must never cost the scan
+        ctx.log(f"Classification keywords could not be learned: {type(exc).__name__}: {exc}")
+        return []
+    if learned:
+        ctx.log(f"Learned {len(learned)} classification keyword(s) from replies to Unclassified mails: "
+                + ", ".join(f"{kw} -> {team}" for kw, team in learned))
+    return learned
+
+
 def _load_overrides(ctx):
     """The four manual override lists, {} when there is no store. A damaged file raises: better a failed scan (the last
     good snapshot stays) than a snapshot that silently forgets every manual decision."""
@@ -873,6 +964,10 @@ def _rows_for_customer(cfg, customer, indexes, team_replies, ovr, now):
     key = customer.get("message_id", "")
     override = (ovr["team"].get(key) or {}).get("team") if key else None
     cls = classify(cfg, customer, override)
+    if cls["classified_by"] == "none" and replies and cfg.learn_from_replies:
+        team = _reply_team(cfg, replies)                 # an Unclassified mail a team member answered: their team
+        if team:
+            cls = {**cls, "team": team, "all_teams": [team], "classified_by": "reply"}
     teams_replied, unattributed = _attribute_replies(cfg.directory, replies, cls["all_teams"])
     # one reply clears every team; with no reply yet, every classified team is still waiting
     teams_pending = [] if replies else [t for t in cls["all_teams"] if t not in teams_replied]
@@ -1350,6 +1445,7 @@ def scan_and_analyze(ctx, namespace=None, keep_mail_items=False, save_copies=Fal
     ``save_copies`` (the live "email" job only): after the analysis, save the .msg + preview of the mails people open on the
     web pages (``save_mail_copies``) and mark each row with ``mail_copy`` ("ready" | "too_large" | "")."""
     cfg = EmailConfig(ctx.settings)
+    cfg.learned = _load_learned(ctx, cfg)
     if not cfg.business:
         raise ConfigProblem("No business e-mail address is set (Settings > E-mail > business_emails).")
     if not cfg.team_members:
@@ -1413,6 +1509,7 @@ def snapshot_row(row, now):
         "teams_replied": list(row.get("teams_replied") or []),
         "classified_by": row.get("classified_by", "none"),
         "classification_hint": row.get("classification_hint", ""),
+        "suggested_team": row.get("suggested_team", ""),    # the reply's team, to approve (learning from replies off)
         "customer_name": row.get("customer_name", ""),
         "customer_email": row.get("customer_email", ""),
         "received_time": _iso(received),
@@ -1517,7 +1614,7 @@ def to_snapshot_data(outcome, ctx):
             "repeat_issue_alerts": stats.get("repeat_issue_alerts") or [],
         },
         "classification": {
-            "counts": {k: by.get(k, 0) for k in ("system", "address", "default_team", "override", "none")},
+            "counts": {k: by.get(k, 0) for k in CLASSIFIED_BY},
             "unclassified": sum(1 for r in rows if r["team"] == UNCLASSIFIED),
             "unclassified_team": cfg.unclassified_team,
         },
@@ -1536,6 +1633,7 @@ def run_scan(ctx, namespace=None):
     """Job "email". Never raises: a failure becomes ``JobResult(ok=False, error=...)`` and the last good snapshot stays."""
     try:
         outcome = scan_and_analyze(ctx, namespace, save_copies=True)
+        learn_from_replies(ctx, outcome.config, outcome.rows)
         data = to_snapshot_data(outcome, ctx)
     except (ConfigProblem, OutlookUnavailable) as exc:
         ctx.log(f"E-mail scan cannot run: {exc}")

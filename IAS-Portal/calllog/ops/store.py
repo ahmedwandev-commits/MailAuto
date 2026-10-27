@@ -57,6 +57,7 @@ class OpsStore:
         self.sla_analysis_path = self.root / "sla_analysis.json"  # closed-request SLA analysis (from the ALL_*.csv export)
         self.sla_records_path = self.root / "sla_records.json"    # LIVE SLA recording: per-request lifecycle + config
         self.classify_suggestions_path = self.root / "classify_suggestions.json"  # admin decisions on learned e-mail classifications
+        self.classify_learned_path = self.root / "classify_learned.json"  # keywords the e-mail scan learned from replies
         self.itsm_records_path = self.root / "itsm_records.json"  # LIVE ITSM change-request recording: exec time + conclusion
         self._cache = {}                        # path -> (size/mtime signature, parsed data or _MISSING, time checked)
         self._used = {}                         # path -> time of the last request for it
@@ -350,6 +351,20 @@ class OpsStore:
     def update_classify_suggestions(self, change):
         """Read-modify-write the classification decisions under a lock (``change(doc)`` edits and/or returns the value)."""
         return self._update_json(self.classify_suggestions_path, "classify_suggestions", lambda: {}, change)
+
+    def read_classify_learned(self):
+        """The keywords the e-mail scan learned from team members' replies to Unclassified mails
+        (``email_engine.learn_from_replies``): ``{"rules": {keyword: {team, subject, message_id, reply_by, learned_at}},
+        "seen": {message_id: when}, "blocked": {keyword: {by, at}}}`` - a removed keyword is blocked, never learned
+        again."""
+        doc = self.read_json(self.classify_learned_path, None) or {}
+        return {"rules": dict(doc.get("rules") or {}), "seen": dict(doc.get("seen") or {}),
+                "blocked": dict(doc.get("blocked") or {})}
+
+    def update_classify_learned(self, change):
+        """Read-modify-write the learned keywords under a lock (``change(doc)`` edits and/or returns the value)."""
+        return self._update_json(self.classify_learned_path, "classify_learned",
+                                 lambda: {"rules": {}, "seen": {}, "blocked": {}}, change)
 
     # -------------------------------------------------------------- snapshots
     def _module(self, module):

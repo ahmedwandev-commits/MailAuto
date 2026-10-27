@@ -755,28 +755,62 @@
     if (!el.sugBox) el.sugBox = h("div", { class: "em-suggest" }, h("p", { class: "hint" }, "Loading suggestions…"));
     el.panels.unclassified.replaceChildren(
       OPS.card("Unclassified e-mails", { hint: "assign a team or create a rule" }, table),
-      OPS.card("Suggested classifications", { hint: "learned from employees' replies — approve to file the mail and teach the rule" }, el.sugBox),
+      OPS.card("Learned from replies", { hint: "an e-mail without a team that a team member answers goes to their team, and a keyword is learned from it" }, el.sugBox),
       OPS.card("", {}, rulesBox));
     loadSuggestions();
   }
 
-  // When an employee replies to an Unclassified e-mail, the scan proposes filing it under that employee's team and
-  // learning a keyword rule. The admin (or the team's manager) approves here; nothing changes until they do.
+  // When an employee replies to an Unclassified e-mail, the scan files it under that employee's team and learns a
+  // keyword from it, so the next e-mail like it classifies itself (System › Settings › Classification › "Learn from
+  // replies"); the learned keywords are listed here and can be removed. With the learning off, the scan only proposes
+  // it, and the admin (or the team's manager) approves here.
   async function loadSuggestions() {
     const box = el.sugBox;
     if (!box) return;
-    let data;
-    try { data = await api("GET", "/api/ops/email/classification/suggestions"); }
-    catch (e) { state.sugSig = null; box.replaceChildren(OPS.emptyState({ title: "Could not load suggestions", icon: "alert", text: e.message })); return; }
-    const list = data.suggestions || [];
-    const sig = JSON.stringify(list.map((s) => [s.message_id, s.suggested_team, s.keyword]));
+    let learned, list = [];
+    try {
+      learned = await api("GET", "/api/ops/email/classification/learned");
+      if (!learned.auto) list = (await api("GET", "/api/ops/email/classification/suggestions")).suggestions || [];
+    } catch (e) { state.sugSig = null; box.replaceChildren(OPS.emptyState({ title: "Could not load the learned keywords", icon: "alert", text: e.message })); return; }
+    const words = learned.learned || [];
+    const sig = JSON.stringify([learned.auto, words.map((w) => [w.keyword, w.team]), list.map((s) => [s.message_id, s.suggested_team, s.keyword])]);
     if (sig === state.sugSig && box.childElementCount) return;     // unchanged: keep the inputs the user may be editing
     state.sugSig = sig;
-    if (!list.length) {
-      box.replaceChildren(h("p", { class: "hint" }, "No suggestions waiting. When an employee replies to an unclassified e-mail it is proposed here, with the team to file it under."));
-      return;
+    const parts = [];
+    if (learned.auto) {
+      parts.push(h("p", { class: "hint" }, "On: an unclassified e-mail a team member answers goes to their team at the next scan, and a keyword of its subject is learned so the next e-mail like it is classified by itself. Turn it off in System › Settings › Classification."));
+    } else if (list.length) {
+      parts.push(h("ul", { class: "em-suggest-list" }, list.map(suggestionItem)));
+    } else {
+      parts.push(h("p", { class: "hint" }, "No suggestions waiting. When an employee replies to an unclassified e-mail it is proposed here, with the team to file it under."));
     }
-    box.replaceChildren(h("ul", { class: "em-suggest-list" }, list.map(suggestionItem)));
+    parts.push(words.length
+      ? h("ul", { class: "em-rules em-learned" }, words.map(learnedItem))
+      : h("p", { class: "hint" }, "No keyword learned yet."));
+    box.replaceChildren(...parts);
+  }
+
+  function learnedItem(w) {
+    const when = (w.learned_at || "").slice(0, 16).replace("T", " ");
+    return h("li", { class: "em-rule" },
+      h("div", { class: "em-learned-info" },
+        h("span", { dir: "auto" }, h("code", {}, w.keyword), " → ", bidi(w.team)),
+        h("div", { class: "hint", dir: "auto" }, bidi(`from “${w.subject || "(no subject)"}”${w.reply_by ? ", answered by " + w.reply_by : ""}${when ? " · " + when : ""}`))),
+      h("span", { class: "grow" }),
+      ROLE === "admin" || canActOnTeam(w.team)
+        ? h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: () => removeLearned(w) }, OPS.icon("trash"), "Remove")
+        : null);
+  }
+
+  async function removeLearned(w) {
+    const ok = await CL.confirmDialog({ title: "Remove learned keyword",
+      message: `E-mails with “${w.keyword}” will no longer go to ${w.team} by it (from the next scan), and it is not learned again.`, confirmLabel: "Remove" });
+    if (!ok) return;
+    try {
+      await api("DELETE", `/api/ops/email/classification/learned?keyword=${encodeURIComponent(w.keyword)}`);
+      state.sugSig = null;
+      await afterAction("Removed.");
+    } catch (e) { toast(e.message, "error"); }
   }
 
   function suggestionItem(s) {
