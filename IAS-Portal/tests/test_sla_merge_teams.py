@@ -20,16 +20,23 @@ def hub(**sla):
 
 # ---------------------------------------------------------------- the rule
 def test_the_mfa_teams_requests_count_under_open_system_by_default_and_only_in_the_sla():
-    users = {"7101": {"user_id": "7101", "role": "user", "team": "MFA Team", "security_name": MFA_SEC, "active": True}}
-    resolver = teams.Resolver(hub(), users, APPS)
+    resolver = teams.Resolver(hub(), {}, APPS)
     assert hub()["sla"]["merge_teams"] == {"MFA Team": "Open System"}
-    assert resolver.sla_team("Veridium") == "Open System"                  # its application
-    assert resolver.sla_team("Some new app", MFA_SEC) == "Open System"     # the security user holding it
-    assert resolver.application_team("Veridium") == "Open System"
-    people = teams.sla_people(users)
-    assert teams.sla_person_team("Flexcube", "7101", "", people, resolver) == "Open System"   # the person who did it
+    assert resolver.sla_team("Veridium") == resolver.application_team("Veridium") == "Open System"
     assert resolver.sla_team("Flexcube") == "Flex Cube" and resolver.sla_team("Platinum Mail") == "Open System"
     assert resolver.itsm_team("IMP MFA Team") == "MFA Team"                # ITSM keeps its own teams
+
+
+def test_a_request_belongs_to_its_applications_team_never_to_the_persons():
+    """The owner's rule: a request is classified by its system «النظام» - an MFA Team employee holding or executing a
+    Flexcube request does not make it Open System, and an application no rule names has no team (the SLA Analysis
+    lists it for the administrator), whoever holds it."""
+    users = {"7101": {"user_id": "7101", "role": "user", "team": "MFA Team", "security_name": MFA_SEC, "active": True}}
+    resolver = teams.Resolver(hub(), users, APPS)
+    assert resolver.sla_team("Flexcube", MFA_SEC) == "Flex Cube"
+    assert resolver.sla_team("Some new app", MFA_SEC) == ""
+    assert teams.sla_record_team("Flexcube", resolver) == "Flex Cube"
+    assert teams.sla_record_team("Some new app", resolver) == teams.NO_TEAM
 
 
 def test_emptied_the_mfa_team_counts_on_its_own_again():

@@ -135,9 +135,8 @@ def _resolver(store, hub, users):
 
 def tickets_block(store, hub, users, day, now, team=None):
     """The security requests of ``day``, counted like Insights › Analysis › SLA (``sla_history.status_numbers`` over
-    ``performance.sla_scope``): every team's, or (``team``) only that team's - a request's team is the team of the person
-    who executed or holds it (their account), else its application's; Third Party always left out. The Live queue
-    (Re-Assign page) is counted from its own scan."""
+    ``performance.sla_scope``): every team's, or (``team``) only that team's - a request's team is its application's,
+    never the person's; Third Party always left out. The Live queue (Re-Assign page) is counted from its own scan."""
     scope = (team,) if team else None
     sc = performance.sla_scope(store, hub, users, day, day, scope)
     out = {"available": False}

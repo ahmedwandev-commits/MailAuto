@@ -103,19 +103,27 @@ def test_every_scan_keeps_the_days_numbers_and_each_scope_reads_its_own(tmp_path
     assert (one[0]["executed"], one[0]["exec_n"]) == (1, 1) and one[0]["exec_average_minutes"] == 40.0
 
 
-def test_a_team_left_out_of_the_sla_never_shows_even_through_the_person_who_executed(tmp_path):
-    """Third Party is left out of the SLA: a request executed by a Third Party person is not counted for any team."""
+def test_a_request_is_its_applications_team_whoever_executed_it_and_third_party_apps_stay_out(tmp_path):
+    """The owner's rule: a request is classified by its system «النظام», never by the person - a Flexcube request
+    executed by a Third Party person counts for Flex Cube; a Third Party application's request is left out of the
+    SLA whoever executed it."""
     ops, data = world(tmp_path)
     from calllog.storage import Store as Calls
     calls = Calls(str(data))
     calls.create_user({"user_id": "7009", "name": "Person 7009", "role": "user", "active": True, "team": "Third Party",
                        "email": "tp@example.test"})
-    ops.update_sla_closed_day(DAY, lambda d: d.update({"R9": {
-        "id": "R9", "source": "history", "stage": "closed", "outcome": "completed", "final_outcome": "executed",
-        "system": "Flexcube", "first_assigned_at": f"{DAY}T09:00:00", "assigned_at": f"{DAY}T09:00:00",
-        "executed_at": f"{DAY}T09:30:00", "exec_outcome": "executed", "confirmed_at": f"{DAY}T09:40:00",
-        "executor": "Person 7009", "executor_no": "7009"}}))
+    ops.update_auto_assign(lambda d: d.update(applications=(d.get("applications") or []) + [
+        {"name": "TP Bank App", "team": "Third Party"}]))
+
+    def closed(rid, system, executor_no, executor):
+        return {"id": rid, "source": "history", "stage": "closed", "outcome": "completed", "final_outcome": "executed",
+                "system": system, "first_assigned_at": f"{DAY}T09:00:00", "assigned_at": f"{DAY}T09:00:00",
+                "executed_at": f"{DAY}T09:30:00", "exec_outcome": "executed", "confirmed_at": f"{DAY}T09:40:00",
+                "executor": executor, "executor_no": executor_no}
+    ops.update_sla_closed_day(DAY, lambda d: d.update({"R9": closed("R9", "Flexcube", "7009", "Person 7009"),
+                                                       "R10": closed("R10", "TP Bank App", "7001", "Person 7001")}))
     ops.update_sla_history_state(lambda d: d.update(open={}, index={}, grid={}, last_history=f"{DAY}T13:00:00"))
     _, hub, users = _hub_and_users(ops, data)
     sc = performance.sla_scope(ops, hub, users, DAY, DAY, None)
-    assert "R9" not in sc["records"]
+    assert sc["records"]["R9"]["team"] == "Flex Cube" and "R10" not in sc["records"]
+    assert "R9" in performance.sla_scope(ops, hub, users, DAY, DAY, ("Flex Cube",))["records"]

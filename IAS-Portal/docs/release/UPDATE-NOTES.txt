@@ -402,12 +402,19 @@ HOW TO UPDATE (your data is kept)
 
 37. THE MFA TEAM'S SECURITY REQUESTS COUNT UNDER OPEN SYSTEM
    - In the SLA only - the Live tickets, Home, the SLA Analysis, Insights › Analysis, the timeline, the daily
-     summary's tickets and the day-by-day log - the requests of the MFA Team (its applications, and the ones its
-     people hold or executed) count as Open System. Days kept before this update count the same way.
+     summary's tickets and the day-by-day log - the requests of the MFA Team's applications count as Open System.
+     Days kept before this update count the same way.
    - A manager of the MFA Team sees the whole of Open System there; a manager of Open System sees the MFA requests.
    - E-mails, ITSM and the accounts keep their own teams: nothing changes in the E-mail pages or for the employees.
    - System › Settings › Ticketing › "Teams counted as one" holds the rule (MFA Team -> Open System); remove the line
      to count the MFA Team on its own again.
+
+38. A SECURITY REQUEST IS CLASSIFIED BY ITS SYSTEM, NEVER BY THE PERSON
+   - A request's team is the team of its application «النظام» (Auto Assign › Applications, else the classification
+     keywords) - everywhere in the SLA. The team of the security user holding it, or of the person who executed it,
+     is no longer used: a Flexcube request executed by an Open System employee is a Flex Cube request.
+   - An application no rule names has no team: the administrator sees it under "Applications with no team" on the
+     SLA Analysis and gives it one there.
 
 --------------------------------------------------------------------------------
 
@@ -746,9 +753,16 @@ IAS PORTAL - الجديد في هذا التحديث
 
 37. طلبات السرية بتاعة MFA Team بقت بتتحسب تحت Open System
    - في الـ SLA بس - تذاكر الـ Live، والـ Home، والـ SLA Analysis، وInsights › Analysis، والـ timeline، والتيكتات في
-     الملخص اليومي، والسجل يوم بيوم - طلبات MFA Team (تطبيقاتها، واللي ماسكها أو نفذها حد من الفريق) بتتحسب
-     Open System. والأيام اللي اتسجلت قبل التحديث بتتحسب بنفس الطريقة.
+     الملخص اليومي، والسجل يوم بيوم - طلبات تطبيقات MFA Team بتتحسب Open System. والأيام اللي اتسجلت قبل التحديث
+     بتتحسب بنفس الطريقة.
    - مدير MFA Team بيشوف Open System كله هناك، ومدير Open System بيشوف طلبات MFA.
    - الإيميلات والـ ITSM والحسابات زي ما هي بفرقها: مفيش حاجة اتغيرت في صفحات الإيميل ولا للموظفين.
    - القاعدة في System › Settings › Ticketing › "Teams counted as one" (MFA Team -> Open System)؛ لو شلت السطر،
      MFA Team يرجع يتحسب لوحده.
+
+38. طلب السرية بيتصنف بالنظام بتاعه، مش بالشخص
+   - فريق الطلب هو فريق التطبيق بتاعه «النظام» (من Auto Assign › Applications، أو كلمات التصنيف) - في كل الـ SLA.
+     فريق مستخدم السرية اللي ماسك الطلب أو اللي نفذه مبقاش بيتحسب: طلب Flexcube نفذه موظف من Open System هو طلب
+     Flex Cube.
+   - التطبيق اللي مفيش قاعدة بتسميه ملوش فريق: الأدمن بيلاقيه في "Applications with no team" في الـ SLA Analysis
+     ويحدد له فريقه من هناك.

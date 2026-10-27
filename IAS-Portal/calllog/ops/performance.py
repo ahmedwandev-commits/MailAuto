@@ -33,22 +33,15 @@ def _resolver(store, hub, users):
 def sla_scope(store, hub, users, day_from, day_to, scope=None):
     """The SLA history ``scope`` (None = every team) may see over ``day_from``..``day_to``: {records (closed on those
     days or up to two weeks later, and every open one), grid, index, cfg, live, resolver, people, available}. A
-    request's team is the team of the person who executed or holds it (their account), else its application's -
-    the SLA Analysis' rule; Third Party left out; a team merged into another (``sla.merge_teams``) as that team, and
-    a scope of the merged team sees it whole."""
+    request's team is its application's (``teams.sla_record_team``: never the team of the person who executed or
+    holds it) - the SLA Analysis' rule; Third Party left out; a team merged into another (``sla.merge_teams``) as that
+    team, and a scope of the merged team sees it whole."""
     sla_cfg = hub.get("sla") or {}
     resolver = _resolver(store, hub, users)
     scope = resolver.sla_scope(scope)
     excluded = teams.sla_exclusion(sla_cfg, resolver) or (lambda system: False)
     people = teams.sla_people(users)
     out_teams = {str(t).strip().casefold() for t in sla_cfg.get("exclude_teams") or [] if str(t).strip()}
-    seen = {}
-
-    def team_of(system, number="", name=""):           # thousands of rows, a few hundred people and applications
-        key = (system, number, name)
-        if key not in seen:
-            seen[key] = teams.sla_person_team(system, number, name, people, resolver)
-        return seen[key]
     shown = lambda t: teams.in_scope(scope, t) and str(t).casefold() not in out_teams   # noqa: E731 - never Third Party
     live = []
     snap = store.read_snapshot("sla")
@@ -69,8 +62,7 @@ def sla_scope(store, hub, users, day_from, day_to, scope=None):
         r = sla_history.rederive(r, cfg)
         if excluded(r.get("system")):
             continue
-        number = r.get("executor_no") if r.get("executor_no") or r.get("executor") else ""
-        t = team_of(r.get("system"), number, r.get("executor") or r.get("holder"))
+        t = teams.sla_record_team(r.get("system"), resolver)
         if shown(t):
             records[k] = {**r, "team": t, "teams": [t]}
     number_of = {}
@@ -83,8 +75,7 @@ def sla_scope(store, hub, users, day_from, day_to, scope=None):
     for key, g in (state.get("grid") or {}).items():
         if excluded(g.get("system")):
             continue
-        holder = g.get("holder") or ""
-        t = team_of(g.get("system"), number_of.get(sla_history._norm(holder), ""), holder)
+        t = teams.sla_record_team(g.get("system"), resolver)
         if shown(t):
             grid[key] = {**g, "team": t}
     return {"records": records, "grid": grid, "index": state.get("index") or {}, "cfg": cfg, "live": live,

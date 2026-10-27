@@ -182,12 +182,13 @@ History point (`ops/history/sla/<day>.json` = `{"points": [{"ts","open","within"
 - The portal's `ALL_*.csv` export (Upload export, or the feed path in Settings) adds the confirmed requests with their
   outcome. An export line and the live closure of the SAME request (same assignment minute and application) become one
   record: the security user and the time it left the queue from the scan, the confirmation from the export. EmpNo is
-  shown as the person's security name (the account whose portal ID / user ID it is), so it gets that person's team.
+  shown as the person's security name (the account whose portal ID / user ID it is); the request's team stays its
+  application's.
 - The period filter is the period's work: a closed request counts in the period it closed in (like "Closed today" and
   the by-day table), an open one in every period from its assignment on.
 - The "right now" strip counts like the Live tab: the scan's own status per request and its `breach_minutes`.
-- Team: the same rule as every page (`calllog/ops/teams.py`); a request no rule gives a team is shown to
-  administrators only, and the page says how many there are.
+- Team: the same rule as every page (`calllog/ops/teams.py`): the team of the request's application «النظام», never
+  the person's; a request no rule gives a team is shown to administrators only, and the page says how many there are.
 
 ### 5.2 `itsm`
 

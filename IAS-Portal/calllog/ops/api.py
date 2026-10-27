@@ -1430,9 +1430,9 @@ SLA_CLOSED_REACH_DAYS = 14       # closing-day files read past the period's end:
 
 def sla_history_view(scope, date_from="", date_to=""):
     """The SLA history a viewer may see: {records (closed in the period's days + every open one), open, index, grid,
-    cfg, recorder, left_out, unmapped}. Every record gets its team from the PERSON who executed it (or holds it) - their
-    account, found by the employee number of the status history - else from the application; Third Party (Settings ›
-    Ticketing › Left out of the SLA) is removed; a manager keeps only their own team(s)."""
+    cfg, recorder, left_out, unmapped}. Every record gets the team of its APPLICATION «النظام» - never the team of the
+    person who executed or holds it (``teams.sla_record_team``); Third Party (Settings › Ticketing › Left out of the
+    SLA) is removed; a manager keeps only their own team(s)."""
     store = ops()
     state = store.read_sla_history_state() or {}
     cfg = sla_records.clean_config((store.read_sla_records() or {}).get("config"))
@@ -1440,17 +1440,8 @@ def sla_history_view(scope, date_from="", date_to=""):
     resolver = team_resolver()
     excluded = teams.sla_exclusion(sla_cfg, resolver) or (lambda system: False)
 
-    seen = {}
-
-    def team_of(system, number="", name=""):           # thousands of rows, a few hundred people and applications
-        key = (system, number, name)
-        if key not in seen:
-            seen[key] = teams.sla_person_team(system, number, name, sla_history_people(), resolver)
-        return seen[key]
-
     def link(r):
-        person_no = r.get("executor_no") if r.get("executor_no") or r.get("executor") else ""
-        team = team_of(r.get("system"), person_no, r.get("executor") or r.get("holder"))
+        team = teams.sla_record_team(r.get("system"), resolver)
         acct = sla_history_account(r.get("executor_no"), r.get("executor"))
         return {**r, "team": team, "teams": [team], "executor_uid": (acct or {}).get("user_id", "")}
 
@@ -1467,23 +1458,15 @@ def sla_history_view(scope, date_from="", date_to=""):
     records.update(open_recs)
     # records read under older status rules are brought up to the current ones (sla_history.rederive)
     records = {k: link(sla_history.rederive(r, cfg)) for k, r in records.items() if not excluded(r.get("system"))}
-    # a team left out of the SLA (Third Party by default) never shows, also when its person executed the request
+    # a team left out of the SLA (Third Party by default) never shows
     out_teams = {str(t).strip().casefold() for t in sla_cfg.get("exclude_teams") or [] if str(t).strip()}
     records = {k: r for k, r in records.items() if str(r["team"]).casefold() not in out_teams}
     unmapped = sum(1 for r in records.values() if r["team"] == teams.NO_TEAM)
-    # the grid names the security user holding a request but not their number: the number they act under in the
-    # history (any request they executed or confirmed) links them, else their account's security name does
-    number_of = {}
-    for r in records.values():
-        for name, no in ((r.get("executor"), r.get("executor_no")), (r.get("checker"), r.get("checker_no"))):
-            if name and no:
-                number_of.setdefault(sla_history._norm(name), no)
     grid = {}
     for key, row in (state.get("grid") or {}).items():
         if excluded(row.get("system")):
             continue
-        holder = row.get("holder") or ""
-        team = team_of(row.get("system"), number_of.get(sla_history._norm(holder), ""), holder)
+        team = teams.sla_record_team(row.get("system"), resolver)
         if str(team).casefold() not in out_teams:
             grid[key] = {**row, "team": team}
     if scope is not None:                                 # a manager of a merged team sees the team it joined

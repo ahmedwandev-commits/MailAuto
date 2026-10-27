@@ -1,11 +1,12 @@
 """Which team a security request (SLA) or an ITSM role belongs to - ONE rule for every page, export, chart, timeline item
 and Home number, so a manager of one team sees only that team everywhere and the numbers on every dashboard add up.
 
-A security request (its application «النظام» and the security user «مستخدم السرية» it waits with):
+A security request belongs to the team of its APPLICATION «النظام» - never to the team of the person who holds or
+executed it (the owner's rule):
   1. the administrator's application list (Auto-Assign > Applications: name -> team);
-  2. the team of the employee whose "security name" is that security user;
-  3. the e-mail classification keywords (built-in map + the administrator's rules) found in the application name;
-  otherwise no team: only administrators and managers of every team see it.
+  2. the e-mail classification keywords (built-in map + the administrator's rules) found in the application name;
+  otherwise no team: only administrators and managers of every team see it, and the SLA Analysis lists the application
+  under "Applications with no team" for the administrator to give it one.
   A team merged into another for the SLA (``sla.merge_teams``: MFA Team -> Open System by default) counts as that
   team - in every SLA page, export and number - and a manager of the merged team sees the team it is merged into
   (``Resolver.sla_scope``). E-mails, ITSM and the accounts keep their own teams.
@@ -22,7 +23,6 @@ from .engines import email_rules
 from .engines.common import norm_arabic
 from . import overlay, schemas
 
-UNASSIGNED_USER = "(Unassigned)"
 NO_TEAM = "(no team)"           # what the pages show for a request / role no rule gives a team (admins only see it)
 
 
@@ -65,12 +65,6 @@ class Resolver:
         self.merges = team_merges(settings)
         self._apps = {_key(a.get("name")): str(a.get("team"))
                       for a in (applications or []) if a.get("name") and a.get("team")}
-        self._security = {}
-        for user in (users or {}).values() if isinstance(users, dict) else (users or []):
-            name = _key(user.get("security_name"))
-            teams = [t for t in overlay.user_teams(user) if _real_team(t)]
-            if name and teams and user.get("active", True):
-                self._security.setdefault(name, teams[0])
         self._roles = {_key(k): str(v) for k, v in ((settings.get("itsm") or {}).get("role_teams") or {}).items() if v}
         self._rules = email_rules.build_rules(email)
         self._cache = {}
@@ -80,20 +74,13 @@ class Resolver:
         return all_teams[0] if all_teams else ""
 
     def sla_team(self, system, security_user=""):
-        """The team of one security request ("" = no team found)."""
-        key = ("sla", _key(system), _key(security_user))
-        if key not in self._cache:
-            team = self._apps.get(key[1], "")
-            if not team and key[2] and key[2] != _key(UNASSIGNED_USER):
-                team = self._security.get(key[2], "")
-            if not team and key[1]:
-                team = self._keywords(system)
-            self._cache[key] = merged_team(team, self.merges)
-        return self._cache[key]
+        """The team of one security request: its application's (``application_team``), whoever holds it - the
+        security user is not used ("" = no team found)."""
+        return self.application_team(system)
 
     def application_team(self, system):
         """The team an APPLICATION belongs to, whoever holds the request: the administrator's application list, else the
-        classification keywords in its name ("" = none)."""
+        classification keywords in its name ("" = none); a merged team as the team it is merged into."""
         key = ("app", _key(system))
         if key not in self._cache:
             team = self._apps.get(key[1], "") or (self._keywords(system) if key[1] else "")
@@ -160,14 +147,11 @@ def sla_people(users):
     return by_no, by_name
 
 
-def sla_person_team(system, number, name, people, resolver):
-    """The team of one SLA request in the SLA Analysis (and the daily summary): the team of the PERSON who executed it
-    or holds it (their account, by number, else by security name), else the application's / the security user's team
-    (``Resolver.sla_team``), else ``NO_TEAM`` - a merged team as the team it is merged into."""
-    by_no, by_name = people
-    acct = (by_no.get(str(number or "").strip()) or by_name.get(norm_arabic(name))) if (number or name) else None
-    mine = [t for t in overlay.user_teams(acct or {}) if _real_team(t)]
-    return merged_team(mine[0], resolver.merges) if mine else (resolver.sla_team(system, name) or NO_TEAM)
+def sla_record_team(system, resolver):
+    """The team of one SLA request in the SLA Analysis (and the daily summary, the performers, the day-by-day log):
+    its application's (``Resolver.sla_team``) - never the team of the person who executed or holds it - else
+    ``NO_TEAM``."""
+    return resolver.sla_team(system) or NO_TEAM
 
 
 def in_scope(scope, team):
