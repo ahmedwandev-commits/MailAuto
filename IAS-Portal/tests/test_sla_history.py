@@ -55,19 +55,22 @@ def test_the_recording_keeps_the_user_number_and_who_held_the_request_when_it_wa
     assert sh.grid_state([item], {}, "2026-10-20T09:05:00", CFG)[item["key"]]["user_no"] == "700301"
 
 
-def test_right_now_never_shows_the_previous_holders_clock():
-    """The request's age counts from its FIRST assignment whoever holds it; the time with the security user holding
-    it now is only shown once their assignment is read (never the previous holder's)."""
+def test_right_now_counts_from_the_last_assignment_never_the_previous_holders_clock():
+    """The owner's rule: a request's age counts from its LAST assignment - when the security user holding it now got
+    it (a re-assignment restarts the clock). Until that assignment is read the age is not known ("not read yet"),
+    never the previous holder's time; the first assignment is kept for information."""
     item = sh.grid_rows(HEAD, [grid_row(executor="مستخدم ثان")])[0]
     grid = sh.grid_state([item], {}, "2026-10-20T10:00:00", CFG)
     index = {item["key"]: {"id": "R1", "status": "اسناد لمستخدم السرية", "holder": "مستخدم اول"}}
     open_recs = {"R1": {"id": "R1", "stage": "open", "first_assigned_at": "2026-10-20T07:00:00",
                         "assigned_at": "2026-10-20T08:00:00", "holder": "مستخدم ثان"}}
-    row = sh.right_now(grid, open_recs, index, CFG, "2026-10-20T10:00:00")["open_now"][0]
-    assert row["minutes"] == 180.0 and row["holder_minutes"] is None and row["first_assigned_at"] == "2026-10-20T07:00:00"
+    out = sh.right_now(grid, open_recs, index, CFG, "2026-10-20T10:00:00")
+    row = out["open_now"][0]
+    assert row["minutes"] is None and row["holder_minutes"] is None and row["first_assigned_at"] == "2026-10-20T07:00:00"
+    assert out["now"]["unread"] == 1
     index[item["key"]]["holder"] = "مستخدم ثان"
     row = sh.right_now(grid, open_recs, index, CFG, "2026-10-20T10:00:00")["open_now"][0]
-    assert row["minutes"] == 180.0 and row["holder_minutes"] == 120.0
+    assert row["minutes"] == 120.0 and row["holder_minutes"] == 120.0                  # from 08:00, not 07:00
 
 
 # ------------------------------------------------------------------------------- the period: the assignment day
@@ -297,7 +300,8 @@ def test_right_now_lists_every_live_ticket_even_the_ones_the_inquiry_does_not():
     grid = sh.grid_state(items, {}, "2026-10-21T09:00:00", CFG)
     tickets = [live("a", "700301", "Flexcube", "اضافة صلاحية", "مستخدم اول"),       # the grid's row: counted once
                dict(live("b", "700399", "T24", "حذف", "مستخدم ثان", sent="2026-10-14T08:00:00"),
-                    assigned_at="2026-10-14T09:00:00")]                         # older than the inquiry window
+                    assigned_at="2026-10-14T09:00:00",                          # older than the inquiry window
+                    clock_at="2026-10-14T09:00:00", clock_from="assignment")]   # the Live tab's clock
     out = sh.right_now(grid, {}, {}, CFG, "2026-10-21T09:00:00", live=tickets)
     assert out["now"]["open"] == 2 and out["now"]["live_only"] == 1
     older = next(o for o in out["open_now"] if o["source"] == "live")

@@ -550,10 +550,10 @@ class TestRun:
         retry, ctx2 = run(store, now=NOW + timedelta(minutes=15))
         assert retry.emails_sent == 1 and len(ctx2.mailer.sent) == 1
 
-    def test_a_live_ticket_is_aged_from_the_day_it_was_sent_and_its_assignment_is_only_noted(self, store):
-        """Like the owner's sla_monitor.py: the live SLA runs from «تاريخ الارسال للسرية» on the Re-Assign page -
-        reminder from warning_minutes, breached from breach_minutes. The first «اسناد لمستخدم السرية» the SLA history
-        recorded is noted next to it (``assigned_at``), never its clock."""
+    def test_a_live_ticket_is_aged_from_its_last_assignment_to_the_user_holding_it(self, store):
+        """The owner's rule: the live SLA runs from the LAST «اسناد لمستخدم السرية» - the status history's assignment
+        to the security user holding it now - reminder from warning_minutes, breached from breach_minutes; a ticket
+        never re-assigned (no history yet) from «تاريخ الارسال للسرية» on the Re-Assign page."""
         assigned = (NOW - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
         store.update_sla_history_state(lambda d: d.update(open={"R1": {
             "id": "R1", "stage": "open", "user_no": "1000", "system": "نظام", "request_type": "نوع",
@@ -561,15 +561,34 @@ class TestRun:
         result, ctx = run(store, (HEADERS, [row("a", 200, OWNER_A), row("b", 70, OWNER_B, user_no="1001"),
                                             row("c", 20, OWNER_B, user_no="1002")]))
         a, b, c = (by_name(result)[k] for k in "abc")
-        assert a["assigned_at"] == assigned and a["age_minutes"] == 200 and a["status"] == schemas.SLA_BREACHED
-        assert b["assigned_at"] is None and b["age_minutes"] == 70 and b["status"] == schemas.SLA_REMINDER
+        assert (a["clock_from"], a["clock_at"], a["age_minutes"], a["status"]) == ("assignment", assigned, 30, schemas.SLA_WITHIN)
+        assert a["sent_at"] == (NOW - timedelta(minutes=200)).isoformat(timespec="seconds")       # still shown
+        assert (b["clock_from"], b["age_minutes"], b["status"]) == ("sent", 70, schemas.SLA_REMINDER)
         assert c["age_minutes"] == 20 and c["status"] == schemas.SLA_WITHIN
-        assert "age_from" not in a
-        assert [r["fields"]["اسم الموظف"] for r in result.snapshot_data["requests"]] == ["a", "b", "c"]   # oldest first
+        assert [r["fields"]["اسم الموظف"] for r in result.snapshot_data["requests"]] == ["b", "a", "c"]   # oldest first
         totals = result.snapshot_data["totals"]
-        assert (totals["within"], totals["reminder"], totals["breached"], totals["oldest_minutes"]) == (1, 1, 1, 200)
-        assert result.history_extra["first_breach"] == {a["key"]: NOW.isoformat(timespec="seconds")}
-        assert any("3 request(s) aged from «تاريخ الارسال للسرية»" in line and "1 matched" in line for line in ctx.logs)
+        assert (totals["within"], totals["reminder"], totals["breached"], totals["oldest_minutes"]) == (2, 1, 0, 70)
+        assert result.history_extra["first_breach"] == {}
+        assert any("3 request(s) aged from their last «اسناد لمستخدم السرية»: 1 from the status history, 0 re-assigned"
+                   " since an earlier scan, 2 from «تاريخ الارسال للسرية»" in line for line in ctx.logs)
+
+    def test_a_re_assignment_the_scans_see_restarts_the_clock_before_its_history_is_read(self, store):
+        """No status history yet: when a later scan finds the request with another security user, its clock starts at
+        that scan (it moved since the one before), and stays there at the next scans with the same user."""
+        first, _ = run(store, (HEADERS, [row("x", 200, OWNER_A)]))
+        x = by_name(first)["x"]
+        assert (x["clock_from"], x["age_minutes"], x["status"]) == ("sent", 200, schemas.SLA_BREACHED)
+        store.write_snapshot("sla", first.snapshot_data, generated_at=NOW.isoformat(timespec="seconds"))
+        later = NOW + timedelta(minutes=5)
+        moved, _ = run(store, (HEADERS, [row("x", 205, OWNER_B, now=later)]), now=later)
+        x = by_name(moved)["x"]
+        assert (x["security_user"], x["clock_from"], x["clock_at"], x["age_minutes"], x["status"]) == (
+            OWNER_B, "seen", later.isoformat(timespec="seconds"), 0, schemas.SLA_WITHIN)
+        store.write_snapshot("sla", moved.snapshot_data, generated_at=later.isoformat(timespec="seconds"))
+        after = later + timedelta(minutes=70)
+        still, _ = run(store, (HEADERS, [row("x", 275, OWNER_B, now=after)]), now=after)
+        x = by_name(still)["x"]
+        assert (x["clock_from"], x["age_minutes"], x["status"]) == ("seen", 70, schemas.SLA_REMINDER)
 
     def test_third_party_requests_are_left_out_of_the_live_sla(self, store):
         """As before: a request of a Third Party application is not in the live SLA - not in its list, totals, alerts

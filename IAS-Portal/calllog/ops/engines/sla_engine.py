@@ -2,7 +2,9 @@
 
 It logs in to the SSO portal with the PC's Edge / Chrome, opens the "User Provisioning Portal - موظف اسناد - مستخدم السرية" package,
 jumps to the Re-Assign page, reads the requests table (plain tables with paging and DataTables through their API), and
-measures the age of every request since "تاريخ الارسال للسرية". Entry point (docs/HUB-DESIGN.md sections 5.1, 6, 12):
+measures the age of every request since its LAST assignment to the security user holding it (``clock_requests``: a
+re-assignment restarts the clock; «تاريخ الارسال للسرية» when it was never re-assigned). Entry point
+(docs/HUB-DESIGN.md sections 5.1, 6, 12):
 
     run(ctx, scraper=None) -> JobResult     what the runner calls; ``scraper(ctx) -> (headers, rows)`` replaces the browser in tests
 
@@ -1293,9 +1295,9 @@ def build_table(headers, rows):
 
 
 def note_assignments(ctx, cfg, requests, secrets=()):
-    """Note on each live request when it was first given to a security user, from the SLA history
-    (``sla_history.note_assignments``: ``assigned_at``, ``holder_since``) - shown next to the age, never its clock: the
-    live SLA runs from «تاريخ الارسال للسرية» (``analyze``). A missing or broken recording notes nothing."""
+    """Note on each live request its assignments from the SLA history (``sla_history.note_assignments``:
+    ``assigned_at`` the first, ``holder_since`` / ``last_assigned_at`` the last one, to the user holding it now - the
+    clock of ``clock_requests``). A missing or broken recording notes nothing."""
     from .. import sla_history, sla_records
     try:
         rules = sla_records.clean_config((ctx.store.read_sla_records() or {}).get("config"))
@@ -1305,12 +1307,45 @@ def note_assignments(ctx, cfg, requests, secrets=()):
         open_records = {}
         ctx.log(f"SLA history could not be read for the assignment times: {type(exc).__name__}: "
                 f"{scrub(str(exc), secrets)}")
-    matched = sla_history.note_assignments(requests, open_records)
-    if requests:
-        ctx.log(f"{len(requests)} request(s) aged from «تاريخ الارسال للسرية» (reminder from "
-                f"{fmt_hours(int(cfg['warning_minutes']))}, breached from {fmt_hours(int(cfg['breach_minutes']))}); "
-                f"{matched} matched to their first «اسناد لمستخدم السرية» (shown, not counted)")
-    return matched
+    return sla_history.note_assignments(requests, open_records)
+
+
+def clock_requests(requests, previous, now, cfg):
+    """Start each live request's SLA clock at its LAST «اسناد لمستخدم السرية» - when the security user holding it
+    now got it (the owner's rule: a re-assignment restarts the clock):
+
+    * ``assignment`` - the status history's assignment to that user (``last_assigned_at``, exact);
+    * ``seen`` - not read yet, but the scans saw it move to that user (at the previous scan it was with someone else):
+      the scan that first saw it with them (``holder_seen_at``, carried from scan to scan);
+    * ``sent`` - otherwise «تاريخ الارسال للسرية» on the Re-Assign page (never re-assigned as far as the scans know:
+      its first assignment is its last).
+
+    Sets ``clock_at``, ``clock_from``, ``holder_seen_at``, ``age_minutes`` and ``status``, oldest first again.
+    ``previous`` = the requests of the last snapshot. Returns {source: count}."""
+    warn, breach = int(cfg["warning_minutes"]), int(cfg["breach_minutes"])
+    before = {r.get("key"): r for r in previous or [] if isinstance(r, dict)}
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%S")
+    counts = {"assignment": 0, "seen": 0, "sent": 0}
+    for r in requests:
+        prev = before.get(r["key"])
+        if prev is None:
+            seen = None                                  # first sighting: nothing watched yet
+        elif norm(prev.get("security_user")) == norm(r["security_user"]):
+            seen = prev.get("holder_seen_at")            # the same user: what the scans saw before still holds
+        else:
+            seen = stamp                                 # moved to this user since the last scan
+        r["holder_seen_at"] = seen
+        start, source = parse_time_iso(r.get("last_assigned_at")), "assignment"
+        if start is None and seen:
+            start, source = parse_time_iso(seen), "seen"
+        if start is None:
+            start, source = r.get("_sent"), "sent"
+        age = None if start is None else max(0, round((now - start).total_seconds() / 60))
+        r.update(clock_at=start.isoformat(timespec="seconds") if start else None, clock_from=source,
+                 age_minutes=age, status=status_of(age, warn, breach))
+        counts[source] += 1
+    requests.sort(key=lambda r: (r["age_minutes"] is None, -(r["age_minutes"] or 0)))
+    return counts
 
 
 def parse_time_iso(stamp):
@@ -1476,10 +1511,10 @@ def build_workbook(columns, requests, by_user):
 
     first = ["SECURITY_USER", "SENT_AT", "ASSIGNED_AT", "AGE_MIN", "AGE", "SLA_STATUS"]
 
-    def request_row(r):
+    def request_row(r):                               # ASSIGNED_AT: the last assignment, the age's clock (when known)
         sent = r["_sent"].strftime("%d/%m/%Y %H:%M") if r["_sent"] else ""
-        first = parse_time_iso(r.get("assigned_at"))
-        assigned = first.strftime("%d/%m/%Y %H:%M") if first else ""
+        last = parse_time_iso(r.get("clock_at")) if r.get("clock_from") in ("assignment", "seen") else None
+        assigned = last.strftime("%d/%m/%Y %H:%M") if last else ""
         return [r["security_user"], sent, assigned, r["age_minutes"], fmt_age(r["age_minutes"]), LABELS[r["status"]],
                 *r["_cells"]]
 
@@ -2020,6 +2055,15 @@ def run(ctx, scraper=None):
         except Exception as exc:
             ctx.log(f"SLA history could not be recorded: {type(exc).__name__}: {scrub(str(exc), secrets)}")
     note_assignments(ctx, cfg, requests, secrets)
+    previous = []
+    with suppress(Exception):                             # the last scan: who held each request then
+        previous = ((ctx.store.read_snapshot("sla") or {}).get("data") or {}).get("requests") or []
+    clock = clock_requests(requests, previous, now, cfg)
+    if requests:
+        ctx.log(f"{len(requests)} request(s) aged from their last «اسناد لمستخدم السرية»: {clock['assignment']} from "
+                f"the status history, {clock['seen']} re-assigned since an earlier scan, {clock['sent']} from «تاريخ "
+                f"الارسال للسرية» (reminder from {fmt_hours(int(cfg['warning_minutes']))}, breached from "
+                f"{fmt_hours(int(cfg['breach_minutes']))})")
     if sink and not ctx.dry_run:                          # today's numbers kept for the day-by-day view
         try:
             from .. import performance

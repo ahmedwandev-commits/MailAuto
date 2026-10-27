@@ -318,13 +318,14 @@
     if (!s.requests.length) return OPS.card("My tickets", {}, tiles, OPS.emptyState({ title: "Nothing waiting for you", icon: "check", text: "No ticket is open under your name." }));
     const rows = s.requests.map((r) => {
       const fields = r.fields || {};
-      const since = r.sent_at;                           // «تاريخ الارسال للسرية»: the live SLA's clock
+      const since = r.clock_at || r.sent_at;             // the live SLA's clock: the last assignment to you
       return h("tr", { "data-sent": since || "" },
         h("td", {}, OPS.statusChip(r.status)),
-        h("td", { class: "nowrap my-age", "data-age": "", "data-since": "sent",
-          title: "Since it was sent to the security team («تاريخ الارسال للسرية»)"
-            + (r.assigned_at ? "; first assigned " + r.assigned_at.slice(11, 16) : "")
-            + (r.holder_since ? ", with you since " + r.holder_since.slice(11, 16) : "") },
+        h("td", { class: "nowrap my-age", "data-age": "", "data-since": r.clock_from || "sent",
+          title: (r.clock_from === "assignment" ? "Since it was assigned to you (" + (since || "").slice(11, 16) + ")"
+            : r.clock_from === "seen" ? "Since it moved to you (about " + (since || "").slice(11, 16) + ")"
+              : "Since it was sent to the security team («تاريخ الارسال للسرية»)")
+            + (r.assigned_at && r.assigned_at !== since ? "; first assigned " + r.assigned_at.slice(11, 16) : "") },
         OPS.fmtDuration(liveMinutes(since, r.age_minutes))),
         ...["اسم الموظف", "النظام", "نوع الطلب"].map((k) => h("td", { dir: "auto" }, bidi(fields[k] || "—"))));
     });

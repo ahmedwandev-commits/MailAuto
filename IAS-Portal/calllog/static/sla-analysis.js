@@ -172,7 +172,7 @@
   function glanceTimes(d) {
     const T = (d.glance || {}).times || {};
     const rows = [["execution", "Execution", "assignment → «تم التنفيذ» / «لم يتم التنفيذ» / «رفض»"],
-      ["confirmation", "Confirmation", "execution → «تم التعزيز»"], ["whole", "Whole request", "first assignment → «تم التعزيز»"]];
+      ["confirmation", "Confirmation", "execution → «تم التعزيز»"], ["whole", "Whole request", "last assignment → «تم التعزيز»"]];
     const body = rows.map(([k, label, what]) => { const t = T[k] || {};
       return h("tr", { "data-time": k }, h("th", { scope: "row" }, label, h("span", { class: "hint", dir: "auto" }, ` · ${what}`)),
         h("td", { class: "num" }, fmtNum(t.n || 0)), h("td", { class: "num" }, fmtMin(t.average_minutes)), h("td", { class: "num" }, fmtMin(t.median_minutes)),

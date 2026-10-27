@@ -99,7 +99,7 @@
     STEPS.forEach(([k]) => { st[k] = area(c.statuses[k]); });
     const field = (label, ctrl, hint) => h("label", { class: "op-field sx-cfg-field" }, h("span", {}, label), ctrl, hint ? h("span", { class: "hint" }, hint) : null);
     const body = h("div", { class: "sx-cfg" },
-      field("SLA target (hours)", hours, "first assignment → the reviewer's confirmation"),
+      field("SLA target (hours)", hours, "the last assignment to a security user → the reviewer's confirmation"),
       field("Keep closed requests (days)", retention, "0 = keep forever"),
       field("Max records kept", cap, "oldest closed requests are dropped past this"),
       h("h4", { class: "sx-cfg-h" }, "Stage targets (minutes) — green on target, amber up to 1.5×, red beyond"),

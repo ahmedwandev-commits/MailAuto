@@ -31,7 +31,7 @@ DEFAULT_MAX_RECORDS = 100000         # cap the JSON store; oldest CLOSED request
 DEFAULT_RETENTION_DAYS = 365         # drop CLOSED requests older than this (open/awaiting are always kept)
 _FMT = "%Y-%m-%dT%H:%M:%S"
 
-# The target of each stage of a request's life, in minutes (the SLA itself - first assignment -> confirmation - is
+# The target of each stage of a request's life, in minutes (the SLA itself - the last assignment -> confirmation - is
 # ``sla_minutes``). Defaults = the targets the bank's own lifecycle tool was set to.
 STAGE_TARGET_KEYS = ("branch", "region", "pickup", "work", "review", "lifetime")
 DEFAULT_STAGE_TARGETS = {"branch": 30, "region": 60, "pickup": 20, "work": 30, "review": 30, "lifetime": 1440}

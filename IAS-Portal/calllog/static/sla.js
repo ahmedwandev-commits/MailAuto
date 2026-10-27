@@ -3,8 +3,9 @@
 
    Reads GET /api/ops/sla (the last good scan + collector health) every 15 s with ?since=, so an unchanged scan costs
    almost nothing, and draws: KPI tiles, a per-security-user table, the request list (filters, sorting, paging) and
-   today's timeline. Ages tick live between scans from "sent_at" («تاريخ الارسال للسرية», like the owner's
-   sla_monitor.py) and the server clock. "Run scan now" asks the
+   today's timeline. Ages tick live between scans from "clock_at" - the LAST «اسناد لمستخدم السرية», to the user
+   holding the request now (a re-assignment restarts it; «تاريخ الارسال للسرية» when it was never re-assigned) - and
+   the server clock. "Run scan now" asks the
    collector for a scan and waits (visibly, with a time limit) until a newer scan appears.
 
    Every scraped text goes in with textContent (CL.h) - never innerHTML - and Arabic text carries dir="auto". */
@@ -79,10 +80,10 @@
   }
   const fmtLimit = (min) => (min && min % 60 === 0 ? `${min / 60} h` : `${min} min`);
 
-  /** The request's age, counted now from «تاريخ الارسال للسرية» ("sent_at"), like the owner's sla_monitor.py (null
-      without a sent date). */
+  /** The request's age, counted now from its last assignment to the user holding it ("clock_at"; a scan written
+      before it: "sent_at", «تاريخ الارسال للسرية») - null without a date. */
   function ageOf(r) {
-    const t = r._t === undefined ? (r._t = naiveMs(r.sent_at)) : r._t;
+    const t = r._t === undefined ? (r._t = naiveMs(r.clock_at || r.sent_at)) : r._t;
     if (t == null) return null;
     return Math.max(0, Math.floor((serverNow() - t) / 60000));
   }
@@ -324,18 +325,21 @@
     return now === "breached" ? `now over ${fmtLimit(limits().breach)}` : `now over ${fmtLimit(limits().warn)}`;
   }
 
-  /** The clock of the age: "sent 09:30" (the Re-Assign page's «تاريخ الارسال للسرية»); for information also
-      "· assigned 09:40" (the first «اسناد لمستخدم السرية», from the SLA history) and, after a re-assignment,
-      "· this user since 10:15". */
+  /** The clock of the age - the last assignment to the user holding it: "with this user since 10:15" (the status
+      history), "moved to this user ~10:15" (a re-assignment the scans saw) or "sent 09:30" («تاريخ الارسال للسرية»:
+      never re-assigned); then, for information, the sent date and the first assignment when they differ. */
   function sinceText(r) {
     const today = state.snap.generated_at.slice(0, 10);
     const when = (s) => (s.slice(0, 10) === today ? hhmm(s) : `${s.slice(8, 10)}/${s.slice(5, 7)} ${hhmm(s)}`);
-    return [r.sent_at ? `sent ${when(r.sent_at)}` : "no sent date",
-            r.assigned_at ? `assigned ${when(r.assigned_at)}` : "",
-            r.holder_since ? `this user since ${when(r.holder_since)}` : ""].filter(Boolean).join(" · ");
+    const from = r.clock_at && r.clock_from === "assignment" ? `with this user since ${when(r.clock_at)}`
+      : r.clock_at && r.clock_from === "seen" ? `moved to this user ~${when(r.clock_at)}` : "";
+    return [from, r.sent_at ? `sent ${when(r.sent_at)}` : (from ? "" : "no sent date"),
+            r.assigned_at && r.assigned_at !== r.clock_at ? `first assigned ${when(r.assigned_at)}` : ""]
+      .filter(Boolean).join(" · ");
   }
-  const sinceTitle = (r) => "Age from «تاريخ الارسال للسرية»: reminder from " + fmtLimit(limits().warn) + ", breached from "
-    + fmtLimit(limits().breach) + (r.assigned_at ? "; the first «اسناد لمستخدم السرية» is shown for information" : "");
+  const sinceTitle = (r) => "Age from the last «اسناد لمستخدم السرية» (a re-assignment restarts it; «تاريخ الارسال للسرية» "
+    + "when it was never re-assigned): reminder from " + fmtLimit(limits().warn) + ", breached from " + fmtLimit(limits().breach)
+    + (r.clock_from === "seen" ? ". Moved to this user since an earlier scan: its status history is read at the next scans" : "");
 
   function requestRow(r, cols) {
     const cue = cueText(r);
@@ -343,7 +347,7 @@
       h("td", { class: "sx-status" }, chip(r.status), h("span", { class: "sx-cue hint", "data-cue": "" }, cue)),
       h("td", { class: "sx-who" }, bidi(r.security_user)),
       h("td", { class: "sx-age nowrap" }, h("strong", { "data-age": "" }, fmtAge(ageOf(r))),
-        h("span", { class: "hint", "data-since": "sent", title: sinceTitle(r) }, sinceText(r))),
+        h("span", { class: "hint", "data-since": r.clock_from || "sent", title: sinceTitle(r) }, sinceText(r))),
       ...cols.map((c) => h("td", { class: "sx-field" }, (r.fields || {})[c] ? bidi(r.fields[c]) : h("span", { class: "sx-none" }, "—"))));
     tr._req = r;
     return tr;

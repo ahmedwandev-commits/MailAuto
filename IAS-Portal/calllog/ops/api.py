@@ -288,14 +288,15 @@ def email_headline(stats):
 
 
 def sla_since(r):
-    """The clock of an open request's live SLA: «تاريخ الارسال للسرية» on the Re-Assign page (``sent_at``), like the
-    owner's sla_monitor.py. Its first assignment (``assigned_at``) is shown, never counted."""
-    return (r or {}).get("sent_at")
+    """The clock of an open request's live SLA: its LAST «اسناد لمستخدم السرية», to the user holding it now
+    (``clock_at``, sla_engine.clock_requests); a snapshot written before it: «تاريخ الارسال للسرية» (``sent_at``)."""
+    return (r or {}).get("clock_at") or (r or {}).get("sent_at")
 
 
 def sla_oldest_now(requests):
-    """Minutes the oldest open request has been waiting NOW (from «تاريخ الارسال للسرية»), the way the Live tickets
-    tab counts it - not the age frozen at the last scan. None when no request has a date (pages show "—")."""
+    """Minutes the oldest open request has been waiting NOW (from its last assignment, ``sla_since``), the way the
+    Live tickets tab counts it - not the age frozen at the last scan. None when no request has a date (pages show
+    "—")."""
     now, ages = auth.now(), []
     for r in requests or []:
         try:
@@ -667,7 +668,8 @@ def my_sla(user):
     return {**empty, "available": True, "updated_at": snap.get("generated_at"),
             "thresholds": (snap.get("data") or {}).get("thresholds") or {}, "totals": totals,
             "requests": [{"key": r.get("key", ""), "sent_at": r.get("sent_at"), "assigned_at": r.get("assigned_at"),
-                          "holder_since": r.get("holder_since"), "age_minutes": r.get("age_minutes"),
+                          "holder_since": r.get("holder_since"), "clock_at": sla_since(r),
+                          "clock_from": r.get("clock_from") or "sent", "age_minutes": r.get("age_minutes"),
                           "status": r.get("status"), "fields": r.get("fields") or {}}
                          for r in mine[:_MAX_LIST]]}
 

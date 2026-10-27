@@ -38,14 +38,15 @@ _RANK["confirmed_not"] = _RANK["confirmed_executed"]
 _RANK["not_executed"] = _RANK["executed"]
 _RANK["transferred"] = _RANK["region_approved"]
 
-# the stages of a request's life the analysis times (minutes), in journey order; "sla" is THE SLA (first assignment ->
-# the reviewer's confirmation, target ``sla_minutes``); the others have their own targets (``stage_targets``)
+# the stages of a request's life the analysis times (minutes), in journey order; "sla" is THE SLA (the LAST assignment
+# to a security user -> the reviewer's confirmation: a re-assignment restarts it - the owner's rule; target
+# ``sla_minutes``); the others have their own targets (``stage_targets``)
 STAGES = (("branch", "Branch approval", "registered_at", "branch_confirmed_at"),
           ("region", "Region / sector approval", "branch_confirmed_at", "region_approved_at"),
           ("pickup", "Waiting to be assigned", "pool_at", "first_assigned_at"),
           ("work", "Security user (assignment → execution)", "assigned_at", "executed_at"),
           ("review", "Reviewer (execution → confirmation)", "executed_at", "confirmed_at"),
-          ("sla", "SLA (first assignment → confirmation)", "first_assigned_at", "confirmed_at"),
+          ("sla", "SLA (last assignment → confirmation)", "assigned_at", "confirmed_at"),
           ("lifetime", "Whole request (registration → confirmation)", "registered_at", "confirmed_at"))
 JOURNEY = ("branch", "region", "pickup", "work", "review")        # the hand-offs that add up to a request's lifetime
 
@@ -698,10 +699,10 @@ def fold_history(records, index, items, cfg, now, system_team=None):
 def right_now(grid, open_records, index, cfg, now, keep=None, live=None):
     """What is open / awaiting the reviewer RIGHT NOW: every request the latest inquiry grid lists (read or not), plus
     every live ticket of the Re-Assign page the grid does not list (``live``: the Live tickets tab's requests, already
-    limited to the viewer) - so the open count is complete. A request's age counts from its FIRST «اسناد لمستخدم
-    السرية» (the analysis rule; the Live tickets tab's SLA runs from «تاريخ الارسال للسرية»); ``holder_minutes`` = since
-    the security user holding it got it. Ages come from the exact history; a request whose history is not read yet has
-    none ("not read yet") - never a guess. The stage is taken from the CURRENT status with the current rules.
+    limited to the viewer) - so the open count is complete. A request's age counts from its LAST «اسناد لمستخدم
+    السرية» - when the security user holding it now got it (a re-assignment restarts the clock, like the Live tickets
+    tab); ``holder_minutes`` is the same clock. Ages come from the exact history; a request whose history is not read
+    yet, or not since it moved to its new holder, has none ("not read yet") - never the previous holder's time. The stage is taken from the CURRENT status with the current rules.
     ``keep(row)`` narrows the rows (team, person, exclusions)."""
     sla = int((cfg or {}).get("sla_minutes") or 180)
     open_now, awaiting_now, pre = [], [], 0
@@ -718,7 +719,7 @@ def right_now(grid, open_records, index, cfg, now, keep=None, live=None):
         same = (bool(rec) and stage_of(rec) == stage
                 and ("holder" not in entry or _norm(entry.get("holder")) == _norm(g.get("holder"))))
         first = (rec.get("first_assigned_at") or rec.get("assigned_at")) if rec and stage_of(rec) in ("open", "awaiting") else ""
-        request_m = _since(first, now)
+        request_m = _since(rec.get("assigned_at"), now) if same and stage_of(rec) in ("open", "awaiting") else None
         if stage == "pre":
             pre += 1
         elif stage == "open":
@@ -746,12 +747,14 @@ def right_now(grid, open_records, index, cfg, now, keep=None, live=None):
     for req in _live_unlisted(live, open_keys):          # on the Re-Assign page, not (yet) on the inquiry grid
         live_only += 1
         fields = req.get("fields") or {}
-        first = req.get("assigned_at") or ""             # the request's age in the analysis: from its first assignment
-        m = _minutes(first, now) if first else None
+        first = req.get("assigned_at") or ""
+        start = req.get("clock_at") or req.get("sent_at") or ""   # the Live tab's clock: the last assignment
+        m = _minutes(start, now) if start else None
         open_now.append({"id": "", "holder": req.get("security_user") or "",
                          "system": _field(fields, "النظام"), "requester": _field(fields, "اسم الموظف"),
                          "request_type": _field(fields, "نوع الطلب"), "first_assigned_at": first or "",
-                         "assigned_at": req.get("holder_since") or first or "", "sent_at": req.get("sent_at") or "",
+                         "assigned_at": req.get("last_assigned_at") or req.get("holder_seen_at") or "",
+                         "sent_at": req.get("sent_at") or "",
                          "minutes": round(m, 1) if m is not None else None, "holder_minutes": None, "on_hold": False,
                          "breached": m is not None and m > sla, "status": "", "source": "live"})
     holders = {}
@@ -906,7 +909,8 @@ def status_numbers(grid, records, cfg, date_from, date_to, live=None, live_team=
       security user;
     * ``now`` = the Live tickets (the Re-Assign page) - with a security user right now, whatever their date;
     * ``times`` - execution (assignment → executed / not executed / rejected), confirmation (execution → «تم
-      التعزيز»), whole request (first assignment → «تم التعزيز») of the period's requests whose status history is read;
+      التعزيز»), whole request (assignment → «تم التعزيز») of the period's requests whose status history is read - from
+      the LAST «اسناد لمستخدم السرية» (a re-assignment restarts the clock);
     * ``hours`` - when they came (first assignment) and were done (executed / rejected) and confirmed, hour by hour,
       from the read histories; ``untimed`` = the ones whose hour is not read yet;
     * ``by_team`` / ``by_person`` - the same numbers per team and per security user (a rejection counts for the
@@ -978,7 +982,7 @@ def status_numbers(grid, records, cfg, date_from, date_to, live=None, live_team=
             hour(r.get("confirmed_at"), "confirmed")
             if r.get("executed_at"):
                 confirm_m.append(_minutes(r.get("executed_at"), r.get("confirmed_at")))
-            whole_m.append(_minutes(first, r.get("confirmed_at")))
+            whole_m.append(_minutes(r.get("assigned_at") or first, r.get("confirmed_at")))
     for req in live or []:                               # with a security user right now (the Live tab)
         bump((live_team or (lambda x: ""))(req), req.get("security_user"), "now")
     out = _status_out(total, targets.get("work"))
@@ -1045,11 +1049,11 @@ def _stamp_sort(stamp):
 
 
 def note_assignments(requests, open_records):
-    """Note on every live request when it was FIRST given to a security user (``match_live_requests``): sets
-    ``assigned_at`` (that first «اسناد لمستخدم السرية») and ``holder_since`` (when the security user holding it now got
-    it, if later - a re-assignment), None when the history has not read the request. For information only: the live
-    SLA (``age_minutes`` / ``status``) runs from «تاريخ الارسال للسرية» on the Re-Assign page, like the owner's
-    sla_monitor.py, and is never changed here. Returns how many were matched."""
+    """Note on every live request its assignments from the status history (``match_live_requests``): ``assigned_at``
+    (the FIRST «اسناد لمستخدم السرية», shown), ``holder_since`` (when the security user holding it now got it, if later
+    - a re-assignment) and ``last_assigned_at`` (the LAST assignment, to the security user holding it now: the live
+    SLA's clock - ``sla_engine.clock_requests``); None when the history has not read the request, or read it with
+    another holder. Returns how many were matched."""
     matched = match_live_requests(requests, open_records)
     for r in requests or []:
         rec = matched.get(r.get("key"))
@@ -1057,6 +1061,8 @@ def note_assignments(requests, open_records):
         holder = parse_time(rec.get("assigned_at")) if rec else None
         r["assigned_at"] = start.strftime(_FMT) if start is not None else None
         r["holder_since"] = holder.strftime(_FMT) if holder is not None and start is not None and holder > start else None
+        same = bool(rec) and _norm(rec.get("holder")) == _norm(r.get("security_user"))
+        r["last_assigned_at"] = holder.strftime(_FMT) if holder is not None and same else None
     return len(matched)
 
 
@@ -1299,7 +1305,7 @@ def hourly(recs, period=None):
 def analyze(records, cfg, now=None, list_limit=REQUEST_LIST_LIMIT, period=None):
     """The SLA Analysis from the live, exact history: where the requests stand (pre / open / awaiting / closed), the
     SECURITY USER's clock (assignment -> execution, by مستخدم السرية), the REVIEWER's clock (execution -> confirmation,
-    by مراجع السرية), the full clock (first assignment -> confirmation, judged by the SLA target), time on hold, the
+    by مراجع السرية), the full clock (the last assignment -> confirmation, judged by the SLA target), time on hold, the
     wait before the security team got it, who assigned, and by team / system / day. A ``now`` (ISO) ages what is still
     open. Only history-sourced records are used: no guess, no upload."""
     sla = int((cfg or {}).get("sla_minutes") or 180)
@@ -1370,9 +1376,9 @@ def analyze(records, cfg, now=None, list_limit=REQUEST_LIST_LIMIT, period=None):
             first_day = day if first_day is None or day < first_day else first_day
             last_day = day if last_day is None or day > last_day else last_day
         # the request's line in the period's list, and what needs a look (worst first)
-        live = None                                       # the whole request so far: from its first assignment
-        if now and stage in ("open", "awaiting") and first:
-            live = _minutes(first, now)
+        live = None                                       # the request so far: from its last assignment
+        if now and stage in ("open", "awaiting") and (assigned or first):
+            live = _minutes(assigned or first, now)
         worst = max(((k, v / targets[k]) for k, v in mins.items() if v is not None and k in JOURNEY and targets.get(k)),
                     key=lambda kv: kv[1], default=(None, 0))
         line = {"id": "" if unread else r.get("id"), "unread": unread, "stage": stage, "outcome": result,

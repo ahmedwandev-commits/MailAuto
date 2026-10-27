@@ -619,30 +619,35 @@ def test_sla_ages_follow_the_server_clock_between_scans(tab, hub, clock):
     t.clean()
 
 
-def test_a_live_ticket_is_aged_from_its_sent_date_and_shows_its_first_assignment(ops, tab, hub, clock):
-    """Like the owner's sla_monitor.py, the live age counts from «تاريخ الارسال للسرية» (k003: 125 minutes ago, breached
-    at 2 h), even when the SLA history knows it was first assigned 20 minutes ago: that and since when the user holding
-    it now has it (re-assigned 10 minutes ago) are shown next to the age, for information."""
+def test_a_live_ticket_is_aged_from_its_last_assignment_and_shows_where_its_clock_starts(ops, tab, hub, clock):
+    """The owner's rule: the live age counts from the LAST «اسناد لمستخدم السرية», to the user holding it now (k003:
+    sent 125 minutes ago, first assigned 20 minutes ago, re-assigned to this user 10 minutes ago: 10 minutes, within);
+    the sent date and the first assignment are shown for information. A ticket never re-assigned counts from
+    «تاريخ الارسال للسرية» (k004); one the scans saw move says "moved to this user ~"."""
     snap = sla_snapshot()
     k003 = next(r for r in snap["requests"] if r["key"] == "k003")
-    k003.update(assigned_at=iso(NOW - dt.timedelta(minutes=20)), holder_since=iso(NOW - dt.timedelta(minutes=10)))
+    k003.update(assigned_at=iso(NOW - dt.timedelta(minutes=20)), holder_since=iso(NOW - dt.timedelta(minutes=10)),
+                clock_at=iso(NOW - dt.timedelta(minutes=10)), clock_from="assignment", age_minutes=10, status="within")
+    k004 = next(r for r in snap["requests"] if r["key"] == "k004")
+    k004.update(clock_at=k004["sent_at"], clock_from="sent")
     write_sla(ops, snap)
     t = tab()
     page = t.open("/sla", ".sx-requests tbody tr")
+    sizes = page.locator('select[aria-label="Rows per page"] option').all_inner_texts()
+    page.select_option('select[aria-label="Rows per page"]', sizes[-1])           # 10 minutes: no longer on page 1
     row = lambda key: page.locator(f'.sx-requests tr[data-key="{key}"]')
-    assert row("k003").locator("[data-age]").inner_text() == "2 h 05 min"
-    assert row("k003").get_attribute("data-status") == "breached"
+    assert row("k003").locator("[data-age]").inner_text() == "10 min"
+    assert row("k003").get_attribute("data-status") == "within"
     since = row("k003").locator("[data-since]")
-    assert since.get_attribute("data-since") == "sent"
-    assert since.inner_text() == "sent 06:55 · assigned 08:40 · this user since 08:50"
+    assert since.get_attribute("data-since") == "assignment"
+    assert since.inner_text() == "with this user since 08:50 · sent 06:55 · first assigned 08:40"
     title = since.get_attribute("title")
-    assert "«تاريخ الارسال للسرية»" in title and "reminder from 1 h, breached from 2 h" in title
-    assert "shown for information" in title
+    assert "Age from the last «اسناد لمستخدم السرية»" in title and "reminder from 1 h, breached from 2 h" in title
     other = row("k004").locator("[data-since]")
     assert other.get_attribute("data-since") == "sent" and other.inner_text() == "sent 07:02"
     clock.advance(minutes=3)
     t.poll_now()
-    expect(row("k003").locator("[data-age]")).to_have_text("2 h 08 min")
+    expect(row("k003").locator("[data-age]")).to_have_text("13 min")
     t.clean()
 
 

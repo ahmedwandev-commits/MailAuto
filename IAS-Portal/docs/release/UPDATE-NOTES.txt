@@ -378,6 +378,17 @@ HOW TO UPDATE (your data is kept)
      and press Run now. Outlook does not give back memory it ran out of until it is restarted; this update keeps the
      e-mail report from filling it again.
 
+35. THE SLA COUNTS FROM THE LAST ASSIGNMENT TO THE SECURITY USER
+   - Everywhere - the Live tab, Home, My tickets, the reminder / breach e-mail and its Excel, the SLA Analysis and the
+     daily summary - a request's SLA now counts from its LAST «اسناد لمستخدم السرية»: when the security user holding
+     it now got it. A request re-assigned to someone else starts again from that re-assignment.
+   - Where the time comes from, best first: the request's status history (the exact time it was assigned to this
+     user); if that is not read yet but a scan saw the request move to this user, the scan that first saw it with
+     them ("moved to this user ~10:15"); otherwise «تاريخ الارسال للسرية» (a request never re-assigned).
+   - The Live tab says it for every request: "with this user since 10:15 · sent 09:30 · first assigned 09:40".
+   - In the SLA Analysis, a request re-assigned whose new assignment is not read yet shows "not read yet" until the
+     next scans read it - never the previous person's time.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -691,3 +702,14 @@ IAS PORTAL - الجديد في هذا التحديث
      Outlook الـ 32-bit مبيعديش 2,000 MB كتير).
    - تعمل إيه لو فضلت: اقفل الـ Outlook خالص - في الـ Task Manager مايفضلش أي OUTLOOK.EXE - وافتحه تاني واضغط Run now.
      الـ Outlook مبيرجعش الـ memory اللي خلصت إلا لما يتقفل ويتفتح؛ والتحديث ده بيمنع تقرير الإيميل إنه يملاها تاني.
+
+35. الـ SLA بقى بيتحسب من آخر إسناد لمستخدم السرية
+   - في كل مكان - تاب الـ Live، والـ Home، و My tickets، وإيميل الـ reminder / breach والـ Excel بتاعه، والـ SLA Analysis،
+     والملخص اليومي - الـ SLA بتاع الطلب بقى بيتحسب من آخر «اسناد لمستخدم السرية»: إمتى مستخدم السرية اللي معاه الطلب
+     دلوقتي استلمه. والطلب اللي يتعمله re-assign لحد تاني بيبدأ من جديد من وقت الـ re-assign.
+   - الوقت بيتاخد من (الأدق الأول): الحالة التاريخية للطلب (وقت الإسناد للمستخدم ده بالظبط)؛ ولو لسه ما اتقرتش بس الـ
+     scan شاف الطلب اتنقل للمستخدم ده، يبقى من أول scan شافه معاه ("moved to this user ~10:15")؛ وغير كده من «تاريخ
+     الارسال للسرية» (طلب ما اتنقلش لحد تاني).
+   - تاب الـ Live بيقول ده لكل طلب: "with this user since 10:15 · sent 09:30 · first assigned 09:40".
+   - في الـ SLA Analysis، الطلب اللي اتنقل ولسه الإسناد الجديد ما اتقراش بيظهر "not read yet" لحد ما الـ scans الجاية
+     تقراه - عمره ما بيتحسب بوقت الشخص اللي كان معاه قبل كده.
