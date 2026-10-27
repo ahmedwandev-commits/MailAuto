@@ -1,0 +1,947 @@
+IAS PORTAL - WHAT IS NEW IN THIS UPDATE
+=======================================
+
+HOW TO UPDATE (your data is kept)
+  1. Stop the web server (run.py) and the collector (collector.py).
+  2. Copy everything inside "program" over the old program folder. Do NOT delete the data folder or
+     .secret_key - they stay as they are, with all the old data.
+  3. collector_config.json: KEEP YOUR OWN - this ZIP does not carry one, so copying "program" over the
+     old folder never touches it. (A new PC: copy collector_config.example.json to
+     collector_config.json, type the user names and passwords, save.) Then check it:
+     python collector.py --check
+  4. Start run.py and collector.py again (the collector must be restarted).
+
+1. SLA ANALYSIS - LIVE, EXACT, NOTHING TO UPLOAD (now Insights > Analysis > SLA - see 14)
+   - At every scan the collector opens «الاستفسار عن الطلبات» and, for each request that is new or
+     whose status changed, «تفاصيل الطلب» > «الحالة التاريخية للطلب». It records who assigned,
+     executed and confirmed each request, with their employee number, and the exact time of each step.
+   - SLA = first assignment («اسناد لمستخدم السرية») -> the reviewer's confirmation («تم التعزيز»).
+   - Right now: open with a security user, awaiting the reviewer, past the SLA, on hold.
+   - Period (date filter, default today): closed, within SLA, executed / not executed, hold time,
+     security-user clock, reviewer clock, by hour, by day, by person (with employee number), team,
+     assigner, system. History is kept per day for the retention you set.
+   - Settings: System > Settings > Ticketing > "SLA history" and "SLA recording".
+   - The upload / import buttons are removed.
+
+2. THIRD PARTY LEFT OUT OF THE SLA
+   - Requests of the Third Party team's applications are not counted in the SLA, its e-mails, Home or
+     the SLA Analysis. System > Settings > Ticketing > "Left out of the SLA" (teams and applications).
+
+3. EVERYTHING LINKED BY EMPLOYEE NUMBER
+   - Set each person's "Number in the security portal" (Admin > Users). The SLA history links every
+     step to that account: the employee sees "My SLA" on My work; a manager sees only their team.
+
+4. ANALYSIS PAGE FOR EVERY MODULE (Insights > Analysis - administrators and managers)
+   - Calls, e-mails, tickets and change requests over any period (up to two years): daily trend,
+     by hour of the day, peak hour, busiest weekday and day, weekday x hour heat map, by team, and the
+     change against the previous period. A manager sees only their own team(s).
+   - The number of incoming e-mails is now kept as long-term history (each mail counted once).
+
+5. DAILY SUMMARY E-MAIL (System > Settings > Daily summary)
+   - Today's calls, e-mails, tickets and change requests as one dashboard e-mail.
+   - Recipients (To / Cc), the send times (for example 10:00, 13:00, 15:00) and the active hours /
+     working days are editable. Switch "Send the daily summary" on. "Run now" (System > Collectors)
+     sends it at once.
+
+6. MANAGERS AND E-MAIL
+   - A manager now sees the Unclassified e-mails (E-mail > Unclassified), can open them, file them
+     under a team, assign them to a person of ANY team, mark them "no action", and create rules.
+   - E-mail auto-assign no longer asks for applications: every pending mail of the team is shared
+     between the chosen team members (inside the active window).
+
+7. EMPLOYEES (My work)
+   - On an e-mail assigned to them, an employee can mark "No action" (with the reason) or "Reassign"
+     it to a teammate. The manager and the person who assigned it are notified.
+
+8. PERFORMANCE
+   - The SLA Analysis, the Analysis page and My SLA are computed once per minute per view and shared,
+     so 70 people at the same time read the same prepared numbers.
+
+9. E-MAIL QUALITY (only e-mail replies are rated - calls are never rated)
+   - Every rating shows WHO rated it and when: E-mail > Replied, E-mail > Quality, the mail window and
+     the employee's own "My quality reviews".
+   - E-mail > Quality: filter by employee and by reviewer, a "Rated replies" table (reply, rating,
+     reasons, rated by, appeal), KPIs and appeals for the chosen person.
+   - A team manager NEVER sees another team's replies: on a mail shared by two teams the other team's
+     reply shows only "answered by <team>" - no name, no text, no rating. Only the managers of the
+     team whose member wrote the reply can rate it and decide its appeal.
+   - Insights > Analysis > "E-mail quality": who rated (every manager / administrator, how many,
+     Excellent / Good / Needs improvement), per team how many of the e-mails it received were rated
+     (%), per employee, ratings per day - for any period. A manager sees only their team(s).
+
+10. SLA - CALCULATED FROM THE SSO PORTAL ONLY (Insights > Analysis > SLA)
+   - Every number comes from the SSO portal's own status history (no FlexCube database), read by the
+     collector through Edge / Chrome over cdp.py (no Selenium, no Playwright).
+   - New statuses understood: re-assignment (also the portal's spelling «لمسخدم»), approval above the
+     branch (region / financial sector / Platinum), sent back to the branch («مطلوب تعديل»), rejected,
+     transferred. A re-assignment restarts the security user's clock; the SLA keeps the first one.
+   - Each stage of a request against its own target (green / amber up to 1.5x / red): branch approval,
+     region approval, waiting to be assigned, security user, reviewer, SLA, whole request. Targets:
+     System > Settings > Ticketing > SLA recording.
+   - New: a one-line summary, "Where the time goes" (bottleneck), outcomes (completed / not executed /
+     rejected / in progress, sent back %, re-assigned, exception path), how far requests got (funnel),
+     "Needs attention", by branch, by request type, the list of requests, and a click on any request
+     opens its full timeline (who did what and when, with the notes of a return / rejection).
+   - HOUR BY HOUR - ARRIVED vs FINISHED: for every hour, how many requests reached the security team
+     and how many were finished in that hour, the % (finished / arrived) and how many were finished
+     within the same hour - for all teams together and for each team. Also on Insights > Analysis >
+     Tickets / Change requests. Both pages refresh themselves every minute while today is shown.
+   - New filters: application, branch, request type, outcome, "sent back only". Export: CSV / Excel of
+     every request of the view with the minutes of each stage.
+
+11. THE SLA CONNECTOR IS MUCH FASTER
+   - Each request's details are opened with the portal's own post-back - no mouse clicks, no closing,
+     no re-drawing the table, no fixed waits: about the portal's own response time per request.
+   - The history read has a time budget (System > Settings > Ticketing, default 180 s): whatever was
+     read is always saved and the rest follows at the next scan - a scan is never lost any more.
+   - A request whose details cannot be read is tried twice, then left until its status changes.
+   - The browser starts and closes faster; every scan writes its timing to the log
+     (seconds per request, slowest request, why it stopped).
+
+12. OTHER
+   - After an update every browser loads the new pages at once (no old cached screens).
+   - Fixed: the text of an appeal was invisible in dark mode.
+
+13. THE COLLECTOR ALWAYS STARTS AND RUNS EVERY JOB AT ONCE ("no heartbeat" fixed)
+   - The cause of "no heartbeat yet" in  python collector.py --status : on its first start the collector tried to
+     install the Outlook library (pywin32) from the internet; on a PC without internet the install failed, the
+     collector stopped, the background supervisor started it again, and so on - no job ever ran.
+   - Now it always starts: if pywin32 / keyring cannot be installed it says so and goes on. The SLA and ITSM scans
+     run; the e-mail jobs show "pywin32 is not installed" with the command to install it:
+        python -m pip install -r requirements-collector.txt      (add  --proxy http://PROXY:PORT  if needed)
+     A failed install is not tried again for 12 hours (no waiting for a blocked internet at every start).
+   - EVERY enabled job runs once as soon as the collector starts - also outside working hours - so each one
+     shows its heartbeat and result within seconds; then the normal schedule continues. The e-mail report and
+     the daily summary are only BUILT at start (nothing is e-mailed); a job whose login failed waits for new
+     account details (to protect the account from a lock-out).
+   - --status now explains each job (outside working hours / paused - fix the password / switched off) and shows
+     the last lines of the start-up log.
+
+14. SLA - THE CLOCK STARTS AT «اسناد لمستخدم السرية», EVERY ROW OF THE PORTAL, A NEW PLACE
+   - AGE FROM THE LAST ASSIGNMENT: the Re-Assign page only shows «تاريخ الارسال للسرية» (when the request was
+     sent to the security team) - that is why ages looked like "days with the employee". Each live ticket is
+     now matched to its own status history (رقم المستخدم + النظام + نوع الطلب, the security user holding it
+     first) and aged from the moment it was assigned to THAT security user («اسناد لمستخدم السرية»). Live
+     tickets, My work > My tickets, Home's "Oldest", the Excel and the alert e-mail all count this way and say
+     which clock they use ("assigned 09:30" / "sent 08:00"). Only a request whose history is not read yet
+     still counts from the sent date.
+   - RE-ASSIGNED: a request handed to another security user keeps its status, so its details are now read
+     again when the security user changes; "Right now" never shows the previous holder's clock.
+   - The requests still with a security user have their details read FIRST in every scan.
+   - THE PERIOD IS THE ASSIGNMENT DAY: a request belongs to the day it was first assigned, whatever happened
+     later (closed, open, awaiting the reviewer, rejected) - like the bank's SLA sheet. One closed the next
+     day still counts on its assignment day.
+   - EVERY ROW OF «الاستفسار عن الطلبات» IS READ:
+       . the grid's «Show» is set to its largest choice («All» = 1000 rows) and, when the portal has more,
+         the scan goes on with «التالي» under the grid, page after page; each page is checked against its own
+         «of N records» and the log says how many rows the portal lists;
+       . each row's «التفاصيل» is opened while ITS page is shown (the portal numbers the rows per page);
+       . two rows that look the same (same employee, application and type the same day - the date has no
+         time) are two requests: neither is dropped any more;
+       . the search dates are a date only (21-10-2026), as the portal wants.
+   - Every line of «الحالة التاريخية للطلب» is read (5 a page, sorted by name - the assignment can be on
+     page 2); a history that cannot be read whole is never recorded, it is read again at the next scan.
+   - COMPARED WITH THE PORTAL: a new card with the portal's own numbers for the period's request dates -
+     inquiry rows, with the security team, still with the branch, rejected, status history read, not read
+     yet. Search the same dates on the portal: its number of results should be «Inquiry rows». Third Party is
+     left out, as everywhere in the SLA; a manager sees only their team(s).
+   - NEW PLACE: the whole SLA Analysis is now Insights > Analysis > "SLA". Ticketing keeps the live tickets,
+     with an "SLA Analysis" button. Old links (/sla#analysis, /sla?tab=analysis) open the new place.
+
+15. E-MAIL QUALITY: NEW RATING "VERY GOOD"
+   - A manager now rates a reply Excellent, Very Good, Good or Needs Improvement (E-mail > Replied >
+     Review). Points: Excellent 100, Very Good 90, Good 75, Needs Improvement 25.
+   - "Very good" is counted on its own everywhere: E-mail > Quality (tile, scorecard), Insights > Analysis >
+     E-mail quality (tile, who rated, by employee), My quality reviews, and the end-of-day e-mail (scorecard,
+     team index). Earlier ratings stay as they were.
+
+16. A WELCOME MESSAGE AFTER SIGNING IN
+   - After signing in, a short positive message appears slowly (Arabic and English) before the portal
+     opens: "Good morning / afternoon / evening" with the person's first name, a message for their role
+     (employee, manager or administrator - each role has its own set) and the role itself.
+   - Colleagues get different messages, and each person gets a new one on another day (the same one all
+     day). The portal opens by itself after 7 seconds, or at once on Continue, a click, Enter or Escape.
+   - Shown once per sign-in. A new account first chooses its own password, then sees the message.
+     With "reduce motion" turned on in Windows nothing moves and it waits less.
+
+17. MOVING FROM NBE OPSHUB (the "ready to run" package)
+   - Users, roles, teams, passwords, settings, auto-assign rules, history and the collector settings carry
+     over as they are: the data format is the same, nothing has to be converted.
+   - The ready-to-run package already holds your data folder, .secret_key, collector_config.json and libs.
+     Stop the old run.py and collector.py, then copy everything inside "program" over the old program
+     folder (or into a new folder) and start run.py and collector.py. Everyone signs in with the same
+     user ID and password as before.
+   - If the old version was used after the copy in the package was taken, copy your newest "data" folder
+     over the one from the package before the first start.
+   - The program drives Edge / Chrome over the DevTools protocol only (cdp.py): no Selenium, no Playwright.
+     tools\shots_hub.py (a developer screenshot tool) is no longer shipped - delete it if the old folder has it.
+
+18. AUTO ASSIGN: "MAX PER RUN" - HOW MANY REQUESTS EACH RUN ASSIGNS
+   - Auto Assign: each team's Ticketing (and E-mail) card has "Max per run" next to "Run every". One run
+     assigns at most that many requests (e-mails), still shared evenly between the rule's employees; the
+     rest wait for the next run. 0 = no limit (as before). Save, then press Run now.
+   - Ticketing: the number counts across every form type of the run; once it is reached the run stops
+     searching. The run log and summary say "max per run reached" and how many wait. A Dry run shows the
+     same limited plan.
+
+19. SLA: THE REQUEST'S AGE, THE EMPLOYEE'S TIME AND COMPLETE NUMBERS
+   - Live tickets, Home, My tickets, the Excel report and the alert e-mail: a request's age now counts from its
+     FIRST «اسناد لمستخدم السرية». After a re-assignment the row also says since when the security user holding
+     it now has it ("this user since 10:15"). A request whose history is not read yet still counts from
+     «تاريخ الارسال للسرية» ("sent").
+   - The security user's time = their «اسناد لمستخدم السرية» -> «تم التنفيذ». «قيد الإجراء» never restarts it any more
+     (the settings brought over from NBE OpsHub listed it as an assignment).
+   - The whole request = the first assignment -> its final state: «تم التعزيز على التنفيذ», «تم التعزيز على عدم
+     التنفيذ», «تم ارسال الرد» / «تم تسليم الرد», the password sent by SMS, and the same states in other words.
+     Requests recorded with the old rules are corrected by themselves; one whose final state was missed is
+     read again at the next scan.
+   - Insights > Analysis > SLA counts EVERY request the portal lists for the period, also the ones whose history
+     is not read yet (they are counted at once; their times follow when they are read - the Closed tile says
+     how many). "Right now" lists every open request: the inquiry's and every Live ticket, with "Request age"
+     (since the first assignment) and "With this user". The inquiry now reaches back to every Live ticket, so
+     their histories are read too.
+
+20. DAILY SUMMARY: SENT EVEN WHEN OUTLOOK'S DEFAULT DATA FILE CANNOT HOLD A MAIL, AND "RUN NOW" IN ITS SETTINGS
+   - The summary failed with «Cannot create the email message because a data file to send and receive messages
+     cannot be found»: Outlook on the collector PC could not make a new mail in its DEFAULT data file (an archive
+     or a .pst that is gone is set as the default). Every mail of the collector (daily summary, e-mail report,
+     SLA and ITSM mails) is now made in the e-mail account's own mailbox (its Drafts) and sent from that account
+     when that happens. If even that fails, the error says Outlook's own words and what to change (Outlook >
+     File > Account Settings > Data Files: set your mailbox as the default), and that the summary WAS built.
+   - System > Settings > Daily summary has its own "Run now" (it asks the collector to send it at once to the
+     saved recipients, whatever the time and day) and a status line: switched off, no recipient, the last run
+     and its result, the next checkpoint.
+   - The settings brought over from NBE OpsHub have the daily summary switched OFF and no recipient (the old
+     version had no daily summary): switch "Send the daily summary" on, type the To addresses, Save - then
+     press Run now to try it. Run now refuses unsaved changes and an empty recipient list, and says so.
+
+21. E-MAIL: A MANAGER ASSIGNS ONLY TO THE ACCOUNTS OF THEIR OWN TEAM
+   - "Assign" on the E-mail page lists the accounts created in Admin > Users that have an e-mail address -
+     a manager sees only the people of their own team(s); an administrator sees everybody. The addresses typed
+     in Settings > E-mail team members without an account are no longer offered.
+   - The server checks it too: assigning to another team's person, or to an address with no account, is
+     refused. The assignee's name is the account's name. An employee without an e-mail address in Admin > Users
+     cannot be picked - add it there.
+
+22. SLA: EVERY REQUEST OF «الاستفسار عن الطلبات» IS READ («عرض التالي»)
+   - The portal shows at most 1,000 requests a page and the rest behind the button «عرض التالي» under the grid; the
+     scan looked for a button called only «التالي», so it stopped after the first 1,000. It now presses «عرض التالي»
+     page after page until it has read as many requests as the portal's own «اجمالي عدد الطلبات» says, and opens
+     each request («التفاصيل») on its own page.
+   - Insights > Analysis > SLA, "Compared with the portal", says whether the last scan read them all
+     ("read all 4,351 requests the portal lists") or how many are missing.
+
+23. DAILY SUMMARY PER TEAM, AND THE CHANGE REQUESTS: COMPLETED TODAY, PENDING ALL
+   - System > Settings > Daily summary > "Team summaries": add a team and its addresses. At every checkpoint that
+     team gets its OWN summary with only its numbers: the calls of its people, its e-mails, its tickets and the
+     change requests of its ITSM roles. To / Cc above still get every team's summary (leave them empty to send
+     team summaries only).
+   - Change requests: "Implementations completed today" counts today's only (the board's completed column adds
+     up every earlier day); "Implementation requests pending (all)" counts every request waiting, whatever day it
+     came. The subject shows "CRs pending N".
+   - A team mail Outlook refuses is sent again at the retry; the mails that went are never sent twice.
+
+24. LIVE SLA COUNTED LIKE THE SLA MONITOR: FROM «تاريخ الارسال للسرية»
+   - Live tickets, Home, My tickets, the alert e-mail, the Excel report and the daily summary count a request's
+     age from «تاريخ الارسال للسرية» on the Re-Assign page again, like the SLA monitor script: REMINDER from
+     1 hour (warning_minutes 60), SLA BREACHED from 2 hours (breach_minutes 120), WITHIN SLA before, NO SENT DATE
+     when the page shows none. This replaces the first-assignment clock of item 19 for the live SLA.
+   - The first «اسناد لمستخدم السرية» (and "this user since" after a re-assignment) is still shown next to the age
+     and in the Excel's ASSIGNED_AT column, for information only. The alert e-mail's column is "Sent to Security".
+   - Third Party applications stay out of the live SLA, its alerts and totals as before.
+   - Insights > Analysis > SLA is unchanged: the security user's time and the whole request's time still count
+     from the assignment (item 19).
+
+25. SLA ANALYSIS AND DAILY SUMMARY: FORM 7 PERIODS, THE RIGHT STAGE, NUMBERS THAT ADD UP
+   - «نموذج (7)» requests carry a period. Their «الفترة من» in the request details is read, and both clocks (the
+     security user's and the whole request's) start there when the request was assigned earlier: a request
+     registered two days ago with a period from today belongs to today and took its real minutes, not two days.
+     A date without a time starts at the SLA's working hours (08:00 by default). Form 7 requests read before this
+     update are read once more, after every other request.
+   - A status wording the settings do not list no longer counts as "open with a security user": it is with the
+     security team only when the inquiry names its «مستخدم السرية»; otherwise it is still with the branch. The
+     collector log names those wordings, so they can be added under System > Settings > SLA statuses.
+   - A request that moved on since its details were read counts at the stage the inquiry shows now (a request
+     read while open and confirmed since is closed, not "open for days").
+   - Daily summary, tickets: "Reached the security team today" (never a request still at the branch, whatever its
+     «تاريخ الطلب»), "Executed today" («تم التنفيذ» / «تم التعزيز على التنفيذ»), "Not executed today" («لم يتم
+     التنفيذ» / «تم التعزيز على عدم التنفيذ»), "Confirmed by the reviewer today", "Rejected by the assigner today
+     («رفض»)", and "Still with the branch now". Requests whose details are not read yet are counted from the
+     inquiry's status (the mail says how many). A team's summary uses the same team rule as the analysis.
+   - The scan reads the finished requests first, and each scan starts on the result page where the last one
+     stopped, so no page («عرض التالي») waits scan after scan.
+
+26. ITSM: COMPLETED IMPLEMENTATIONS BY DAY, A "FINISHED" ICON
+   - The board has "Implementations completed on" From / To (Today by default, or "All days"): the
+     «Implementation Completed» tiles and lists show only the CRs completed on those days (the day the scans first
+     saw them completed). CRs already completed when the recording began have no day; the board says how many.
+   - «Implementation Completed» is finished work: a green ticked circle instead of the amber warning, and a
+     role's "open" count leaves it out. The daily summary's "Implementations completed today" uses the same days.
+
+27. INSIGHTS > ANALYSIS > SLA OPENS ON THE SECURITY TEAM'S OWN DAY
+   - The tab now opens on what matters: for the period picked (today by default), how many requests came to the
+     security team, how many were executed, not executed («لم يتم التنفيذ» / «التعزيز على عدم التنفيذ»), rejected
+     by the assigner («رفض») and confirmed, how many wait for the reviewer and how many are with a security user now.
+   - "Every hour": a simple chart and table of what came and what was done each hour.
+   - "How long it takes": execution (assignment -> executed / not executed / rejected), confirmation (execution ->
+     «تم التعزيز») and the whole request - average, median, target and how many within it.
+   - "Each team" and "Each employee": the same numbers team by team and person by person.
+   - Requests still with the branch (registration, supervisor) and other teams' requests are never counted; a
+     manager sees their own team(s) only. Everything else (stages, branches, assigners, the portal check) is
+     behind "Show the detailed analysis". The numbers are the same as the daily summary's.
+
+28. BEST PERFORMERS, IN THE DAILY SUMMARY AND ON INSIGHTS > ANALYSIS
+   - Each employee's day: calls answered (logged in the Call Log) + e-mails replied + security requests handled
+     (executed, not executed, rejected), best first.
+   - The daily summary shows the top five at every checkpoint ("Best performers - 13:00 checkpoint"); a team's
+     summary shows its own people only.
+   - Insights > Analysis opens with "Best performers" for any day; a manager sees their own team only. An earlier
+     day's e-mails come from the replies the e-mail report keeps each day (from this update on).
+
+29. SLA: RIGHT NUMBERS, NO MORE TIMED-OUT SCANS, FAST PAGES, A DAY-BY-DAY LOG
+   - The numbers: a request whose details are not read yet counts on a day only when the scans watched its status
+     change that day, or when it was registered that day - never because it was seen for the first time (a search a
+     month back had made thousands of old requests "confirmed today").
+   - The scan: it searches the recent days (Search the last N days) plus ONE older day that still has a request in
+     progress, a different one each scan - never a month at once (37 result pages had taken the whole scan and it was
+     stopped after 5 minutes). Walking the result pages stops at the time budget too, so a scan is never killed.
+     The finished requests (confirmed, rejected) are read first, the newest first.
+   - The pages are fast again: the scan keeps only the recent days and the requests still in progress, and the
+     analysis no longer repeats the same work for every row (8 s -> under 1 s on the largest grid).
+   - Third Party is left out also when the person who executed a request is of the Third Party team.
+   - The detailed analysis (stages, branches, assigners, the portal check) is gone: the SLA tab shows the security
+     team's numbers only.
+   - "Applications with no team" (administrators): every application whose requests count under "(no team)", with
+     a team list and Save - saved in Auto Assign > Applications.
+   - "Day by day": every scan keeps the day's numbers (came, executed, not executed, rejected, confirmed, the
+     execution time, each team, each employee, the best performer); the SLA tab lists the last 30 days - the team or
+     the employee picked in the filter, a manager's own team.
+
+30. THE SLA NUMBERS ARE THE PORTAL'S OWN INQUIRY
+   - The SLA tab, the daily summary, the best performers and the day-by-day log now count the requests of the
+     dates picked («تاريخ الطلب») exactly as «الاستفسار عن الطلبات» lists them, by their status now - you can check
+     every number on the portal by searching the same dates:
+     came = executed + not executed + rejected + still with a security user;
+     executed = «تم التنفيذ» + «تم التعزيز على التنفيذ»; not executed = «لم يتم التنفيذ» + «تم التعزيز على عدم
+     التنفيذ»; waiting for confirmation = «تم التنفيذ» + «لم يتم التنفيذ»; confirmed = the «تم التعزيز» ones.
+     Requests still with the branch are never counted.
+   - "With us now" is the Live tab's number (the Re-Assign page), for every team and employee.
+   - The hours and the times come only from the requests whose status history is read (when each was assigned,
+     executed, confirmed); the others are under "No time yet" until they are read - never a guessed hour. The page
+     says how many the last scan read and how many wait.
+   - The previous versions dated requests by when the scans saw them change, which gave impossible numbers
+     (8,740 executed for 2,416 that came). That is gone. Today's line of "Day by day" is rewritten at the next scan.
+
+31. THE DAILY SUMMARY NO LONGER FAILS WITH «OUT OF MEMORY OR SYSTEM RESOURCES»
+   - The e-mail report kept every mail of the day open in Outlook while it ran (to save the pending ones as .msg),
+     which ran Outlook out of memory: a summary sent meanwhile failed with "Out of memory or system resources". The
+     report now opens each pending mail only while it saves it, one at a time.
+   - The daily summary waits for a running e-mail scan or report to finish with Outlook (10 minutes at most), and a
+     mail Outlook is too busy for is tried again after 20 s and 60 s. If Outlook stays out of memory, the error says
+     so: restarting Outlook on the collector PC frees it.
+   - A mail Outlook refuses is discarded, never left in Drafts. "Outlook is busy" is no longer mistaken for "no data
+     file" (no more advice to change the default data file for it).
+
+32. A CELEBRATION E-MAIL FOR THE DAY'S BEST PERFORMER (System > Settings > Daily summary > Best performer e-mail)
+   - Every working day at 15:30 (you can change the time) the collector e-mails the day's best performer: the first
+     of "Best performers" (calls answered + e-mails replied + requests handled). It goes to the e-mail of their
+     account, with the Cc you set there (managers, the team...). Once a day.
+   - The e-mail is a celebration: confetti, a trophy, their name and team, their numbers of the day and a word of
+     encouragement in English and Arabic - a different one each day. Write your own words under "Your words of
+     encouragement" (one per line, used in turn; {name} becomes their name). The subject can be changed too.
+   - It is ON from this update. Switch it off, or press "Run now" to send it at once to today's best performer so
+     far, on the same card. System > Collectors shows it as "Best performer e-mail".
+   - If the best performer has no e-mail in their account, it goes to the Cc only (Admin > Users to add one).
+   - The best performers are ranked by a SCORE counted in security requests: a call answered counts as 2 requests,
+     an e-mail replied as 3, a request handled (executed, not executed, rejected) as 1. The same score everywhere:
+     Insights > Analysis > "Best performers" (column "Score"), the daily summary and this e-mail.
+
+33. THE BEST PERFORMANCE E-MAIL: THE TOP 3, IN ENGLISH - AND NO LONGER IN THE DAILY SUMMARY
+   - The daily summary no longer lists the best performers. They are celebrated once a day, by the Best Performance
+     e-mail only (System > Settings > Daily summary > "Best Performance e-mail").
+   - It celebrates the day's TOP 3 in one e-mail: To the three (the e-mails of their accounts), Cc what you set. A
+     podium (gold, silver, bronze), their names and teams, a table of their calls, e-mails, requests and score, and a
+     word of encouragement - all in English. "How many are celebrated" can be set from 1 to 5 (3 by default).
+   - Subject and your own words: {names} becomes their names ("A, B and C"). Default subject: "Best Performance of
+     the day: {names}".
+   - The score is the same: a call = 2 security requests, an e-mail replied = 3, a request handled = 1.
+
+34. OUTLOOK "OUT OF MEMORY": THE MAIL TRIES WITHOUT THE LOGO, AND THE MESSAGE SAYS WHY AND WHAT TO DO
+   - If Outlook still says "Out of memory or system resources" after the tries at 20 s and 60 s, the daily summary
+     (and the Best Performance e-mail) is tried once more WITHOUT the logo picture (the NBE badge instead): less work
+     for Outlook. When that works, the next mails of the run go without the logo too.
+   - Every Outlook error now says the step that failed: opening Outlook, creating the mail, adding the logo, writing
+     its body, sending it...
+   - When Outlook says it is out of memory, the log and the error say how much memory Outlook uses and whether it is
+     32-bit (a 32-bit Outlook cannot go much past 2,000 MB).
+   - What to do when it stays: close Outlook completely - in Task Manager no OUTLOOK.EXE may be left - open it again
+     and press Run now. Outlook does not give back memory it ran out of until it is restarted; this update keeps the
+     e-mail report from filling it again.
+
+35. THE SLA COUNTS FROM THE LAST ASSIGNMENT TO THE SECURITY USER
+   - Everywhere - the Live tab, Home, My tickets, the reminder / breach e-mail and its Excel, the SLA Analysis and the
+     daily summary - a request's SLA now counts from its LAST «اسناد لمستخدم السرية»: when the security user holding
+     it now got it. A request re-assigned to someone else starts again from that re-assignment.
+   - Where the time comes from, best first: the request's status history (the exact time it was assigned to this
+     user); if that is not read yet but a scan saw the request move to this user, the scan that first saw it with
+     them ("moved to this user ~10:15"); otherwise «تاريخ الارسال للسرية» (a request never re-assigned).
+   - The Live tab says it for every request: "with this user since 10:15 · sent 09:30 · first assigned 09:40".
+   - In the SLA Analysis, a request re-assigned whose new assignment is not read yet shows "not read yet" until the
+     next scans read it - never the previous person's time.
+
+36. THE LIVE SLA NEVER COUNTS AN ASSIGNED REQUEST FROM «تاريخ الارسال للسرية»
+   - «تاريخ الارسال للسرية» is not when the security user got the request: a request sent on 20/10 and assigned on
+     26/10 at 23:02 counted 6 days instead of hours. Now:
+       - its status history gives the time it was assigned to the user holding it (exact);
+       - until that is read, it counts from the first scan that saw it with that user, at least that old ("with this
+         user since ~08:48 · assignment not read yet");
+       - only a request nobody holds yet counts from «تاريخ الارسال للسرية» ("not assigned yet").
+   - The scan now reads FIRST the status history of the Live tickets whose assignment is not known: their rows are
+     opened before any other, and their request days are searched every other scan. The collector's log says how many
+     are still not read.
+
+37. THE MFA TEAM'S SECURITY REQUESTS COUNT UNDER OPEN SYSTEM
+   - In the SLA only - the Live tickets, Home, the SLA Analysis, Insights › Analysis, the timeline, the daily
+     summary's tickets and the day-by-day log - the requests of the MFA Team's applications count as Open System.
+     Days kept before this update count the same way.
+   - A manager of the MFA Team sees the whole of Open System there; a manager of Open System sees the MFA requests.
+   - E-mails, ITSM and the accounts keep their own teams: nothing changes in the E-mail pages or for the employees.
+   - System › Settings › Ticketing › "Teams counted as one" holds the rule (MFA Team -> Open System); remove the line
+     to count the MFA Team on its own again.
+
+38. A SECURITY REQUEST IS CLASSIFIED BY ITS SYSTEM, NEVER BY THE PERSON
+   - A request's team is the team of its application «النظام» (Auto Assign › Applications, else the classification
+     keywords) - everywhere in the SLA. The team of the security user holding it, or of the person who executed it,
+     is no longer used: a Flexcube request executed by an Open System employee is a Flex Cube request.
+   - An application no rule names has no team: the administrator sees it under "Applications with no team" on the
+     SLA Analysis and gives it one there.
+
+39. E-MAIL: SUGGESTED CLASSIFICATIONS WORK - THE ADMINISTRATOR APPROVES THEM
+   - Fixed: when someone of team X replied to an e-mail with no team, the suggestion "file it under X" was made but
+     never reached the page. It now appears on E-mail › Unclassified › "Suggested classifications".
+   - The suggestion comes with the keyword to learn, already filled in: the word of the subject that names the
+     system (e.g. "FileNet") - never a person's name, a ticket number, an everyday word or a word other teams' e-mails
+     use. The other words of the subject are offered in the keyword box; it can be changed before approving.
+   - Only the administrator approves (or dismisses). On approval the e-mail goes to team X and the keyword becomes a
+     classification rule, so the next e-mail like it goes to team X by itself. Nothing changes before the approval.
+   - A team's manager sees their team's suggestions, marked "waiting for the administrator's approval".
+
+40. INSIGHTS › ANALYSIS: THE TICKETS CARD HOLDS ITS NUMBERS AGAIN
+   - The Tickets card (and its tab) counted only the requests whose status history had been read, so it showed 0 or
+     far too few. It now counts like the SLA tab and the portal's own «الاستفسار عن الطلبات»: for each «تاريخ الطلب»,
+     the requests that came to the security team and, of them, the ones confirmed - by team, a manager their own.
+   - The busiest hour still comes from the status histories read (only they carry a time).
+   - Days the collector kept before this version count the same way (an MFA Team row counts as Open System).
+
+41. SLA TAB: EVERY REQUEST COUNTED BY THE STATUSES WE AGREED, AND CHECKABLE STATUS BY STATUS
+   - «تم التعزيز …» and «لم يتم …» always count, as agreed, in whatever words the portal writes them: «تم التعزيز»,
+     «تم التعزيز بعدم التنفيذ», «تم التعزيز على لم يتم التنفيذ», «لم يتم», «لم يتم تنفيذ», «تم عدم التنفيذ», «تم تنفيذ»,
+     «بانتظار التعزيز» ... Before, a wording the settings did not spell exactly counted as still with the branch when
+     its row named no security user. A confirmation by the branch, its region or sector keeps its meaning.
+   - A status no SLA status names is now listed under the SLA tab's numbers (administrator), with how many requests
+     have it, to add to the right step in System › Settings › Ticketing › SLA recording.
+   - New card "By the portal's status": every status «الاستفسار عن الطلبات» shows for these dates, how many requests
+     have it, and the number it counts in (executed / not executed, confirmed or waiting for confirmation, rejected,
+     still with a security user, or not counted: still with the branch) - to check each number against the portal.
+   - Third Party stays out of the SLA, as asked.
+
+42. A PAGE NEVER SHOWS AN OLD STATE AFTER A CHANGE
+   - When two people changed the same list at the same moment (two managers marking e-mails done), a page could show
+     one of the changes as not made for a moment. Nothing was ever lost on disk; the page now always shows the change.
+
+43. SLA SCAN: STATUS HISTORIES READ AGAIN ON A BUSY PORTAL, AND A SHORTER SCAN
+   - The collector log showed «inquiry grid 19706 row(s) over 20 result pages ... result page N could not be shown
+     again ... 0 status histor(ies) read». The scan walked all 20 result pages first (two minutes), then went back to
+     each page to open its requests. Going back means a new search, and on a busy portal the first page is never the
+     same twice (new requests, statuses moving), so no page was found again and nothing was read.
+   - Now the requests of each result page are opened while that page is on the screen: one search, no going back.
+     Time is kept for the pages still to come, so every request is still counted, and a detail is kept for the Live
+     tickets those pages may list; what that leaves unread is read after the walk while the scan has time. The next
+     scan starts on the page after the one where this one stopped, so no page waits scan after scan.
+   - Shorter scan: each scan searches TODAY, one other day of "Search the last (days)" in turn, and one older day
+     with a request still in progress - never the whole window at once.
+   - A row the portal pushed onto the next page while the pages were read (the 19706 / 19705) is counted once.
+   - The log now says the dates searched, the request dates the portal listed (with a WARNING when they are outside
+     the search) and how long the pages took. If a search still shows many pages, check System › Settings ›
+     Ticketing › "Search the last (days)" (3 by default). "Time for the history per scan (seconds)" (180 by default)
+     is the longest a scan spends opening requests: lower it for a shorter scan; the rest follows at the next scans.
+
+44. THIRD PARTY: ONLY HOW MANY, NEVER IN THE SLA
+   - Third Party requests stay out of the SLA: no breached, no reminder, no age, no time, and they are not in the
+     security team's own numbers. Now you see how many there are, by the statuses we agreed (came, executed, not
+     executed, rejected, still with a security user, waiting for confirmation, confirmed):
+     - Live tab: a "Third Party" tile - how many of its tickets are on the Re-Assign page now;
+     - Insights › Analysis › SLA: a "Third Party · counted only" card for the chosen dates (days older than the
+       inquiry window come from the counts kept those days);
+     - daily summary: a "Third Party (counted only, not in the SLA)" card when it has requests that day.
+   - A manager sees them only when Third Party is their team. The teams left out are set in System › Settings ›
+     Ticketing › "Teams left out" (Third Party by default).
+
+45. SLA SCAN: «عرض التالي» OPENS AGAIN AFTER A REQUEST'S DETAILS, AND EVERY DAY OF THE SCAN IS SEARCHED
+   - Your log: «only 2000 of the 3406 requests could be read - the next result page («عرض التالي») did not open» and
+     «no time left for 21/10 / 18/10». With a request's details shown under the grid, the scan could take the status
+     history's own «التالي» for the page's «عرض التالي»: the page did not move and the scan waited a whole minute.
+   - Now the details are never taken for the page's button, a press that changes nothing is given up after a few
+     seconds, and if «عرض التالي» still does not open, the scan searches again and goes on to the next page - so every
+     request of the day is counted.
+   - Time is kept for the other days of the scan (a recent day and an older day), so they are searched every time.
+   - v5.13: v5.12 skipped every button named like the inquiry's own control (on the bank's page the grid and
+     «عرض التالي» carry that name too), so its log said «only 1000 of the 3406». Only the details' own control and
+     the status history's pager are skipped now, and the page's «عرض التالي» is preferred.
+
+46. SLA SCAN: AS LITTLE AS POSSIBLE LEFT FOR THE NEXT RUN
+   - Your counts are complete at every run (3408 of 3408): they come from the inquiry grid. "Left for the next scan"
+     is only the requests whose status history (their times) is not read yet. Each one is the portal's own
+     «التفاصيل»; there are thousands a day, so the first runs after an update catch up, and then each run reads what
+     changed since the last one.
+   - Faster: the requests' details are read in the background, 4 at a time, without redrawing the page. If the portal
+     does not allow it, the log says so once and they are opened one at a time as before.
+   - "Left" counts only what the numbers need: finished requests, the ones waiting for confirmation and the Live
+     tickets whose clock is not known. A request still with a security user is read when time allows and is shown
+     apart («still with a security user: read when time allows»). The log says «nothing left» when nothing is.
+   - Your log stopped at «detail budget»: the old limit of 60 details a scan. The new setting "Request details read
+     per scan (max)" is 1000 by default (the old 60, saved with your other settings, is no longer used).
+   - Each scan searches today and ONE other day - a recent day and an older day in turn - instead of three days, so
+     more time goes to the details. The time kept for that day is what its pages took last time; a day too big for one
+     scan (18/10, 7599 requests) no longer holds the others back.
+   - Note: your "Search the last (days)" is 7 (the log searched 21/10 in turn); the default is 3. The scan searches
+     today every time and the other days one a scan in turn, so 7 is fine - each of them is only refreshed less often.
+
+--------------------------------------------------------------------------------
+
+IAS PORTAL - الجديد في هذا التحديث
+==================================
+
+طريقة التحديث (بياناتك محفوظة)
+  1. أوقف run.py و collector.py.
+  2. انسخ محتويات مجلد program فوق مجلد البرنامج القديم. لا تحذف مجلد data ولا .secret_key - تبقى كما
+     هي بكل البيانات القديمة.
+  3. collector_config.json: خلّي الملف بتاعك زي ما هو - الـ ZIP ده مافيهوش الملف ده، فالنسخ فوق المجلد القديم
+     مش بيلمسه. (جهاز جديد: انسخ collector_config.example.json باسم collector_config.json واكتب أسماء
+     المستخدمين والباسوردات واحفظ.) وبعدين اتأكد:  python collector.py --check
+  4. شغّل run.py و collector.py من جديد.
+
+1. تحليل الـ SLA لايف ودقيق بدون أي رفع ملفات (بقى في Insights > Analysis > SLA - شوف رقم 14)
+   - في كل سكان يفتح الـ collector «الاستفسار عن الطلبات» ولكل طلب جديد أو اتغيرت حالته يفتح
+     «تفاصيل الطلب» > «الحالة التاريخية للطلب» ويسجل مين أسند ومين نفّذ ومين عزّز ورقم الموظف ووقت كل خطوة.
+   - الـ SLA = من أول «اسناد لمستخدم السرية» لحد «تم التعزيز».
+   - فلتر بالتاريخ (الافتراضي النهارده) والموظف والمراجع والفريق، وتحليل بالساعة وباليوم، والتاريخ محفوظ.
+   - الإعدادات: System > Settings > Ticketing.
+
+2. استبعاد Third Party من الـ SLA - من Settings > Ticketing > "Left out of the SLA".
+
+3. كل حاجة مربوطة برقم الموظف - اكتب "Number in the security portal" لكل موظف من Admin > Users؛
+   الموظف يشوف "My SLA" بتاعه، والمدير يشوف موظفين فريقه فقط.
+
+4. صفحة Analysis لكل الموديولات (Insights > Analysis للأدمن والمدير): المكالمات والإيميلات والتيكتس
+   والـ CRs على أي فترة: الترند اليومي، بالساعة، ساعة الذروة، أكتر يوم، خريطة الأيام × الساعات، بالفريق،
+   والمقارنة بالفترة اللي قبلها. وأعداد الإيميلات الواردة بقت محفوظة كتاريخ.
+
+5. إيميل الملخص اليومي (Settings > Daily summary): ملخص اليوم للمكالمات والإيميلات والتيكتس والـ CRs
+   كداشبورد في إيميل؛ المستلمين ومواعيد الإرسال (مثلاً 10:00 و 13:00 و 15:00) وساعات العمل قابلة للتعديل.
+
+6. المدير يشوف الإيميلات Unclassified ويصنفها ويحولها لأي فريق ويسندها لأي شخص.
+   والـ auto-assign للإيميل بقى من غير اختيار applications: بيوزع إيميلات الفريق على الموظفين المختارين.
+
+7. الموظف من صفحة My work يقدر يعمل "No action" (مع السبب) أو "Reassign" لزميل في الفريق.
+
+8. الأداء: الصفحات الثقيلة محسوبة مرة في الدقيقة ومشتركة، علشان 70 مستخدم في نفس الوقت.
+
+9. جودة الإيميلات (التقييم لردود الإيميل بس - المكالمات مش بتتقيّم خالص)
+   - كل تقييم بيظهر عليه مين اللي قيّم وإمتى (Replied و Quality وشاشة الإيميل و My quality للموظف).
+   - في Quality: فلتر بالموظف وفلتر بالمقيّم وجدول "Rated replies" فيه المقيّم والتظلم.
+   - مدير الفريق مش بيشوف ردود فريق تاني خالص: في الإيميل المشترك بيظهر "اتردّ عليه من فريق كذا" بس
+     من غير اسم ولا نص ولا تقييم. وبس مديرين فريق صاحب الرد هم اللي يقيّموا ويقرروا في التظلم.
+   - Analysis > "E-mail quality": مين من المديرين قيّم وعدد تقييماته، ولكل فريق كام إيميل اتقيّم من
+     إجمالي الإيميلات اللي جاتله (النسبة)، ولكل موظف - على أي فترة.
+
+10. الـ SLA محسوب من بورتال الـ SSO بس (بدون داتابيز الفليكس كيوب) والقراءة من خلال cdp.py
+   - حالات جديدة: إعادة الإسناد (حتى بكتابة البورتال «لمسخدم»)، تعزيز المنطقة/القطاع/Platinum،
+     «مطلوب تعديل»، الرفض، التحويل.
+   - كل مرحلة من مراحل الطلب ليها تارجت (أخضر / أصفر لحد 1.5 مرة / أحمر) وبتتعدل من Settings.
+   - جديد: ملخص في سطر، فين الوقت بيروح (الـ bottleneck)، النتائج والـ funnel، "Needs attention"،
+     حسب الفرع ونوع الطلب، قائمة الطلبات، وبالضغط على أي طلب يظهر الـ timeline كامل.
+   - ساعة بساعة: الطلبات اللي جت في الساعة دي واللي خلصت في نفس الساعة بالعدد والنسبة، لكل التيمات مع
+     بعض ولكل تيم لوحده - وكمان في Analysis > Tickets، والصفحة بتتحدث لوحدها كل دقيقة.
+   - فلاتر جديدة (Application / الفرع / نوع الطلب / النتيجة / المرتجع) وتصدير CSV و Excel.
+
+11. الـ SLA connector بقى أسرع بكتير: كل طلب بيتفتح بالـ post-back بتاع البورتال نفسه من غير كليك ولا
+    قفل ولا انتظار ثابت، وفيه وقت أقصى للقراءة (180 ثانية افتراضي) وأي حاجة اتقرت بتتحفظ والباقي في
+    السكان اللي بعده، والطلب اللي مش بيتقري بيتجرّب مرتين بس، والتوقيت بيتكتب في اللوج.
+
+12. بعد أي تحديث كل المتصفحات بتاخد الصفحات الجديدة فوراً، واتصلح نص التظلم اللي كان مش باين في الوضع الغامق.
+
+13. الـ Collector بيشتغل دايماً وكل الـ jobs بتشتغل أول ما يبدأ (اتصلحت مشكلة "no heartbeat")
+   - السبب: أول تشغيل كان بيحاول ينزّل مكتبة Outlook (pywin32) من الإنترنت، ولو الجهاز من غير إنترنت التنزيل
+     بيفشل فالـ collector يقف ويرجع يبدأ تاني وهكذا - ومفيش job بتشتغل خالص.
+   - دلوقتي بيبدأ في كل الأحوال: الـ SLA و ITSM بيشتغلوا، وإيميلات Outlook بتقول "pywin32 is not installed" ومعاها
+     أمر التنزيل:  python -m pip install -r requirements-collector.txt   (وزوّد --proxy لو محتاج).
+   - كل job مفعّلة بتشتغل مرة أول ما الـ collector يبدأ (حتى بره مواعيد العمل) فتلاقي الـ heartbeat والنتيجة في
+     ثواني، وبعدها الجدول العادي. تقرير الإيميل والملخص اليومي بيتعملوا بس من غير ما يتبعتوا وقت البداية.
+   - --status بقى بيشرح حالة كل job وبيعرض آخر سطور لوج البداية.
+
+14. الـ SLA: العداد بيبدأ من «اسناد لمستخدم السرية»، وكل صفوف البورتال بتتقري، ومكان جديد
+   - العمر من آخر إسناد: صفحة إعادة الإسناد بتعرض «تاريخ الارسال للسرية» بس (إمتى الطلب اتبعت لفريق السرية)،
+     علشان كده الأعمار كانت باينة "أيام عند الموظف". دلوقتي كل تيكت لايف بيتربط بالحالة التاريخية بتاعته
+     (رقم المستخدم + النظام + نوع الطلب، والأولوية لمستخدم السرية اللي ماسكه) والعمر بيتحسب من لحظة
+     «اسناد لمستخدم السرية» للموظف ده. Live tickets و My tickets و "Oldest" في Home والإكسيل وإيميل التنبيه
+     كلهم بيحسبوا كده وبيكتبوا العداد من إمتى ("assigned 09:30" أو "sent 08:00"). الطلب اللي لسه حالته
+     التاريخية ما اتقرتش بس هو اللي بيتحسب من تاريخ الإرسال.
+   - إعادة الإسناد: الطلب اللي اتحوّل لمستخدم سرية تاني حالته بتفضل زي ما هي، فدلوقتي تفاصيله بتتقري تاني لما
+     مستخدم السرية يتغير، و"Right now" عمره ما بيعرض وقت الموظف القديم.
+   - الطلبات اللي لسه عند مستخدم سرية تفاصيلها بتتقري الأول في كل سكان.
+   - الفترة = يوم الإسناد: الطلب بيتحسب في اليوم اللي اتسند فيه أول مرة مهما حصل بعد كده (اتقفل، مفتوح، مستني
+     المراجع، اترفض) - زي شيت الـ SLA بتاع البنك. الطلب اللي اتقفل تاني يوم بيتحسب في يوم إسناده.
+   - كل صفوف «الاستفسار عن الطلبات» بتتقري:
+       . الـ «Show» بيتحط على أكبر اختيار («All» = 1000 صف)، ولو البورتال فيه أكتر السكان بيكمّل بـ «التالي»
+         اللي تحت الجدول صفحة بصفحة، وكل صفحة بتتراجع على «of N records» بتاعتها واللوج بيقول البورتال فيه كام صف؛
+       . «التفاصيل» بتاعة كل صف بتتفتح وهو على صفحته (البورتال بيرقّم الصفوف جوه كل صفحة)؛
+       . صفين شبه بعض (نفس الموظف والنظام والنوع في نفس اليوم - التاريخ مافيهوش وقت) دول طلبين: مفيش واحد
+         منهم بيضيع تاني؛
+       . تواريخ البحث تاريخ بس (21-10-2026) زي ما البورتال عايز.
+   - كل سطور «الحالة التاريخية للطلب» بتتقري (5 في الصفحة ومترتبة بالاسم - الإسناد ممكن يبقى في صفحة 2)،
+     والحالة اللي ما ينفعش تتقري كلها عمرها ما بتتسجل وبتتقري تاني في السكان اللي بعده.
+   - مقارنة بالبورتال: كارت جديد فيه أرقام البورتال نفسه لتواريخ الطلبات في الفترة - صفوف الاستعلام، عند فريق
+     السرية، لسه عند الفرع، مرفوض، الحالة التاريخية اتقرت، لسه ما اتقرتش. ابحث بنفس التواريخ على البورتال:
+     عدد النتايج لازم يساوي «Inquiry rows». الـ Third Party مستبعد زي كل حتة في الـ SLA، والمدير بيشوف فريقه بس.
+   - مكان جديد: تحليل الـ SLA كله بقى في Insights > Analysis > "SLA". صفحة Ticketing فيها التيكتس اللايف
+     وزرار "SLA Analysis". اللينكات القديمة (/sla#analysis و /sla?tab=analysis) بتفتح المكان الجديد.
+
+15. جودة الإيميلات: تقييم جديد "Very Good"
+   - المدير بقى يقيّم الرد Excellent أو Very Good أو Good أو Needs Improvement (E-mail > Replied > Review).
+     النقاط: Excellent 100 و Very Good 90 و Good 75 و Needs Improvement 25.
+   - "Very good" بيتحسب لوحده في كل حتة: E-mail > Quality (الكارت والـ scorecard)، و Analysis > E-mail quality
+     (الكارت ومين قيّم وكل موظف)، و My quality reviews، وإيميل آخر اليوم (الـ scorecard ومؤشر الفريق).
+     التقييمات القديمة زي ما هي.
+
+16. رسالة ترحيب بعد تسجيل الدخول
+   - بعد تسجيل الدخول بتظهر ببطء رسالة إيجابية قصيرة (عربي وإنجليزي) قبل ما البورتال يفتح: "صباح الخير /
+     نهارك سعيد / مساء الخير" مع الاسم الأول، ورسالة حسب الدور (موظف أو مدير أو مسؤول النظام - كل دور له
+     رسايله) والدور نفسه.
+   - كل زميل بيشوف رسالة غير التاني، وكل شخص بيشوف رسالة جديدة في يوم تاني (ونفس الرسالة طول اليوم).
+     البورتال بيفتح لوحده بعد 7 ثواني، أو فوراً بـ Continue أو كليك أو Enter أو Escape.
+   - بتظهر مرة واحدة مع كل تسجيل دخول. الحساب الجديد بيختار الباسورد بتاعه الأول وبعدين يشوف الرسالة.
+     لو "reduce motion" مفعّل في الويندوز مفيش حركة والانتظار أقل.
+
+17. النقل من NBE OpsHub (نسخة "جاهزة للتشغيل")
+   - المستخدمين والأدوار والفرق والباسوردات والإعدادات وقواعد الـ auto-assign والتاريخ وإعدادات الـ collector
+     كلها بتتنقل زي ما هي: شكل البيانات واحد ومفيش أي تحويل.
+   - النسخة الجاهزة فيها مجلد data و .secret_key و collector_config.json و libs بتوعك. أوقف run.py و
+     collector.py القديمين، وانسخ كل اللي جوه "program" فوق مجلد البرنامج القديم (أو في مجلد جديد)
+     وشغّل run.py و collector.py. كل واحد بيدخل بنفس اسم المستخدم والباسورد زي الأول.
+   - لو النسخة القديمة اتستخدمت بعد ما اتاخدت النسخة اللي في الباكدج، انسخ أحدث مجلد "data" عندك فوق
+     اللي في الباكدج قبل أول تشغيل.
+   - البرنامج بيشغّل Edge / Chrome عن طريق DevTools protocol بس (cdp.py): مفيش Selenium ولا Playwright.
+     الملف tools\shots_hub.py (أداة صور للمطورين) مبقاش في النسخة - امسحه لو لسه موجود في المجلد القديم.
+
+18. الـ Auto Assign: "Max per run" - عدد الطلبات اللي بتتوزع في كل رن
+   - في صفحة Auto Assign، كارت Ticketing (والـ E-mail) لكل فريق فيه خانة "Max per run" جنب "Run every". كل رن
+     بيوزّع العدد ده بالكتير (طلبات أو إيميلات)، ولسه بالتساوي على موظفين القاعدة، والباقي يستنى الرن اللي
+     بعده. 0 = من غير حد (زي الأول). اعمل Save وبعدين Run now.
+   - في الـ Ticketing العدد بيتحسب على كل أنواع النماذج في الرن، ولما يوصل للعدد الرن بيقف عن البحث. الـ log
+     والملخص بيقولوا "max per run reached" وكام طلب مستني. الـ Dry run بيعرض نفس الخطة بنفس الحد.
+
+19. الـ SLA: عمر الطلب ووقت الموظف وأرقام كاملة
+   - في Live tickets والـ Home و My tickets وتقرير الإكسل وإيميل التنبيه: عمر الطلب بقى بيتحسب من أول «اسناد
+     لمستخدم السرية». ولو الطلب اتعاد إسناده الصف بيقول من إمتى مع المستخدم اللي معاه دلوقتي ("this user since
+     10:15"). الطلب اللي تاريخه لسه ما اتقراش بيتحسب من «تاريخ الارسال للسرية» ("sent").
+   - وقت مستخدم السرية = «اسناد لمستخدم السرية» بتاعه لحد «تم التنفيذ». «قيد الإجراء» خلاص مش بيبدأ العداد من جديد
+     (الإعدادات اللي جت من NBE OpsHub كانت حاسباه إسناد).
+   - الطلب كله = من أول إسناد لحد الحالة النهائية: «تم التعزيز على التنفيذ» أو «تم التعزيز على عدم التنفيذ» أو
+     «تم ارسال الرد» / «تم تسليم الرد» أو إرسال كلمة المرور بالـ SMS، وأي صيغة تانية لنفس الحالات. الطلبات اللي
+     اتسجلت بالقواعد القديمة بتتصلح لوحدها، واللي حالته النهائية ما اتعرفتش بيتقري تاني في الـ scan اللي بعده.
+   - Insights > Analysis > SLA بقى بيعد كل طلب البورتال بيعرضه في الفترة، حتى اللي تاريخه لسه ما اتقراش (بيتعد
+     على طول والأوقات بتيجي لما يتقري - كارت Closed بيقول كام واحد). و"Right now" بيعرض كل الطلبات المفتوحة: بتاعة
+     الاستعلام وكل تيكت في Live، مع "Request age" (من أول إسناد) و"With this user". والاستعلام بقى بيرجع لحد
+     أقدم تيكت في Live علشان تاريخها يتقري هو كمان.
+
+20. الملخص اليومي: بيتبعت حتى لو ملف البيانات الافتراضي في Outlook مش بيقبل إيميل، وزرار "Run now" في إعداداته
+   - الملخص كان بيفشل بالرسالة «Cannot create the email message because a data file to send and receive messages
+     cannot be found»: الـ Outlook على جهاز الـ collector مش قادر يعمل إيميل جديد في ملف البيانات الافتراضي (أرشيف
+     أو ملف pst. اتشال ومتعين افتراضي). دلوقتي كل إيميلات الـ collector (الملخص اليومي وتقرير الإيميلات وإيميلات
+     الـ SLA والـ ITSM) بتتعمل في صندوق البريد بتاع الحساب نفسه (Drafts) وبتتبعت منه لما ده يحصل. ولو حتى ده فشل
+     الخطأ بيقول كلام الـ Outlook نفسه والمطلوب تغييره (Outlook > File > Account Settings > Data Files: خلّي
+     صندوق البريد بتاعك هو الافتراضي)، وإن الملخص اتعمل فعلاً.
+   - System > Settings > Daily summary فيها "Run now" خاص بيها (بيطلب من الـ collector يبعته فوراً للمستلمين
+     المحفوظين في أي وقت وأي يوم) وسطر حالة: مقفول، مفيش مستلم، آخر مرة اشتغل ونتيجتها، والميعاد اللي جاي.
+   - الإعدادات اللي جت من NBE OpsHub فيها الملخص اليومي مقفول ومن غير مستلمين (النسخة القديمة ماكانش فيها ملخص
+     يومي): فعّل "Send the daily summary" واكتب عناوين To واعمل Save - وبعدين دوس Run now علشان تجربه. Run now
+     مش بيشتغل لو فيه تعديلات مش محفوظة أو مفيش مستلمين، وبيقول كده.
+
+21. الإيميل: المدير بيسند بس لحسابات فريقه
+   - زرار "Assign" في صفحة الإيميل بيعرض الحسابات اللي اتعملت من Admin > Users واللي ليها إيميل - المدير بيشوف
+     ناس فريقه بس، والأدمن بيشوف الكل. العناوين المكتوبة في Settings > E-mail team members ومالهاش حساب مبقتش
+     بتظهر.
+   - السيرفر بيتأكد كمان: الإسناد لحد من فريق تاني أو لعنوان مالوش حساب بيترفض. واسم الشخص بيتاخد من حسابه. الموظف
+     اللي مالوش إيميل في Admin > Users مش بيظهر - ضيف الإيميل بتاعه هناك.
+
+22. الـ SLA: كل طلبات «الاستفسار عن الطلبات» بتتقري («عرض التالي»)
+   - البورتال بيعرض 1000 طلب بالكتير في الصفحة والباقي ورا زرار «عرض التالي» تحت الجدول؛ الـ scan كان بيدور على
+     زرار اسمه «التالي» بس، فكان بيقف بعد أول 1000. دلوقتي بيدوس «عرض التالي» صفحة ورا صفحة لحد ما يقرا عدد الطلبات
+     اللي البورتال كاتبه في «اجمالي عدد الطلبات»، وبيفتح كل طلب («التفاصيل») في صفحته.
+   - في Insights > Analysis > SLA، كارت "Compared with the portal" بيقول هل آخر scan قرا الكل أو ناقص كام.
+
+23. الملخص اليومي لكل فريق، وطلبات التغيير: المنفذ النهارده والمعلق كله
+   - System > Settings > Daily summary > "Team summaries": ضيف الفريق وعناوينه. في كل checkpoint الفريق ده بيوصله
+     ملخص لوحده فيه أرقامه هو بس: مكالمات ناسه وإيميلاته وتيكتاته وطلبات التغيير بتاعة الـ ITSM roles بتاعته. To / Cc
+     فوق لسه بيوصلهم ملخص كل الفرق (سيبهم فاضيين لو عايز ملخصات الفرق بس).
+   - طلبات التغيير: "Implementations completed today" بيعد اللي اتنفذ النهارده بس (عمود completed في البورد بيجمع
+     كل الأيام اللي فاتت)، و"Implementation requests pending (all)" بيعد كل الطلبات المعلقة مهما كان يومها. والعنوان
+     بيقول "CRs pending N".
+   - إيميل فريق الـ Outlook رفضه بيتبعت تاني في المحاولة اللي بعدها، والإيميلات اللي اتبعتت عمرها ما بتتبعت مرتين.
+
+24. الـ Live SLA بيتحسب زي سكريبت الـ SLA monitor: من «تاريخ الارسال للسرية»
+   - Live tickets و Home و My tickets وإيميل التنبيه والإكسيل والملخص اليومي بيحسبوا عمر الطلب تاني من «تاريخ
+     الارسال للسرية» في صفحة الـ Re-Assign، زي سكريبت الـ SLA monitor: REMINDER من ساعة (warning_minutes 60)،
+     SLA BREACHED من ساعتين (breach_minutes 120)، WITHIN SLA قبل كده، و NO SENT DATE لو الصفحة مش كاتبة تاريخ.
+     ده بدل عداد أول إسناد اللي في بند 19 بالنسبة للـ Live SLA.
+   - أول «اسناد لمستخدم السرية» (و"this user since" بعد إعادة الإسناد) لسه ظاهر جنب العمر وفي عمود ASSIGNED_AT في
+     الإكسيل، للمعلومة بس. وعمود إيميل التنبيه اسمه "Sent to Security".
+   - تطبيقات Third Party لسه برة الـ Live SLA وتنبيهاته وإجمالياته زي ما هي.
+   - Insights > Analysis > SLA زي ما هو: وقت مستخدم السرية ووقت الطلب كله لسه بيتحسبوا من الإسناد (بند 19).
+
+25. تحليل الـ SLA والملخص اليومي: فترة نموذج 7، المرحلة الصح، وأرقام مظبوطة
+   - طلبات «نموذج (7)» ليها فترة. «الفترة من» اللي في تفاصيل الطلب بتتقري، والعدادين (بتاع مستخدم السرية وبتاع الطلب
+     كله) بيبدأوا منها لو الطلب اتسند قبلها: طلب متسجل من يومين وفترته من النهارده بيتحسب على النهارده وبوقته الحقيقي،
+     مش يومين. التاريخ اللي من غير وقت بيبدأ من بداية ساعات الشغل (08:00 افتراضي). طلبات نموذج 7 اللي اتقرت قبل
+     التحديث ده بتتقري مرة تانية بعد باقي الطلبات.
+   - الحالة اللي مكتوبة بصيغة مش موجودة في الإعدادات مبقتش تتعد "open with a security user": بتتعد مع فريق السرية
+     بس لو الاستعلام كاتب «مستخدم السرية» بتاعها، غير كده هي لسه في الفرع. والـ collector log بيكتب الصيغ دي علشان
+     تضيفها في System > Settings > SLA statuses.
+   - الطلب اللي اتحرك بعد ما تفاصيله اتقرت بيتعد في المرحلة اللي الاستعلام بيقولها دلوقتي (طلب اتقرا وهو مفتوح
+     واتعزز بعدها بيتعد مقفول، مش "مفتوح من أيام").
+   - الملخص اليومي، التيكتات: "Reached the security team today" (عمره ما بيعد طلب لسه في الفرع مهما كان «تاريخ
+     الطلب»)، "Executed today" («تم التنفيذ» / «تم التعزيز على التنفيذ»)، "Not executed today" («لم يتم التنفيذ» /
+     «تم التعزيز على عدم التنفيذ»)، "Confirmed by the reviewer today"، "Rejected by the assigner today («رفض»)"،
+     و"Still with the branch now". الطلبات اللي تفاصيلها لسه ما اتقرتش بتتعد من حالتها في الاستعلام (والإيميل بيقول
+     كام واحد). وملخص الفريق بيستخدم نفس قاعدة الفريق اللي في التحليل.
+   - الـ scan بيقرا الطلبات المنتهية الأول، وكل scan بيبدأ من صفحة النتايج اللي اللي قبله وقف عندها، فمفيش صفحة
+     («عرض التالي») بتستنى scan ورا scan.
+
+26. الـ ITSM: الـ Implementations المنفذة حسب اليوم، وأيقونة "خلص"
+   - في الـ board بقى فيه "Implementations completed on" من / إلى (النهارده افتراضي، أو "All days"): كروت وقوايم
+     «Implementation Completed» بتعرض بس الـ CRs اللي اتنفذت في الأيام دي (اليوم اللي الـ scans شافتها فيه منفذة
+     لأول مرة). الـ CRs اللي كانت منفذة قبل ما التسجيل يبدأ مالهاش يوم، والـ board بيقول كام واحدة.
+   - «Implementation Completed» شغل خلص: دايرة خضرا فيها علامة صح بدل التحذير البرتقاني، وعدد "open" بتاع الـ role
+     مبقاش بيعدها. و"Implementations completed today" في الملخص اليومي بيستخدم نفس الأيام.
+
+27. Insights > Analysis > SLA بيفتح على يوم فريق السرية نفسه
+   - التاب بقى بيفتح على المهم بس: في الفترة اللي تختارها (النهارده افتراضي)، كام طلب جه لفريق السرية، وكام اتنفذ،
+     وكام متنفذش («لم يتم التنفيذ» / «التعزيز على عدم التنفيذ»)، وكام اترفض من موظف الاسناد («رفض»)، وكام اتعزز،
+     وكام مستني المراجع، وكام لسه مع مستخدم السرية دلوقتي.
+   - "Every hour": شارت وجدول بسيط بالجه والمعمول كل ساعة.
+   - "How long it takes": وقت التنفيذ (من الإسناد لحد التنفيذ / عدم التنفيذ / الرفض)، ووقت التعزيز (من التنفيذ
+     لحد «تم التعزيز»)، ووقت الطلب كله - المتوسط والوسيط والهدف وكام جوه الهدف.
+   - "Each team" و"Each employee": نفس الأرقام لكل فريق ولكل موظف.
+   - الطلبات اللي لسه في الفرع (تسجيل، مشرف) وطلبات الفرق التانية عمرها ما بتتعد، والمدير بيشوف فريقه بس. وباقي
+     التفاصيل (المراحل، الفروع، موظفين الاسناد، مقارنة البورتال) ورا زرار "Show the detailed analysis". والأرقام هي
+     نفس أرقام الملخص اليومي.
+
+28. أفضل أداء (Best performers) في الملخص اليومي وفي Insights > Analysis
+   - يوم كل موظف: المكالمات اللي رد عليها (المسجلة في Call Log) + الإيميلات اللي رد عليها + طلبات السرية اللي خلصها
+     (تنفيذ، عدم تنفيذ، رفض)، الأحسن الأول.
+   - الملخص اليومي بيعرض أحسن خمسة في كل checkpoint ("Best performers - 13:00 checkpoint")، وملخص الفريق فيه ناسه
+     بس.
+   - Insights > Analysis بيفتح بكارت "Best performers" لأي يوم، والمدير بيشوف فريقه بس. إيميلات الأيام اللي فاتت
+     بتيجي من الردود اللي تقرير الإيميل بيحفظها كل يوم (من التحديث ده).
+
+29. الـ SLA: أرقام صح، مفيش scan بيقف من الوقت، صفحات سريعة، وسجل يوم بيوم
+   - الأرقام: الطلب اللي تفاصيله لسه ما اتقرتش بيتحسب على يوم بس لو الـ scans شافت حالته بتتغير اليوم ده، أو لو
+     اتسجل اليوم ده - عمره ما بيتحسب علشان اتشاف لأول مرة (البحث اللي رجع شهر كان خلى آلاف الطلبات القديمة
+     "confirmed today").
+   - الـ scan: بيدور في الأيام الأخيرة (Search the last N days) + يوم واحد أقدم فيه طلب لسه شغال، يوم مختلف كل
+     scan - عمره ما بيدور شهر مرة واحدة (37 صفحة نتايج كانوا بياخدوا الـ scan كله ويتوقف بعد 5 دقايق). والمشي في
+     صفحات النتايج كمان بيقف عند الوقت المسموح، فالـ scan عمره ما بيتقفل. والطلبات المنتهية (اتعززت، اترفضت)
+     بتتقري الأول، الأحدث الأول.
+   - الصفحات بقت سريعة تاني: الـ scan بيحتفظ بالأيام الأخيرة والطلبات اللي لسه شغالة بس، والتحليل مبقاش بيكرر نفس
+     الشغل لكل صف (8 ثواني -> أقل من ثانية على أكبر جدول).
+   - الـ Third Party برة كمان لو اللي نفذ الطلب من فريق الـ Third Party.
+   - التحليل التفصيلي (المراحل، الفروع، موظفين الاسناد، مقارنة البورتال) اتشال: تاب الـ SLA بيعرض أرقام فريق
+     السرية بس.
+   - "Applications with no team" (للأدمن): كل تطبيق طلباته بتتعد تحت "(no team)"، مع قايمة الفرق وزرار Save -
+     بيتحفظ في Auto Assign > Applications.
+   - "Day by day": كل scan بيحفظ أرقام اليوم (جه، اتنفذ، متنفذش، اترفض، اتعزز، وقت التنفيذ، كل فريق، كل موظف،
+     وأحسن أداء)، وتاب الـ SLA بيعرض آخر 30 يوم - للفريق أو الموظف اللي في الفلتر، والمدير فريقه بس.
+
+30. أرقام الـ SLA هي نفس استعلام البورتال
+   - تاب الـ SLA والملخص اليومي وأفضل أداء وسجل يوم بيوم بقوا بيعدوا طلبات التواريخ اللي تختارها («تاريخ الطلب»)
+     بالظبط زي ما «الاستفسار عن الطلبات» بيعرضها، حسب حالتها دلوقتي - وتقدر تراجع كل رقم على البورتال بنفس التواريخ:
+     جه = اتنفذ + متنفذش + اترفض + لسه مع مستخدم السرية؛
+     اتنفذ = «تم التنفيذ» + «تم التعزيز على التنفيذ»، متنفذش = «لم يتم التنفيذ» + «تم التعزيز على عدم التنفيذ»،
+     مستني التعزيز = «تم التنفيذ» + «لم يتم التنفيذ»، اتعزز = اللي «تم التعزيز». والطلبات اللي لسه في الفرع عمرها
+     ما بتتعد.
+   - "With us now" هو رقم تاب الـ Live (صفحة الـ Re-Assign)، لكل فريق ولكل موظف.
+   - الساعات والأوقات بتيجي بس من الطلبات اللي تاريخها اتقرا (إمتى اتسند واتنفذ واتعزز)، والباقي تحت "No time yet"
+     لحد ما يتقري - عمرها ما بتكون ساعة متخمنة. والصفحة بتقول آخر scan قرا كام ولسه كام مستني.
+   - النسخ اللي فاتت كانت بتأرخ الطلبات بإمتى الـ scans شافتها بتتغير، وده كان بيطلع أرقام مستحيلة (8,740 اتنفذ من
+     2,416 جه). ده اتشال. وسطر النهارده في "Day by day" بيتكتب من جديد في الـ scan الجاي.
+
+31. الملخص اليومي مبقاش بيفشل بـ «Out of memory or system resources»
+   - تقرير الإيميل كان بيسيب كل إيميلات اليوم مفتوحة في الـ Outlook طول ما هو شغال (علشان يحفظ اللي مستني رد كـ
+     .msg)، وده كان بيخلص ذاكرة الـ Outlook: والملخص اللي يتبعت في الوقت ده كان بيفشل بـ "Out of memory or system
+     resources". دلوقتي التقرير بيفتح كل إيميل مستني رد بس وهو بيحفظه، واحد واحد.
+   - الملخص اليومي بيستنى الـ scan أو التقرير اللي شغال يخلص من الـ Outlook (10 دقايق بالكتير)، والإيميل اللي الـ
+     Outlook مشغول عنه بيتجرب تاني بعد 20 ثانية و60 ثانية. ولو الـ Outlook فضل مفيهوش ذاكرة، الرسالة بتقول كده:
+     إعادة تشغيل الـ Outlook على جهاز الـ collector بتحل المشكلة.
+   - الإيميل اللي الـ Outlook يرفضه بيتمسح، عمره ما بيفضل في الـ Drafts. و"الـ Outlook مشغول" مبقاش بيتفهم إنه "مفيش
+     data file" (مفيش نصيحة بتغيير الـ data file الافتراضي علشانه).
+
+32. إيميل احتفال لأحسن أداء في اليوم (System > Settings > Daily summary > Best performer e-mail)
+   - كل يوم شغل الساعة 3:30 العصر (وتقدر تغير الوقت) الـ collector بيبعت إيميل لأحسن أداء في اليوم: الأول في
+     "Best performers" (المكالمات اللي اترد عليها + الإيميلات اللي اترد عليها + الطلبات اللي اتعملت). بيروح على إيميل
+     الأكونت بتاعه، والـ Cc اللي إنت بتحدده هناك (المديرين، الفريق...). مرة واحدة في اليوم.
+   - الإيميل احتفال: confetti وكأس واسمه وفريقه وأرقامه في اليوم، وكلمة تشجيع بالعربي والإنجليزي - كل يوم كلمة
+     مختلفة. وتقدر تكتب كلامك إنت في "Your words of encouragement" (سطر لكل كلمة، بيتاخدوا بالدور؛ {name} بيتحط مكانها
+     اسمه). وتقدر تغير الـ subject كمان.
+   - شغال من التحديث ده. تقدر تقفله، أو تدوس "Run now" علشان يتبعت على طول لأحسن أداء لحد دلوقتي، من نفس الكارت.
+     وفي System > Collectors بيظهر باسم "Best performer e-mail".
+   - لو أحسن أداء ملوش إيميل في الأكونت، الإيميل بيروح للـ Cc بس (من Admin > Users تضيف له إيميل).
+   - ترتيب أحسن أداء بقى بـ SCORE محسوب بالـ security requests: المكالمة = 2 طلب، الإيميل اللي اترد عليه = 3 طلبات،
+     والطلب اللي اتعمل (اتنفذ، متنفذش، اترفض) = 1. نفس الـ score في كل مكان: Insights > Analysis > "Best performers"
+     (عمود "Score")، والملخص اليومي، والإيميل ده.
+
+33. إيميل الـ Best Performance: الـ top 3، بالإنجليزي - ومبقاش في الملخص اليومي
+   - الملخص اليومي مبقاش بيعرض أحسن أداء. الاحتفال بيهم بقى مرة واحدة في اليوم، بإيميل الـ Best Performance بس
+     (System > Settings > Daily summary > "Best Performance e-mail").
+   - بيحتفل بالـ TOP 3 في اليوم في إيميل واحد: To التلاتة (إيميلات الأكونتات بتاعتهم)، والـ Cc اللي إنت بتحدده. فيه
+     منصة تتويج (دهبي، فضي، برونزي)، أساميهم وفرقهم، جدول بالمكالمات والإيميلات والطلبات والـ score، وكلمة تشجيع -
+     كله بالإنجليزي. وتقدر تغير "How many are celebrated" من 1 لـ 5 (3 افتراضي).
+   - الـ subject وكلامك: {names} بيتحط مكانها أساميهم ("A, B and C"). الـ subject الافتراضي: "Best Performance of
+     the day: {names}".
+   - الـ score زي ما هو: المكالمة = 2 طلب، الإيميل اللي اترد عليه = 3، الطلب = 1.
+
+34. "Out of memory" من الـ Outlook: الإيميل بيتجرب من غير اللوجو، والرسالة بتقول السبب وتعمل إيه
+   - لو الـ Outlook فضل يقول "Out of memory or system resources" بعد المحاولات بعد 20 ثانية و60 ثانية، الملخص اليومي
+     (وإيميل الـ Best Performance) بيتجرب مرة كمان من غير صورة اللوجو (بدلها كلمة NBE): شغل أقل على الـ Outlook. ولو
+     نجحت، باقي إيميلات نفس المرة بتروح من غير اللوجو كمان.
+   - كل error من الـ Outlook بقى بيقول الخطوة اللي وقفت: فتح الـ Outlook، عمل الإيميل، إضافة اللوجو، كتابة الـ body،
+     الإرسال...
+   - لما الـ Outlook يقول مفيش memory، الـ log والـ error بيقولوا الـ Outlook واخد قد إيه memory ولو هو 32-bit (الـ
+     Outlook الـ 32-bit مبيعديش 2,000 MB كتير).
+   - تعمل إيه لو فضلت: اقفل الـ Outlook خالص - في الـ Task Manager مايفضلش أي OUTLOOK.EXE - وافتحه تاني واضغط Run now.
+     الـ Outlook مبيرجعش الـ memory اللي خلصت إلا لما يتقفل ويتفتح؛ والتحديث ده بيمنع تقرير الإيميل إنه يملاها تاني.
+
+35. الـ SLA بقى بيتحسب من آخر إسناد لمستخدم السرية
+   - في كل مكان - تاب الـ Live، والـ Home، و My tickets، وإيميل الـ reminder / breach والـ Excel بتاعه، والـ SLA Analysis،
+     والملخص اليومي - الـ SLA بتاع الطلب بقى بيتحسب من آخر «اسناد لمستخدم السرية»: إمتى مستخدم السرية اللي معاه الطلب
+     دلوقتي استلمه. والطلب اللي يتعمله re-assign لحد تاني بيبدأ من جديد من وقت الـ re-assign.
+   - الوقت بيتاخد من (الأدق الأول): الحالة التاريخية للطلب (وقت الإسناد للمستخدم ده بالظبط)؛ ولو لسه ما اتقرتش بس الـ
+     scan شاف الطلب اتنقل للمستخدم ده، يبقى من أول scan شافه معاه ("moved to this user ~10:15")؛ وغير كده من «تاريخ
+     الارسال للسرية» (طلب ما اتنقلش لحد تاني).
+   - تاب الـ Live بيقول ده لكل طلب: "with this user since 10:15 · sent 09:30 · first assigned 09:40".
+   - في الـ SLA Analysis، الطلب اللي اتنقل ولسه الإسناد الجديد ما اتقراش بيظهر "not read yet" لحد ما الـ scans الجاية
+     تقراه - عمره ما بيتحسب بوقت الشخص اللي كان معاه قبل كده.
+
+36. الـ Live SLA مبقاش بيحسب الطلب المسند من «تاريخ الارسال للسرية»
+   - «تاريخ الارسال للسرية» مش وقت ما مستخدم السرية استلم الطلب: طلب اتبعت 20/10 واتسند 26/10 الساعة 23:02 كان بيتحسب
+     6 أيام بدل ساعات. دلوقتي:
+       - الحالة التاريخية للطلب بتدي وقت إسناده للمستخدم اللي معاه (بالظبط)؛
+       - لحد ما تتقري، بيتحسب من أول scan شافه مع المستخدم ده، على الأقل ("with this user since ~08:48 · assignment
+         not read yet")؛
+       - الطلب اللي لسه محدش ماسكه بس هو اللي بيتحسب من «تاريخ الارسال للسرية» ("not assigned yet").
+   - الـ scan بقى بيقرا الأول الحالة التاريخية لتذاكر الـ Live اللي وقت إسنادها مش معروف: بتتفتح قبل أي طلب تاني، وأيام
+     طلبها بتتدور عليها scan آه وscan لأ. والـ log بتاع الـ collector بيقول كام لسه ما اتقراش.
+
+37. طلبات السرية بتاعة MFA Team بقت بتتحسب تحت Open System
+   - في الـ SLA بس - تذاكر الـ Live، والـ Home، والـ SLA Analysis، وInsights › Analysis، والـ timeline، والتيكتات في
+     الملخص اليومي، والسجل يوم بيوم - طلبات تطبيقات MFA Team بتتحسب Open System. والأيام اللي اتسجلت قبل التحديث
+     بتتحسب بنفس الطريقة.
+   - مدير MFA Team بيشوف Open System كله هناك، ومدير Open System بيشوف طلبات MFA.
+   - الإيميلات والـ ITSM والحسابات زي ما هي بفرقها: مفيش حاجة اتغيرت في صفحات الإيميل ولا للموظفين.
+   - القاعدة في System › Settings › Ticketing › "Teams counted as one" (MFA Team -> Open System)؛ لو شلت السطر،
+     MFA Team يرجع يتحسب لوحده.
+
+38. طلب السرية بيتصنف بالنظام بتاعه، مش بالشخص
+   - فريق الطلب هو فريق التطبيق بتاعه «النظام» (من Auto Assign › Applications، أو كلمات التصنيف) - في كل الـ SLA.
+     فريق مستخدم السرية اللي ماسك الطلب أو اللي نفذه مبقاش بيتحسب: طلب Flexcube نفذه موظف من Open System هو طلب
+     Flex Cube.
+   - التطبيق اللي مفيش قاعدة بتسميه ملوش فريق: الأدمن بيلاقيه في "Applications with no team" في الـ SLA Analysis
+     ويحدد له فريقه من هناك.
+
+39. الإيميل: اقتراحات التصنيف بقت شغالة - والأدمن هو اللي بيوافق عليها
+   - اتصلح: لما حد من فريق X كان بيرد على إيميل ملوش فريق، الاقتراح "حطه في X" كان بيتعمل بس عمره ما وصل للصفحة.
+     دلوقتي بيظهر في E-mail › Unclassified › "Suggested classifications".
+   - الاقتراح جاي ومعاه الكلمة اللي هتتعلم جاهزة: الكلمة من الـ subject اللي بتسمي السيستم (زي "FileNet") - عمرها ما
+     بتكون اسم شخص ولا رقم تيكت ولا كلمة عامة ولا كلمة بتيجي في إيميلات فرق تانية. باقي كلمات الـ subject موجودة
+     كاختيارات في خانة الكلمة، وممكن تتغير قبل الموافقة.
+   - الأدمن بس هو اللي بيوافق (أو يرفض). بعد الموافقة الإيميل بيروح لفريق X والكلمة بتبقى قاعدة تصنيف، فالإيميل
+     الجاي اللي زيه بيروح لفريق X لوحده. ومفيش حاجة بتتغير قبل الموافقة.
+   - مدير الفريق بيشوف اقتراحات فريقه مكتوب عليها "waiting for the administrator's approval".
+
+40. Insights › Analysis: كارت الـ Tickets رجع يعرض أرقامه
+   - كارت الـ Tickets (والتاب بتاعه) كان بيعد بس الطلبات اللي الحالة التاريخية بتاعتها اتقرت، فكان بيطلع 0 أو أقل
+     بكتير. دلوقتي بيعد زي تاب الـ SLA وزي «الاستفسار عن الطلبات» في البورتال: لكل «تاريخ الطلب»، الطلبات اللي
+     وصلت لفريق السرية، ومنها اللي اتعززت - لكل فريق، والمدير بيشوف فريقه.
+   - أكتر ساعة شغل لسه جاية من الحالات التاريخية اللي اتقرت (هي بس اللي فيها الوقت).
+   - الأيام اللي الـ collector سجلها قبل التحديث بتتحسب بنفس الطريقة (سطر MFA Team بيتحسب Open System).
+
+41. تاب الـ SLA: كل طلب بيتحسب بالحالات اللي اتفقنا عليها، وتقدر تراجعه حالة حالة
+   - «تم التعزيز …» و«لم يتم …» بتتحسب دايما زي ما اتفقنا، بأي كلام البورتال يكتبه: «تم التعزيز»، «تم التعزيز بعدم
+     التنفيذ»، «تم التعزيز على لم يتم التنفيذ»، «لم يتم»، «لم يتم تنفيذ»، «تم عدم التنفيذ»، «تم تنفيذ»، «بانتظار
+     التعزيز» ... قبل كده، الكلام اللي مش مكتوب في الإعدادات بالظبط كان بيتحسب إنه لسه عند الفرع لو السطر مفيهوش مستخدم
+     سرية. والتعزيز من الفرع أو المنطقة أو القطاع بيفضل زي ما هو.
+   - أي حالة مش موجودة في حالات الـ SLA بتظهر دلوقتي تحت أرقام تاب الـ SLA (للأدمن) ومعاها عدد الطلبات، علشان تضيفها
+     للخطوة الصح في System › Settings › Ticketing › SLA recording.
+   - كارت جديد "By the portal's status": كل حالة «الاستفسار عن الطلبات» بيعرضها للتواريخ دي، وعدد الطلبات اللي عليها،
+     وبتتحسب في أنهي رقم (اتنفذ / ما اتنفذش، متعزز أو مستني التعزيز، مرفوض، لسه مع مستخدم سرية، أو مش محسوب: لسه عند
+     الفرع) - علشان تراجع كل رقم على البورتال.
+   - الـ Third Party لسه برة الـ SLA زي ما طلبت.
+
+42. الصفحة مبقتش تعرض حالة قديمة بعد أي تعديل
+   - لما اتنين بيعدلوا نفس القائمة في نفس اللحظة (مديرين بيعلموا إيميلات Done)، الصفحة كانت ممكن تعرض تعديل منهم كأنه
+     ما اتعملش لثواني. مفيش حاجة كانت بتضيع من الملفات؛ ودلوقتي الصفحة دايما بتعرض التعديل.
+
+43. سكان الـ SLA: الحالات التاريخية بتتقري تاني والبورتال زحمة، والسكان بقى أقصر
+   - الـ log كان بيقول «inquiry grid 19706 row(s) over 20 result pages ... result page N could not be shown again ...
+     0 status histor(ies) read». السكان كان بيلف على الـ 20 صفحة الأول (دقيقتين)، وبعدين يرجع لكل صفحة علشان يفتح
+     طلباتها. الرجوع معناه بحث جديد، والبورتال زحمة فالصفحة الأولى عمرها ما بتبقى زي ما هي (طلبات جديدة وحالات بتتغير)،
+     فمفيش ولا صفحة اتلاقت تاني ومفيش حاجة اتقرت.
+   - دلوقتي طلبات كل صفحة بتتفتح وهي معروضة: بحث واحد ومفيش رجوع. وفيه وقت متساب للصفحات اللي جاية علشان كل طلب
+     يتحسب، ومتساب كمان مكان لتذاكر الـ Live اللي ممكن تكون في الصفحات دي؛ واللي يفضل من غير ما يتقري بيتقري بعد
+     اللفة لو لسه فيه وقت. والسكان اللي بعده بيبدأ من الصفحة اللي بعد اللي وقف عندها، فمفيش صفحة بتستنى سكان ورا سكان.
+   - السكان بقى أقصر: كل سكان بيبحث في النهارده، ويوم واحد تاني من "Search the last (days)" بالدور، ويوم قديم واحد
+     فيه طلب لسه مفتوح - عمره ما بيبحث في كل الأيام مرة واحدة.
+   - السطر اللي البورتال زقه للصفحة اللي بعدها وإحنا بنقرا (الـ 19706 / 19705) بيتحسب مرة واحدة.
+   - الـ log بقى بيقول التواريخ اللي اتبحث فيها، وتواريخ الطلبات اللي البورتال عرضها (ومعاها WARNING لو برة البحث)،
+     والصفحات خدت قد إيه. لو البحث لسه بيطلع صفحات كتير، راجع System › Settings › Ticketing › "Search the last
+     (days)" (الافتراضي 3). و"Time for the history per scan (seconds)" (الافتراضي 180) هو أقصى وقت السكان بيفتح فيه
+     طلبات: قلله لو عايز السكان أقصر، والباقي بيكمل في السكانات اللي بعده.
+
+44. الـ Third Party: العدد بس، وعمره ما بيدخل في الـ SLA
+   - طلبات الـ Third Party لسه برة الـ SLA: مفيش breached ولا reminder ولا عمر ولا وقت، ومش داخلة في أرقام فريق السرية.
+     ودلوقتي بتشوف عددها بالحالات اللي اتفقنا عليها (وصلت، اتنفذت، ما اتنفذتش، اترفضت، لسه مع مستخدم سرية، مستنية
+     التعزيز، اتعززت):
+     - تاب الـ Live: مربع "Third Party" فيه عدد تذاكرها اللي على صفحة الـ Re-Assign دلوقتي؛
+     - Insights › Analysis › SLA: كارت "Third Party · counted only" للتواريخ اللي اخترتها (الأيام الأقدم من فترة
+       البحث بتيجي من الأعداد اللي اتسجلت في وقتها)؛
+     - الملخص اليومي: كارت "Third Party (counted only, not in the SLA)" لو ليها طلبات في اليوم ده.
+   - المدير بيشوفها بس لو الـ Third Party فريقه. والفرق اللي برة الـ SLA بتتحدد من System › Settings › Ticketing ›
+     "Teams left out" (الافتراضي Third Party).
+
+45. سكان الـ SLA: «عرض التالي» بيفتح تاني بعد تفاصيل الطلب، وكل أيام السكان بيتبحث فيها
+   - الـ log بتاعك: «only 2000 of the 3406 requests could be read - the next result page («عرض التالي») did not open»
+     و«no time left for 21/10 / 18/10». لما تفاصيل طلب بتبقى معروضة تحت الجدول، السكان كان ممكن ياخد «التالي» بتاع
+     الحالة التاريخية على إنه «عرض التالي» بتاع الصفحة: الصفحة ماتتحركش والسكان يستنى دقيقة كاملة.
+   - دلوقتي التفاصيل عمرها ما بتتاخد على إنها زرار الصفحة، والضغطة اللي ماتغيرش حاجة بتتساب بعد ثواني، ولو «عرض التالي»
+     برضه مافتحش، السكان بيبحث تاني ويكمل للصفحة اللي بعدها - فكل طلبات اليوم بتتحسب.
+   - فيه وقت متساب لباقي أيام السكان (يوم قريب ويوم قديم)، فبيتبحث فيهم كل مرة.
+   - v5.13: نسخة v5.12 كانت بتتجاهل أي زرار اسمه زي اسم صفحة الاستفسار نفسها (وفي البورتال الجدول و«عرض التالي» ليهم نفس
+     الاسم)، علشان كده الـ log قال «only 1000 of the 3406». دلوقتي اللي بيتجاهل بس هو جزء التفاصيل وزرار صفحات الحالة
+     التاريخية، و«عرض التالي» بتاع الصفحة هو اللي بيتختار الأول.
+
+46. سكان الـ SLA: أقل حاجة ممكنة بتفضل للسكان اللي بعده
+   - الأعداد بتطلع كاملة في كل سكان (3408 من 3408) لأنها من جدول الاستفسار نفسه. "left for the next scan" معناها بس
+     الطلبات اللي الحالة التاريخية بتاعتها (أوقاتها) لسه ماتقرتش. كل طلب منهم هو «التفاصيل» بتاعته في البورتال، وفيه
+     آلاف في اليوم، فأول سكانات بعد التحديث بتلحق اللي فات، وبعد كده كل سكان بيقرا اللي اتغير من آخر سكان بس.
+   - أسرع: تفاصيل الطلبات بتتقري في الخلفية، 4 مع بعض، من غير ما الصفحة تتعاد. ولو البورتال مسمحش بده، الـ log
+     بيقول كده مرة واحدة وبتتفتح واحد واحد زي الأول.
+   - "left" بقت بتعد بس اللي الأرقام محتاجاه: الطلبات اللي خلصت، واللي مستنية التعزيز، وتذاكر الـ Live اللي وقتها لسه
+     مش معروف. الطلب اللي لسه مع مستخدم سرية بيتقري لو فيه وقت وبيتكتب لوحده («still with a security user: read when
+     time allows»). والـ log بيقول «nothing left» لما مايفضلش حاجة.
+   - الـ log بتاعك وقف عند «detail budget»: الحد القديم 60 تفاصيل في السكان. الإعداد الجديد "Request details read per
+     scan (max)" افتراضيه 1000 (الـ 60 القديمة اللي اتحفظت مع إعداداتك مبقتش بتستخدم).
+   - كل سكان بيبحث في النهارده ويوم واحد تاني - يوم قريب ويوم قديم بالدور - بدل 3 أيام، فوقت أكتر بيروح للتفاصيل.
+     والوقت المتساب لليوم ده على قد صفحاته آخر مرة؛ واليوم الكبير على سكان واحد (18/10، 7599 طلب) مبقاش بيعطل باقي
+     الأيام.
+   - ملاحظة: "Search the last (days)" عندك 7 (الـ log بحث في 21/10 بالدور)، والافتراضي 3. السكان بيبحث في النهارده كل
+     مرة والأيام التانية يوم كل سكان بالدور، فالـ 7 مفيهاش مشكلة - بس كل يوم منهم بيتحدث على فترات أطول.

@@ -1,0 +1,1573 @@
+# -*- coding: utf-8 -*-
+"""Exact SLA lifecycle of a security request, read LIVE from the portal's status history.
+
+The «الاستفسار عن الطلبات» page (Security_Assign_Maker/RequestDetails_Inquiry.aspx) lists the requests of a period,
+and each request's «التفاصيل» holds «الحالة التاريخية للطلب»: one line per step - who did it (user number, name, user
+type), when (date and time) and which status. The bank's workflow is:
+
+    تسجيل                              Maker Branch        the branch registers the request
+    تم التعزيز من قبل مشرف الفرع       Checker Branch      the branch supervisor confirms it
+    اسناد لمستخدم السرية               the assigner        assigned to a security user        <- SLA clock starts
+    معلق                               security user       optional hold
+    تم التنفيذ / لم يتم التنفيذ        Maker Security      the security user (مستخدم السرية) acts on it
+    تم التعزيز على التنفيذ / عدم ...    Checker security    the reviewer (مراجع السرية) confirms it
+
+``events_from_table`` turns that table into events in TIME order (the page does not list them in order),
+``lifecycle`` turns the events into exact stamps and people. The grid helpers key the inquiry rows (the grid shows no
+request number, so a row is keyed on its own fixed columns) and decide which rows need their details opened (new, or
+status changed). ``fold_history`` writes the result into the SLA recording (``sla_records``), and ``analyze`` builds the
+SLA Analysis from it. Everything is live and kept as history: nothing is uploaded. Pure functions over plain dicts; the
+status labels come from the SLA settings (``sla_records.default_config()['statuses']``)."""
+import functools
+import hashlib
+import re
+from datetime import datetime
+
+from .engines.common import norm_arabic
+
+_FMT = "%Y-%m-%dT%H:%M:%S"
+SOURCE = "history"                  # records whose stamps come from the portal's status history (exact)
+
+# step key -> the SLA-settings status list it is read from (in the order a request goes through them)
+STEP_KEYS = ("registered", "branch_confirmed", "region_approved", "assigned", "held", "returned", "executed",
+             "not_executed", "confirmed_executed", "confirmed_not", "rejected", "transferred")
+# a settings list that is read as another step: a re-assignment is an assignment (to another security user)
+STEP_ALIASES = {"reassigned": "assigned"}
+_RANK = {k: i for i, k in enumerate(STEP_KEYS)}                  # tie-break for two steps stamped the same second
+_RANK["confirmed_not"] = _RANK["confirmed_executed"]
+_RANK["not_executed"] = _RANK["executed"]
+_RANK["transferred"] = _RANK["region_approved"]
+
+# the stages of a request's life the analysis times (minutes), in journey order; "sla" is THE SLA (the LAST assignment
+# to a security user -> the reviewer's confirmation: a re-assignment restarts it - the owner's rule; target
+# ``sla_minutes``); the others have their own targets (``stage_targets``)
+STAGES = (("branch", "Branch approval", "registered_at", "branch_confirmed_at"),
+          ("region", "Region / sector approval", "branch_confirmed_at", "region_approved_at"),
+          ("pickup", "Waiting to be assigned", "pool_at", "first_assigned_at"),
+          ("work", "Security user (assignment → execution)", "assigned_at", "executed_at"),
+          ("review", "Reviewer (execution → confirmation)", "executed_at", "confirmed_at"),
+          ("sla", "SLA (last assignment → confirmation)", "assigned_at", "confirmed_at"),
+          ("lifetime", "Whole request (registration → confirmation)", "registered_at", "confirmed_at"))
+JOURNEY = ("branch", "region", "pickup", "work", "review")        # the hand-offs that add up to a request's lifetime
+
+HISTORY_COLUMNS = {"user_no": "رقم المستخدم", "user_name": "اسم المستخدم", "user_type": "نوع المستخدم",
+                   "at": "التاريخ", "status": "الحالة", "notes": "ملاحظات"}
+GRID_COLUMNS = {"date": "تاريخ الطلب", "form": "نوع النموذج", "branch": "الفرع / الادارة", "employee": "اسم الموظف",
+                "employee_no": "رقم الموظف", "user_no": "رقم المستخدم", "system": "النظام", "group": "المجموعة",
+                "request_type": "نوع الطلب", "assigner": "موظف الاسناد", "executor": "مستخدم السرية",
+                "checker": "مراجع السرية", "notes": "ملاحظات", "status": "الحالة"}
+# the grid columns that never change over a request's life: what identifies a row before its details are opened
+GRID_KEY_FIELDS = ("date", "employee_no", "user_no", "system", "request_type", "form", "group", "branch", "employee")
+
+_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+_DMY = re.compile(r"(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})")
+_YMD = re.compile(r"(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})")
+_TIME = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM|ص|م)?", re.I)
+
+
+def _clean(text):
+    return " ".join(str(text or "").replace("﻿", "").split())
+
+
+@functools.lru_cache(maxsize=65536)
+def _norm_str(text):
+    return norm_arabic(_clean(text)).lower()
+
+
+def _norm(text):
+    return _norm_str(text) if isinstance(text, str) else _norm_str(str(text or ""))
+
+
+def parse_time(text):
+    """The portal's '21/10/2026 08:54:23' (day first; Arabic digits; AM/PM or ص/م; or yyyy-mm-dd) -> datetime/None."""
+    s = _clean(text).translate(_DIGITS)
+    m = _YMD.search(s)
+    if m:
+        year, month, day = map(int, m.groups())
+    else:
+        m = _DMY.search(s)
+        if not m:
+            return None
+        day, month, year = map(int, m.groups())
+    rest = s[:m.start()] + " " + s[m.end():]
+    hh = mm = ss = 0
+    t = _TIME.search(rest)
+    if t:
+        hh, mm, ss = int(t.group(1)), int(t.group(2)), int(t.group(3) or 0)
+        ampm = (t.group(4) or "").upper()
+        if ampm in ("PM", "م") and hh < 12:
+            hh += 12
+        elif ampm in ("AM", "ص") and hh == 12:
+            hh = 0
+    try:
+        return datetime(year, month, day, hh, mm, ss)
+    except ValueError:
+        return None
+
+
+def find_col(headers, wanted):
+    """Index of the header equal to ``wanted`` (Arabic-spelling-insensitive), else the first containing it; None."""
+    w = _norm(wanted)
+    names = [_norm(h) for h in headers or []]
+    for i, n in enumerate(names):
+        if n == w:
+            return i
+    for i, n in enumerate(names):
+        if w and w in n:
+            return i
+    return None
+
+
+_LABELS_MEMO = {}
+_LABELS_LAST = {}                    # the statuses object seen last and its labels (one grid: one settings object)
+
+
+def _labels(cfg):
+    """(memo key, [(normalised label, step or None)]) of the settings, longest label first (memoised per settings).
+    A current-status word («تحت التنفيذ», «قيد الإجراء») is never a step, even where an older saved setting still
+    lists it under the assignment (NBE OpsHub did): it would restart the security user's clock."""
+    statuses = (cfg or {}).get("statuses") or {}
+    last = _LABELS_LAST.get("cfg")
+    if last is not None and last[0] is statuses:          # the same settings object again (a whole grid): no key
+        return last[1]
+    memo_key = repr(sorted((k, tuple(v or ())) for k, v in statuses.items()))
+    hit = _LABELS_MEMO.get(memo_key)
+    if hit is None:
+        current = {_norm(label) for label in statuses.get("in_progress") or []} - {""}
+        pairs = [(n, None) for n in current]
+        for key, labels in statuses.items():
+            step = STEP_ALIASES.get(key, key)
+            if step not in STEP_KEYS:
+                continue
+            for label in labels or []:
+                n = _norm(label)
+                if n and n not in current:
+                    pairs.append((n, step))
+        pairs.sort(key=lambda p: -len(p[0]))
+        if len(_LABELS_MEMO) > 32:
+            _LABELS_MEMO.clear()
+        hit = _LABELS_MEMO[memo_key] = (memo_key, pairs, {})
+    _LABELS_LAST["cfg"] = (statuses, hit)
+    return hit
+
+
+# a final state the portal words in more ways than the settings list: the reviewer's confirmation, or the reply / the
+# password sent to the employee («تم ارسال الرد», «تم تسليم الرد», «تم ارسال كلمة المرور عن طريق ال SMS», ...)
+_FINAL_NOT = _norm("التعزيز على عدم")
+_FINAL_CONFIRM = _norm("التعزيز على")
+_FINAL_DONE = _norm("تم")
+_FINAL_SENT = (_norm("الرد"), "sms")
+
+
+# the reviewer's confirmation and the employee's (not) executing it, in the other words the portal uses for them (the
+# owner's rule: «تم التعزيز …» / «لم يتم …» always count) - never a confirmation by the branch, its region or sector
+_CONFIRM_WORD = _norm("تعزيز")
+_WAITING_WORD = _norm("انتظار")
+_BRANCH_WORDS = tuple(_norm(w) for w in ("مشرف", "الفرع", "المنطقة", "القطاع", "Platinum"))
+_DONE_WORD = _norm("تنفيذ")
+_DONE_START = _norm("تم")
+
+
+def _negative(s):
+    """Does a normalised status say "not" («عدم», «بعدم», «لم», «لم يتم»)?"""
+    return any(w == _norm("لم") or w.endswith(_norm("عدم")) for w in s.split())
+
+
+def _family_step(s):
+    """The step of a normalised status in the words of the confirmation / execution families the settings' labels do
+    not spell exactly: «تم التعزيز بعدم التنفيذ», «تم التعزيز على لم يتم التنفيذ» -> confirmed, not executed; «تم
+    التعزيز» -> confirmed, executed; «بانتظار التعزيز» -> executed, waiting for the reviewer; «لم يتم», «لم يتم تنفيذ»,
+    «تم عدم التنفيذ» -> not executed; «تم تنفيذ» -> executed. None for anything else (a confirmation by the branch,
+    region or sector included, and a current-status word like «تحت التنفيذ»)."""
+    if _CONFIRM_WORD in s:
+        if any(w in s for w in _BRANCH_WORDS):
+            return None
+        if _WAITING_WORD in s:
+            return "not_executed" if _negative(s) else "executed"
+        return "confirmed_not" if _negative(s) else "confirmed_executed"
+    if _negative(s) and (_DONE_WORD in s or s.split()[:2] == _norm("لم يتم").split()):
+        return "not_executed"
+    if s.split()[:1] == [_DONE_START] and _DONE_WORD in s:
+        return "executed"
+    return None
+
+
+def _final_step(s):
+    """The step of a normalised status no settings label names, when it plainly ENDS the request; else None."""
+    if _FINAL_NOT in s:
+        return "confirmed_not"
+    if _FINAL_CONFIRM in s:
+        return "confirmed_executed"
+    if s.startswith(_FINAL_DONE) and any(word in s for word in _FINAL_SENT):
+        return "confirmed_executed"
+    return None
+
+
+def step_of(status, cfg):
+    """The lifecycle step a status label means (``STEP_KEYS``), or None for a label that is not a step. An exact label
+    wins; else a reviewer's confirmation in other words (``_family_step``: «تم التعزيز على لم يتم التنفيذ» is a
+    confirmation, not «لم يتم التنفيذ»); else the LONGEST label the status contains («تم التعزيز من قبل مشرف الفرع و
+    بانتظار رد المنطقة» is a branch confirmation, «إعادة اسناد لمسخدم السرية» a re-assignment, «لم يتم التنفيذ» is not
+    «تم التنفيذ»); else the other (not) executed wordings (``_family_step``) and a final state in other words
+    (``_final_step``). A current-status word («تحت التنفيذ», «قيد الإجراء») is never a step."""
+    s = _norm(status)
+    if not s:
+        return None
+    _, pairs, memo = _labels(cfg)
+    if s in memo:
+        return memo[s]
+    step = next((st for label, st in pairs if s == label), "")
+    if step == "" and _CONFIRM_WORD in s:
+        step = _family_step(s) or ""
+    if step == "":
+        step = next((st for label, st in pairs if label in s), "")
+    if step == "":
+        step = _family_step(s) or _final_step(s)
+    if len(memo) > 2000:
+        memo.clear()
+    memo[s] = step
+    return step
+
+
+def events_from_table(headers, rows, cfg):
+    """The history table -> events in time order: {at (ISO), step, status, user, user_no, user_type, notes}. A line
+    without a readable time, or whose status is not a lifecycle step, is kept out (never fatal)."""
+    col = {k: find_col(headers, v) for k, v in HISTORY_COLUMNS.items()}
+    out = []
+    for n, r in enumerate(rows or []):
+        cell = lambda k: _clean(r[col[k]]) if col[k] is not None and col[k] < len(r) else ""   # noqa: E731
+        dt = parse_time(cell("at"))
+        step = step_of(cell("status"), cfg)
+        if dt is None or step is None:
+            continue
+        out.append({"at": dt.strftime(_FMT), "step": step, "status": cell("status"), "user": cell("user_name"),
+                    "user_no": cell("user_no"), "user_type": cell("user_type"), "notes": cell("notes"), "_n": n})
+    out.sort(key=lambda e: (e["at"], _RANK[e["step"]], e["_n"]))
+    for e in out:
+        e.pop("_n", None)
+    return out
+
+
+def _minutes(a, b):
+    try:
+        ta, tb = datetime.strptime(_clean(a)[:19], _FMT), datetime.strptime(_clean(b)[:19], _FMT)
+    except (ValueError, TypeError):
+        return None
+    m = (tb - ta).total_seconds() / 60.0
+    return m if m >= 0 else None
+
+
+TRAIL_NOTE_STEPS = ("returned", "rejected", "not_executed", "confirmed_not", "held", "transferred")
+
+
+def trail_of(events):
+    """The request's timeline as kept with its record: [[at, step, status, who, their number, note]] - the note only
+    where it explains something (why it was sent back, rejected, not executed, held), at most 160 characters."""
+    return [[e["at"], e["step"], e.get("status", ""), e.get("user", ""), e.get("user_no", ""),
+             _clean(e.get("notes"))[:160] if e["step"] in TRAIL_NOTE_STEPS else ""] for e in events or []]
+
+
+def lifecycle(events, cfg=None):
+    """Exact stamps of one request from its time-ordered events. Each clock measures the FINAL turn of each person:
+    the confirmation is the last one; the execution the last one before it; the assignment the last one before the
+    execution (a reassignment restarts the security user's clock; ``first_assigned_at`` keeps the team's full clock).
+    ``held_minutes`` adds up every «معلق» until the next step. ``region_approved_at`` = an approval above the branch
+    (region / financial sector / Platinum) and ``pool_at`` = when the request reached the security team's pool (that
+    approval, else the branch supervisor's, else the registration). ``returned`` = times it was sent back to the branch
+    («مطلوب تعديل»), ``rejected_at`` = a rejection with no confirmation after it. ``stage``: closed (confirmed) /
+    rejected / awaiting (executed, waiting for the reviewer) / open (with a security user) / pre (still at the branch)
+    / none. ``outcome``: completed / not_done / rejected / in_progress."""
+    ev = list(events or [])
+    of = lambda *keys: [e for e in ev if e["step"] in keys]          # noqa: E731
+    before = lambda items, limit: [e for e in items if not limit or e["at"] <= limit["at"]]  # noqa: E731
+    confirms = of("confirmed_executed", "confirmed_not")
+    confirm = confirms[-1] if confirms else None
+    execs = before(of("executed", "not_executed"), confirm)
+    execu = execs[-1] if execs else None
+    assigns = of("assigned")
+    assign = (before(assigns, execu) or [None])[-1] if assigns else None
+    first_assign = assigns[0] if assigns else None
+    registers = of("registered")
+    branch = before(of("branch_confirmed"), first_assign)
+    region = before(of("region_approved"), first_assign) or of("region_approved")
+    rejects = [e for e in of("rejected") if not confirm or e["at"] > confirm["at"]]
+    reject = rejects[-1] if rejects else None
+    held = 0.0
+    on_hold = False
+    for i, e in enumerate(ev):
+        if e["step"] != "held":
+            continue
+        nxt = next((x for x in ev[i + 1:] if x["step"] != "held"), None)
+        if nxt is None:
+            on_hold = True
+            continue
+        held += _minutes(e["at"], nxt["at"]) or 0.0
+    if confirm:
+        stage = "closed"
+    elif reject:
+        stage = "rejected"
+    elif execu:
+        stage = "awaiting"
+    elif assign:
+        stage = "open"
+    elif registers or branch or region:
+        stage = "pre"
+    else:
+        stage = "none"
+    if confirm:
+        outcome = "not_done" if confirm["step"] == "confirmed_not" else "completed"
+    else:
+        outcome = "rejected" if reject else "in_progress"
+    pick = lambda e, k: e[k] if e else ""                            # noqa: E731
+    # a re-assignment hands the request to another security user; the assignment after a request came back corrected
+    # from the branch is not one
+    reassigned, last = 0, None
+    for e in ev:
+        if e["step"] == "assigned" and last is not None and e is not first_assign and last != "returned":
+            reassigned += 1
+        if e["step"] != "held":
+            last = e["step"]
+    registered_at = registers[0]["at"] if registers else ""
+    branch_at = branch[-1]["at"] if branch else ""
+    region_at = region[0]["at"] if region else ""
+    return {
+        "registered_at": registered_at,
+        "branch_confirmed_at": branch_at,
+        "region_approved_at": region_at, "region_by": pick(region[0] if region else None, "user"),
+        "pool_at": region_at or branch_at or registered_at,
+        "first_assigned_at": pick(first_assign, "at"),
+        "assigned_at": pick(assign, "at"), "assigner": pick(assign, "user"), "assigner_no": pick(assign, "user_no"),
+        "executed_at": pick(execu, "at"), "executor": pick(execu, "user"), "executor_no": pick(execu, "user_no"),
+        "exec_outcome": ("not_executed" if execu["step"] == "not_executed" else "executed") if execu else "",
+        "confirmed_at": pick(confirm, "at"), "checker": pick(confirm, "user"), "checker_no": pick(confirm, "user_no"),
+        "final_outcome": ("not_executed" if confirm["step"] == "confirmed_not" else "executed") if confirm else "",
+        "rejected_at": pick(reject, "at"), "rejected_by": pick(reject, "user"),
+        "returned": len(of("returned")), "transferred": len(of("transferred")),
+        "held_minutes": round(held, 1), "on_hold": on_hold,
+        "reassigned": reassigned,
+        "stage": stage, "outcome": outcome, "steps": len(ev),
+        "last_status": ev[-1]["status"] if ev else "",
+        "trail": trail_of(ev),
+    }
+
+
+def rederive(r, cfg):
+    """A record read under older status rules, brought up to the current ones: the steps of its kept timeline are named
+    again from their status text and its stamps re-computed (so a «قيد الإجراء» line read as an assignment no longer
+    restarts the security user's clock, and a final state named in other words closes it). The same record when
+    nothing changes."""
+    trail = (r or {}).get("trail") or []
+    current = {_norm(label) for label in ((cfg or {}).get("statuses") or {}).get("in_progress") or []}
+    events, changed = [], False
+    for n, t in enumerate(trail):
+        t = list(t) + [""] * (6 - len(t))
+        step = step_of(t[2], cfg) if _clean(t[2]) else t[1]
+        if step is None and _norm(t[2]) not in current:
+            step = t[1]                                   # a wording the rules do not know: keep what was recorded
+        changed = changed or step != t[1]
+        if step in _RANK:
+            events.append({"at": t[0], "step": step, "status": t[2], "user": t[3], "user_no": t[4], "user_type": "",
+                           "notes": t[5], "_n": n})
+    if not changed:
+        return r
+    events.sort(key=lambda e: (e["at"], _RANK[e["step"]], e["_n"]))
+    for e in events:
+        e.pop("_n", None)
+    lc = apply_period(lifecycle(events, cfg), r.get("period_from"))
+    for name, stamp in _NAME_OF_STEP:                     # the grid filled a name the history did not give
+        if lc[stamp] and not lc[name]:
+            lc[name] = r.get(name, "")
+    return {**r, **lc}
+
+
+def closing_day(r):
+    """The day a finished request is filed under: its confirmation, else its rejection ("" while it is not finished)."""
+    if r.get("stage") == "rejected" or (not r.get("confirmed_at") and r.get("rejected_at")):
+        return _clean(r.get("rejected_at"))[:10]
+    return _clean(r.get("confirmed_at"))[:10]
+
+
+def is_finished(r):
+    return stage_of(r) in ("closed", "rejected") and bool(closing_day(r))
+
+
+# ------------------------------------------------------------------- a request with a period («الفترة من», form 7)
+PERIOD_FORMS = ("7",)                   # «نوع النموذج» numbers whose requests carry «الفترة من / الى»
+PERIOD_VERSION = 1                      # index entries read since the period is taken from the details ("pv")
+
+
+def is_period_form(form):
+    """Is «نوع النموذج» one of the forms with a period («نموذج (7)»)?"""
+    digits = re.findall(r"\d+", _clean(form).translate(_DIGITS))
+    return any(d in PERIOD_FORMS for d in digits)
+
+
+def period_start(text, day_start="08:00"):
+    """«الفترة من» as read in the request details -> ISO stamp ("" when none). A date without a time starts at the
+    working day's start (``day_start``, the SLA's active hours): the request cannot be worked before its period."""
+    t = parse_time(text)
+    if t is None:
+        return ""
+    s = _clean(text).translate(_DIGITS)
+    m = _YMD.search(s) or _DMY.search(s)
+    if not _TIME.search(s[:m.start()] + " " + s[m.end():]):
+        hh, mm = (int(x) for x in (re.findall(r"\d+", day_start or "") + ["8", "0"])[:2])
+        t = t.replace(hour=min(hh, 23), minute=min(mm, 59), second=0)
+    return t.strftime(_FMT)
+
+
+def apply_period(lc, period_from):
+    """A request with a period («الفترة من») cannot be worked before the period starts - it is sent ahead, often days
+    before (its «تاريخ الطلب»), and executed on the day its period starts: the security user's clock (``assigned_at``)
+    and the whole request's (``first_assigned_at``) start at the later of the assignment and the period's start, so it
+    belongs to that day and is not counted as days late. The real assignments stay as ``assigned_real_at`` /
+    ``first_assigned_real_at`` ("" when the period moved nothing); a clock is never moved past the execution, and the
+    pool wait (``pool_at``) starts there too. ``lc`` = a lifecycle (its real stamps); returns it."""
+    start = parse_time(period_from) if period_from else None
+    lc["period_from"] = start.strftime(_FMT) if start else ""
+    limit = parse_time(lc.get("executed_at") or lc.get("confirmed_at") or lc.get("rejected_at"))
+    for key, real_key in (("first_assigned_at", "first_assigned_real_at"), ("assigned_at", "assigned_real_at")):
+        t = parse_time(lc.get(key))
+        lc[real_key] = ""
+        if start and t and start > t and (limit is None or start <= limit):
+            lc[real_key], lc[key] = lc[key], start.strftime(_FMT)
+    pool = parse_time(lc.get("pool_at"))
+    if start and pool and start > pool and lc.get("first_assigned_real_at"):
+        lc["pool_at"] = lc["first_assigned_at"]
+    elif start and pool and start > pool and (limit is None or start <= limit):
+        lc["pool_at"] = start.strftime(_FMT)
+    return lc
+
+
+def stage_minutes(r):
+    """{stage key: minutes or None} of one record (``STAGES``)."""
+    pool = r.get("pool_at") or r.get("region_approved_at") or r.get("branch_confirmed_at") or r.get("registered_at")
+    first = r.get("first_assigned_at") or r.get("assigned_at")
+    stamps = {**r, "pool_at": pool, "first_assigned_at": first}
+    return {key: _minutes(stamps.get(a), stamps.get(b)) for key, _, a, b in STAGES}
+
+
+def stage_targets(cfg):
+    """{stage key: target minutes}: the stage targets of the settings, and the SLA target for "sla"."""
+    from .sla_records import DEFAULT_STAGE_TARGETS
+    out = {**DEFAULT_STAGE_TARGETS, **((cfg or {}).get("stage_targets") or {})}
+    out["sla"] = int((cfg or {}).get("sla_minutes") or 180)
+    return {k: int(v) for k, v in out.items()}
+
+
+def rag(minutes, target):
+    """"ok" within the target, "warn" up to one and a half times it, "bad" beyond; "" when unknown."""
+    if minutes is None or not target:
+        return ""
+    return "ok" if minutes <= target else "warn" if minutes <= 1.5 * target else "bad"
+
+
+# --------------------------------------------------------------------------------------------- the inquiry grid
+def grid_rows(headers, rows):
+    """The inquiry grid -> [{date, form, ..., status, key}] (``key`` from the columns that never change). «تاريخ الطلب»
+    has no time, so the same employee, system and request type can be listed twice in a day - two requests, each with
+    its own «رقم الطلب». The second and later rows with the same fields get an occurrence number in their key (in grid
+    order), so no request is ever folded into another; the first keeps the key it always had."""
+    return [item for _, item in grid_rows_indexed(headers, rows)]
+
+
+def grid_rows_indexed(headers, rows, seen=None):
+    """``grid_rows`` as [(index of the row in ``rows``, item)]: the page row each request came from (its own
+    «التفاصيل» post-back), footer lines left out. ``seen`` (kept by the caller) carries the key occurrences of the
+    rows before these - the result pages of one search, read one after another, key as one grid."""
+    col = {k: find_col(headers, v) for k, v in GRID_COLUMNS.items()}
+    # «رقم الموظف» must not be taken by «رقم الموظف TP»: find_col prefers the exact header, so it is not
+    out, seen = [], ({} if seen is None else seen)
+    for n, r in enumerate(rows or []):
+        item = {k: (_clean(r[i]) if i is not None and i < len(r) else "") for k, i in col.items()}
+        if not any(item[k] for k in ("date", "employee_no", "system", "status")):
+            continue                                   # a footer / "no data" line
+        base = grid_key(item)
+        seen[base] = seen.get(base, 0) + 1
+        item["key"] = base if seen[base] == 1 else grid_key(item, seen[base])
+        out.append((n, item))
+    return out
+
+
+def grid_key(item, occurrence=1):
+    raw = "|".join(_norm(item.get(k)) for k in GRID_KEY_FIELDS)
+    if occurrence > 1:
+        raw += f"|#{occurrence}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
+
+
+MAX_TRIES = 2                       # a row whose details failed this many times is left until its status moves
+
+
+def needs_period_read(item, index):
+    """A row of a form with a period («نموذج (7)») whose details were read before «الفترة من» was taken from them: read
+    once more (after every other row), so its clocks start at its period."""
+    known = (index or {}).get(item.get("key")) or {}
+    return bool(known.get("id")) and not known.get("pv") and is_period_form(item.get("form"))
+
+
+def needs_details(item, index, cfg=None, period=True):
+    """Open this row's details? Yes when the row is new, its status changed since the last read (the history only
+    grows when the status moves), or it moved to another security user (a re-assignment keeps the status but starts a
+    new assignment). Also once when the grid shows it FINISHED but its record is not (read under older rules that
+    did not know that final state, e.g. «تم ارسال الرد»). ``index`` = {grid key: {"id", "status", "holder", "day",
+    "checked", "fail"}} kept with the recording. A row that could not be read ``MAX_TRIES`` times in the same status
+    waits until its status moves (so one broken row never costs every scan a full wait)."""
+    known = (index or {}).get(item.get("key"))
+    fail = (known or {}).get("fail") or {}
+    if fail and int(fail.get("n") or 0) >= MAX_TRIES and _norm(fail.get("status")) == _norm(item.get("status")):
+        return False
+    if not known or not known.get("id"):
+        return True
+    if _norm(known.get("status")) != _norm(item.get("status")):
+        return True
+    if period and needs_period_read(item, index):
+        return True
+    if (not known.get("day") and row_stage(item, cfg) in ("closed", "rejected")
+            and _norm(known.get("checked")) != _norm(item.get("status"))):
+        return True
+    # a re-assignment keeps the status but hands the request to another security user: its assignment time is new.
+    # An entry read before holders were kept is read once more while the request is with a security user.
+    if "holder" in known:
+        return _norm(known.get("holder")) != _norm(item.get("executor"))
+    return row_stage(item, None) in ("open", "awaiting")
+
+
+GRID_STAGES = ("closed", "awaiting", "open", "pre", "rejected")
+
+
+def grid_stage(status, cfg=None, holder=None):
+    """Where a request stands from the grid's CURRENT status: closed (confirmed by the reviewer), rejected, awaiting
+    (executed / not executed, waiting for the reviewer), open (with a security user: assigned, on hold, in progress) or
+    pre (still with the branch - registered, waiting for its supervisor or region - or sent back to it). A wording no
+    step names (a current-status word like «تحت التنفيذ», or one the settings do not list) is with a security user
+    only when the grid names one («مستخدم السرية», ``holder``); without one it has not reached the security team yet
+    ("pre"), so a registration never counts as open. Callers that cannot give the holder (None) get "open"."""
+    if cfg is None:
+        from .sla_records import default_config
+        cfg = default_config()
+    step = step_of(status, cfg)
+    if step in ("confirmed_executed", "confirmed_not"):
+        return "closed"
+    if step == "rejected":
+        return "rejected"
+    if step in ("executed", "not_executed"):
+        return "awaiting"
+    if step in ("registered", "branch_confirmed", "region_approved", "returned"):
+        return "pre"
+    if step in ("assigned", "held", "transferred") or holder is None:
+        return "open"
+    return "open" if _clean(holder) else "pre"
+
+
+def known_status(status, cfg):
+    """Does the settings' status list name this grid wording (a step, or a current-status word)?"""
+    if step_of(status, cfg):
+        return True
+    current = {_norm(x) for x in ((cfg or {}).get("statuses") or {}).get("in_progress") or []}
+    s = _norm(status)
+    return bool(s) and any(c and c in s for c in current)
+
+
+def row_stage(g, cfg):
+    """``grid_stage`` of one grid row (a raw inquiry row, or a ``grid_state`` entry): its status and its security
+    user."""
+    holder = g.get("holder") if "holder" in g else g.get("executor")
+    if not _clean(g.get("status")) and g.get("stage"):
+        return g["stage"]
+    return grid_stage(g.get("status"), cfg, holder or "")
+
+
+def detail_priority(status, cfg, holder=None):
+    """Which rows' details are read first when a scan cannot read them all: a FINISHED request - confirmed, then
+    rejected (one read gives every stamp: the day's executed / not executed / rejected numbers and their times) -
+    then one awaiting the reviewer, then one still with a security user (the Live tab counts from «تاريخ الارسال
+    للسرية» and needs no history). None = never opened (still with the branch: no SLA step yet)."""
+    return {"closed": 0, "rejected": 1, "awaiting": 2, "open": 3}.get(grid_stage(status, cfg, holder))
+
+
+SECURITY_STAGES = ("open", "awaiting", "closed", "rejected")
+
+
+SINCE_VERSION = 2                    # grid entries dated by this rule ("sv"); older ones are never trusted
+SINCE_HOUR_GAP = 60                  # minutes: a change seen between two scans this close gets its hour
+
+
+def grid_state(grid, previous, now, cfg, watched_from=None):
+    """The latest inquiry rows as {key: {status, stage, system, holder, checker, employee, form, request_date, since,
+    since_known, since_gap, entered, entered_gap, seen, sv, known}}: what is open / awaiting the reviewer RIGHT NOW
+    (complete even before a row's details are read).
+
+    A row's status is DATED only when the day is certain: the request was registered that day, or the scans watched
+    the status change between two reads of the SAME day (``seen`` = when a row was last read). Then ``since_known`` is
+    true and ``since`` is that read; ``since_gap`` = minutes since the read before (its hour is only taken when the
+    two reads are close, ``SINCE_HOUR_GAP``). Never because a row is seen for the first time, never across a gap of
+    days (a scan after hours or days without one would date every change "today"), and never from an entry an older
+    version wrote (no ``sv``). ``entered`` = when the scans watched it reach the security team, same rules.
+    ``known`` = the settings name its wording. (``watched_from`` is no longer used.)"""
+    out = {}
+    today = _day(now)
+    for g in grid or []:
+        prev = (previous or {}).get(g["key"])
+        day = parse_time(g.get("date"))
+        born_today = bool(day) and day.strftime("%Y-%m-%d") == today
+        stage = row_stage(g, cfg)
+        trusted = bool(prev) and prev.get("sv") == SINCE_VERSION
+        same_day = trusted and _day(prev.get("seen")) == today
+        gap = _minutes(prev.get("seen"), now) if same_day else None
+        if trusted and _norm(prev.get("status")) == _norm(g.get("status")):
+            since, since_known, since_gap = prev.get("since") or now, bool(prev.get("since_known")), prev.get("since_gap")
+        elif same_day:                                    # watched it change since this morning's read
+            since, since_known, since_gap = now, True, gap
+        else:
+            since, since_known, since_gap = now, born_today, None
+        entered, entered_gap = (prev.get("entered") or "", prev.get("entered_gap")) if trusted else ("", None)
+        if not entered and stage in SECURITY_STAGES:
+            if same_day and prev.get("stage") == "pre":
+                entered, entered_gap = now, gap           # watched it reach the security team
+            elif born_today:
+                entered, entered_gap = now, None          # today's request: the day is certain, the hour is not
+        out[g["key"]] = {"status": _clean(g.get("status")), "stage": stage,
+                         "system": _clean(g.get("system")), "holder": _clean(g.get("executor")),
+                         "checker": _clean(g.get("checker")), "employee": _clean(g.get("employee")),
+                         "request_type": _clean(g.get("request_type")), "user_no": _clean(g.get("user_no")),
+                         "assigner": _clean(g.get("assigner")), "form": _clean(g.get("form")),
+                         "request_date": day.strftime(_FMT) if day else "",
+                         "since": since, "since_known": since_known, "since_gap": since_gap,
+                         "entered": entered, "entered_gap": entered_gap, "seen": now, "sv": SINCE_VERSION,
+                         "known": known_status(g.get("status"), cfg)}
+    return out
+
+
+def merge_grid(previous, fresh, covered, keep_from):
+    """The grid kept after a read: the rows just read (``fresh``), and of the earlier ones only those of request days
+    this read did not cover completely (``covered``: a set of days) that still matter - with the security team and not
+    finished, or of the recent window (day >= ``keep_from``). A request already finished, of an older day, is not kept:
+    its outcome is known and the grid stays small (thousands of old rows made every page slow)."""
+    out = {}
+    for key, g in (previous or {}).items():
+        day = _day(g.get("request_date"))
+        if key in fresh or (day and day in covered) or (day and day < keep_from and g.get("stage") not in ("open", "awaiting")):
+            continue
+        out[key] = g
+    out.update(fresh)
+    return out
+
+
+def unknown_wordings(grid, cfg, top=5):
+    """The grid wordings the settings do not name, most frequent first: [(wording, rows)] - each one is placed by its
+    security user (``grid_stage``) until it is added to Settings › SLA statuses."""
+    counts = {}
+    for g in (grid or {}).values() if isinstance(grid, dict) else grid or []:
+        status = _clean(g.get("status"))
+        if status and not known_status(status, cfg):
+            counts[status] = counts.get(status, 0) + 1
+    return sorted(counts.items(), key=lambda kv: -kv[1])[:top]
+
+
+# ------------------------------------------------------------------------------------------- into the recording
+_NAME_OF_STEP = (("assigner", "assigned_at"), ("executor", "executed_at"), ("checker", "confirmed_at"))
+
+
+def fold_history(records, index, items, cfg, now, system_team=None):
+    """Fold one live inquiry read into the recording (``records`` keyed by the request number, kept as history).
+    ``items`` = [{"grid": a grid row, "id": the request number read from its details ("" when not opened), "history":
+    its events (None when not opened)}]. A row whose details were opened gets the exact stamps (and the employee
+    numbers) of its lifecycle and its index entry takes the new status. A row that was NOT opened keeps its old index
+    status - so a row that moved and could not be read this scan is read at the next one - and only refreshes the grid
+    fields of a record already in ``records``. ``index`` = {grid key: {id, status, day}} (``day`` = the confirmation
+    day of a closed request: where its record is kept). Returns {"added", "updated", "seen"}."""
+    now = _clean(now) or datetime.now().strftime(_FMT)
+    tmap = {str(k).strip().lower(): v for k, v in (system_team or {}).items()}
+    stats = {"added": 0, "updated": 0, "seen": 0}
+    for it in items or []:
+        g = it.get("grid") or {}
+        key = g.get("key") or grid_key(g)
+        events = it.get("history")
+        known = (index or {}).get(key) or {}
+        if it.get("failed"):                           # remember the failure (tried again only a few times)
+            fail = known.get("fail") or {}
+            same = _norm(fail.get("status")) == _norm(g.get("status"))
+            index[key] = known = {"id": known.get("id", ""), "status": known.get("status", ""),
+                                  "day": known.get("day", ""), "fail": {"status": _clean(g.get("status")),
+                                                                       "n": (int(fail.get("n") or 0) if same else 0) + 1,
+                                                                       "at": now[:10]}}
+        rid = _clean(it.get("id")) or _clean(known.get("id"))
+        if not rid:
+            continue                                   # never opened and not known: nothing to key it on
+        rec = records.get(rid)
+        if rec is None:
+            if events is None:
+                continue                               # known, not opened, not loaded (closed, in its day file)
+            rec = records[rid] = {"id": rid, "first_seen": now}
+            stats["added"] += 1
+        system = _clean(g.get("system")) or rec.get("system") or ""
+        day = parse_time(g.get("date"))
+        rec.update(source=SOURCE, last_seen=now, grid_key=key, system=system,
+                   team=tmap.get(system.lower(), rec.get("team") or ""),
+                   grid_status=_clean(g.get("status")) or rec.get("grid_status", ""),
+                   holder=_clean(g.get("executor")) or rec.get("holder", ""),        # the security user it is with
+                   requester=_clean(g.get("employee")) or rec.get("requester", ""),
+                   requester_no=_clean(g.get("employee_no")) or rec.get("requester_no", ""),
+                   user_no=_clean(g.get("user_no")) or rec.get("user_no", ""),     # «رقم المستخدم»: links the live ticket
+                   branch=_clean(g.get("branch")) or rec.get("branch", ""),
+                   request_type=_clean(g.get("request_type")) or rec.get("request_type", ""),
+                   request_date=day.strftime("%Y-%m-%d") if day else rec.get("request_date", ""))
+        if events is not None:
+            lc = apply_period(lifecycle(events, cfg), it.get("period_from"))
+            for name, stamp in _NAME_OF_STEP:          # the history names who did each step; the grid fills a gap
+                if lc[stamp] and not lc[name]:
+                    lc[name] = _clean(g.get(name))
+            rec.update(lc, period_to=_clean(it.get("period_to")), form=_clean(g.get("form")) or rec.get("form", ""))
+            stats["updated"] += 1
+            index[key] = {"id": rid, "status": _clean(g.get("status")), "holder": _clean(g.get("executor")),
+                          "day": closing_day(rec) if is_finished(rec) else "", "checked": _clean(g.get("status")),
+                          "pv": PERIOD_VERSION}
+        else:
+            stats["seen"] += 1
+            index[key] = {"id": rid, "status": known.get("status", ""), "day": known.get("day", ""),
+                          **({"holder": known["holder"]} if "holder" in known else {}),
+                          **({"checked": known["checked"]} if known.get("checked") else {}),
+                          **({"pv": known["pv"]} if known.get("pv") else {}),
+                          **({"fail": known["fail"]} if known.get("fail") else {})}
+    return stats
+
+
+# ------------------------------------------------------------------------------------------------ right now
+def right_now(grid, open_records, index, cfg, now, keep=None, live=None):
+    """What is open / awaiting the reviewer RIGHT NOW: every request the latest inquiry grid lists (read or not), plus
+    every live ticket of the Re-Assign page the grid does not list (``live``: the Live tickets tab's requests, already
+    limited to the viewer) - so the open count is complete. A request's age counts from its LAST «اسناد لمستخدم
+    السرية» - when the security user holding it now got it (a re-assignment restarts the clock, like the Live tickets
+    tab); ``holder_minutes`` is the same clock. Ages come from the exact history; a request whose history is not read
+    yet, or not since it moved to its new holder, has none ("not read yet") - never the previous holder's time. The stage is taken from the CURRENT status with the current rules.
+    ``keep(row)`` narrows the rows (team, person, exclusions)."""
+    sla = int((cfg or {}).get("sla_minutes") or 180)
+    open_now, awaiting_now, pre = [], [], 0
+    open_keys = {}                                       # (user number, system, request type) -> open entries
+    for key, g in (grid or {}).items():
+        if keep and not keep(g):
+            continue
+        stage = row_stage(g, cfg)
+        entry = (index or {}).get(key) or {}
+        rid = entry.get("id") or ""
+        rec = (open_records or {}).get(rid) or {}
+        # the record was read at this very stage, and with the security user who holds it now (a re-assignment keeps
+        # the status: the new holder's clock is not read yet - never shown as the previous holder's time)
+        same = (bool(rec) and stage_of(rec) == stage
+                and ("holder" not in entry or _norm(entry.get("holder")) == _norm(g.get("holder"))))
+        first = (rec.get("first_assigned_at") or rec.get("assigned_at")) if rec and stage_of(rec) in ("open", "awaiting") else ""
+        request_m = _since(rec.get("assigned_at"), now) if same and stage_of(rec) in ("open", "awaiting") else None
+        if stage == "pre":
+            pre += 1
+        elif stage == "open":
+            held_m = _since(rec.get("assigned_at"), now) if same else None
+            item = {"id": rid, "holder": g.get("holder") or "", "system": g.get("system") or "",
+                    "requester": g.get("employee") or "", "request_type": g.get("request_type") or "",
+                    "first_assigned_at": first, "assigned_at": rec.get("assigned_at", "") if same else "",
+                    "minutes": round(request_m, 1) if request_m is not None else None,
+                    "holder_minutes": round(held_m, 1) if held_m is not None else None,
+                    "on_hold": bool(same and rec.get("on_hold")),
+                    "breached": request_m is not None and request_m > sla, "status": g.get("status") or "",
+                    "source": "inquiry"}
+            open_now.append(item)
+            open_keys.setdefault(_live_key_of_grid(g), []).append(item)
+        elif stage == "awaiting":
+            m = _minutes(rec.get("executed_at"), now) if same else None
+            work = _minutes(rec.get("assigned_at"), rec.get("executed_at")) if same else None
+            awaiting_now.append({"id": rid, "executor": (rec.get("executor") if same else "") or g.get("holder") or "",
+                                 "system": g.get("system") or "", "executed_at": rec.get("executed_at", "") if same else "",
+                                 "minutes": round(m, 1) if m is not None else None,
+                                 "employee_minutes": round(work, 1) if work is not None else None,
+                                 "request_minutes": round(request_m, 1) if request_m is not None else None,
+                                 "outcome": rec.get("exec_outcome", "") if same else ""})
+    live_only = 0
+    for req in _live_unlisted(live, open_keys):          # on the Re-Assign page, not (yet) on the inquiry grid
+        live_only += 1
+        fields = req.get("fields") or {}
+        first = req.get("assigned_at") or ""
+        start = req.get("clock_at") or req.get("sent_at") or ""   # the Live tab's clock: the last assignment
+        m = _minutes(start, now) if start else None
+        open_now.append({"id": "", "holder": req.get("security_user") or "",
+                         "system": _field(fields, "النظام"), "requester": _field(fields, "اسم الموظف"),
+                         "request_type": _field(fields, "نوع الطلب"), "first_assigned_at": first or "",
+                         "assigned_at": req.get("last_assigned_at") or req.get("holder_seen_at") or "",
+                         "sent_at": req.get("sent_at") or "",
+                         "minutes": round(m, 1) if m is not None else None, "holder_minutes": None, "on_hold": False,
+                         "breached": m is not None and m > sla, "status": "", "source": "live"})
+    holders = {}
+    for o in open_now:
+        h = holders.setdefault(o["holder"] or "—", {"holder": o["holder"] or "—", "n": 0, "breached": 0, "on_hold": 0,
+                                                     "oldest_minutes": None, "unread": 0})
+        h["n"] += 1
+        h["breached"] += o["breached"]
+        h["on_hold"] += o["on_hold"]
+        h["unread"] += o["minutes"] is None
+        if o["minutes"] is not None:
+            h["oldest_minutes"] = max(h["oldest_minutes"] or 0, o["minutes"])
+    ages = [o["minutes"] for o in open_now if o["minutes"] is not None]
+    open_now.sort(key=lambda x: -(x["minutes"] if x["minutes"] is not None else -1))
+    awaiting_now.sort(key=lambda x: -(x["minutes"] if x["minutes"] is not None else -1))
+    return {"now": {"open": len(open_now), "awaiting": len(awaiting_now), "pre": pre, "live_only": live_only,
+                    "breached": sum(1 for o in open_now if o["breached"]),
+                    "on_hold": sum(1 for o in open_now if o["on_hold"]),
+                    "unread": sum(1 for o in open_now if o["minutes"] is None),
+                    "oldest_minutes": round(max(ages), 1) if ages else None,
+                    "by_holder": sorted(holders.values(), key=lambda x: (-x["breached"], -(x["oldest_minutes"] or 0), -x["n"]))},
+            "open_now": open_now[:1000], "awaiting_now": awaiting_now[:1000]}
+
+
+def _since(stamp, now):
+    """Minutes from ``stamp`` to ``now``; 0 when it is still ahead (a period that starts later), None without one."""
+    if not _clean(stamp):
+        return None
+    m = _minutes(stamp, now)
+    return m if m is not None or parse_time(stamp) is None else 0.0
+
+
+def _field(fields, header):
+    want = _norm(header)
+    return next((_clean(v) for k, v in (fields or {}).items() if _norm(k) == want), "")
+
+
+def _live_key_of_grid(g):
+    return (_norm(g.get("user_no")), _norm(g.get("system")), _norm(g.get("request_type")))
+
+
+grid_live_key = _live_key_of_grid                        # an inquiry row's (user number, system, request type)
+
+
+def live_key(req):
+    """A Live ticket's («رقم المستخدم», «النظام», «نوع الطلب») - what matches it to its inquiry row and record."""
+    return tuple(_live_field(req, k) for k in ("user_no", "system", "request_type"))
+
+
+def _live_unlisted(live, open_keys):
+    """The live tickets (Re-Assign page) that match no OPEN row of the inquiry grid (same «رقم المستخدم», «النظام»,
+    «نوع الطلب»; each grid row matched once, the same security user first)."""
+    left = {k: list(v) for k, v in (open_keys or {}).items()}
+    out = []
+    for req in live or []:
+        key = tuple(_live_field(req, k) for k in ("user_no", "system", "request_type"))
+        cands = left.get(key) or []
+        if key[0] and cands:
+            same = next((c for c in cands if _norm(c["holder"]) == _norm(req.get("security_user"))), cands[0])
+            cands.remove(same)
+            continue
+        out.append(req)
+    return out
+
+
+def grid_stubs(grid, index, records, cfg=None):
+    """The requests the latest inquiry grid lists with the security team (assigned, awaiting the reviewer, confirmed or
+    rejected) whose status history is not read yet, as records without stamps: so the SLA Analysis counts EVERY
+    request the portal lists, not only the ones read so far. Their stage and outcome come from the grid's status;
+    they have no clock until their history is read. Keyed "grid:<key>"; a row already read (its request number is
+    in the index) is never added twice."""
+    out = {}
+    for key, g in (grid or {}).items():
+        entry = (index or {}).get(key) or {}
+        if entry.get("id"):
+            continue
+        stage = row_stage(g, cfg)
+        if stage not in ("open", "awaiting", "closed", "rejected"):
+            continue
+        step = step_of(g.get("status"), cfg)
+        outcome = ("not_done" if step == "confirmed_not" else "completed") if stage == "closed" else (
+            "rejected" if stage == "rejected" else "in_progress")
+        out[f"grid:{key}"] = {
+            "id": f"grid:{key}", "source": SOURCE, "unread": True, "stage": stage, "outcome": outcome,
+            "final_outcome": ("not_executed" if step == "confirmed_not" else "executed") if stage == "closed" else "",
+            "request_date": _day(g.get("request_date")),
+            "entered_at": g.get("entered") if g.get("sv") == SINCE_VERSION and g.get("entered_gap") is not None
+            and g["entered_gap"] <= SINCE_HOUR_GAP else "",
+            "entered_day": _day(g.get("entered")) if g.get("sv") == SINCE_VERSION else "",
+            "system": g.get("system") or "", "team": g.get("team") or "",
+            "teams": [g.get("team")] if g.get("team") else [], "holder": g.get("holder") or "",
+            "checker": g.get("checker") or "", "requester": g.get("employee") or "",
+            "request_type": g.get("request_type") or "", "user_no": g.get("user_no") or "",
+            "grid_status": g.get("status") or "", "grid_key": key}
+    return out
+
+
+def with_current_stage(records, grid, index, cfg):
+    """``records`` where a request MOVED ON since its history was read (the inquiry shows another status and its details
+    are not read again yet) takes its stage and outcome from the grid - a request read while open and confirmed since
+    counts as closed, not as open for days. Such a record is marked ``moved`` (its new stamps follow when it is read)
+    and keeps the grid row as ``moved_row``. The others are returned as they are."""
+    out = dict(records or {})
+    for key, g in (grid or {}).items():
+        entry = (index or {}).get(key) or {}
+        rid = entry.get("id")
+        r = out.get(rid) if rid else None
+        if not r or _norm(entry.get("status")) == _norm(g.get("status")):
+            continue
+        stage = row_stage(g, cfg)
+        if stage == stage_of(r):
+            continue
+        step = step_of(g.get("status"), cfg)
+        outcome = (("not_done" if step == "confirmed_not" else "completed") if stage == "closed"
+                   else "rejected" if stage == "rejected" else "in_progress")
+        out[rid] = {**r, "stage": stage, "outcome": outcome, "moved": True, "moved_row": g,
+                    "final_outcome": ("not_executed" if step == "confirmed_not" else "executed") if stage == "closed" else "",
+                    "grid_status": g.get("status") or r.get("grid_status", "")}
+    return out
+
+
+def _times(values, target):
+    vals = [v for v in values if v is not None]
+    return {"n": len(vals), "average_minutes": round(sum(vals) / len(vals), 1) if vals else None,
+            "median_minutes": percentile(vals, 50), "target_minutes": target,
+            "within_pct": _pct(sum(1 for v in vals if v <= target), len(vals)) if vals and target else None}
+
+
+STATUS_KEYS = ("came", "open", "awaiting_executed", "awaiting_not", "confirmed_executed", "confirmed_not", "rejected",
+               "now")
+
+
+def _status_tally():
+    return {**{k: 0 for k in STATUS_KEYS}, "_exec": []}
+
+
+def _status_out(t, target):
+    out = {k: t[k] for k in STATUS_KEYS}
+    out.update(executed=t["awaiting_executed"] + t["confirmed_executed"], not_executed=t["awaiting_not"] + t["confirmed_not"],
+               waiting=t["awaiting_executed"] + t["awaiting_not"], confirmed=t["confirmed_executed"] + t["confirmed_not"])
+    ex = _times(t["_exec"], target)
+    out.update(exec_n=ex["n"], exec_median_minutes=ex["median_minutes"], exec_average_minutes=ex["average_minutes"],
+               exec_within_pct=ex["within_pct"],
+               exec_within=sum(1 for v in t["_exec"] if v is not None and target and v <= target))
+    if t.get("_teams"):                                  # a person: the team they worked for most
+        out["team"] = max(t["_teams"].items(), key=lambda kv: kv[1])[0]
+    return out
+
+
+def status_numbers(grid, records, cfg, date_from, date_to, live=None, live_team=None):
+    """The security requests of «تاريخ الطلب» ``date_from``..``date_to`` (days, "" = open-ended), exactly as the
+    portal's own «الاستفسار عن الطلبات» lists them for those dates - every number can be checked there - by where
+    each stands NOW; never a request still with the branch (registration, supervisor: ``pre``), of another team or of
+    an application left out (``grid`` / ``records`` / ``live`` come scoped):
+
+    * ``came`` = ``executed`` + ``not_executed`` + ``rejected`` + ``open``;
+    * ``executed`` = «تم التنفيذ» (``awaiting_executed``) + «تم التعزيز على التنفيذ» (``confirmed_executed``);
+      ``not_executed`` = «لم يتم التنفيذ» + «تم التعزيز على عدم التنفيذ»; ``waiting`` = waiting for the reviewer's
+      confirmation; ``confirmed``; ``rejected`` = «رفض» by the assigner (موظف الاسناد); ``open`` = still with a
+      security user;
+    * ``now`` = the Live tickets (the Re-Assign page) - with a security user right now, whatever their date;
+    * ``times`` - execution (assignment → executed / not executed / rejected), confirmation (execution → «تم
+      التعزيز»), whole request (assignment → «تم التعزيز») of the period's requests whose status history is read - from
+      the LAST «اسناد لمستخدم السرية» (a re-assignment restarts the clock);
+    * ``hours`` - when they came (first assignment) and were done (executed / rejected) and confirmed, hour by hour,
+      from the read histories; ``untimed`` = the ones whose hour is not read yet;
+    * ``by_team`` / ``by_person`` - the same numbers per team and per security user (a rejection counts for the
+      assigner who rejected it), with ``now`` from the Live tickets and their execution time;
+    * ``pre`` - the period's requests still with the branch (not counted);
+    * ``by_status`` - each status as the portal writes it, how many of the period's requests have it and the number it
+      counts in (``counted_as``: confirmed_executed, confirmed_not, awaiting_executed, awaiting_not, rejected, open, or
+      pre = not counted), most first - to check every number against the portal's own statuses.
+    ``live_team(ticket)`` gives a Live ticket its team."""
+    dfrom, dto = _day(date_from), _day(date_to)
+    inside = lambda d: bool(d) and (not dfrom or d >= dfrom) and (not dto or d <= dto)   # noqa: E731
+    targets = stage_targets(cfg)
+    total, teams_, people, names = _status_tally(), {}, {}, {}
+    pre, by_status = 0, {}
+
+    def bump(team, person, key, minutes=None):
+        for book, who in ((None, ""), (teams_, _clean(team) or "—"), (people, _clean(person))):
+            if book is people and not who:
+                continue
+            t = total if book is None else book.setdefault(_norm(who) if book is people else who, _status_tally())
+            if book is people:
+                names.setdefault(_norm(who), who)
+                t.setdefault("_teams", {})
+                t["_teams"][_clean(team) or "—"] = t["_teams"].get(_clean(team) or "—", 0) + 1
+            if key:
+                t[key] += 1
+            if minutes is not None:
+                t["_exec"].append(minutes)
+
+    for g in (grid or {}).values():
+        if not inside(_day(g.get("request_date"))):
+            continue
+        stage = row_stage(g, cfg)
+        wording = _clean(g.get("status")) or "—"
+        if stage == "pre":
+            pre += 1
+            by_status.setdefault((wording, "pre"), 0)
+            by_status[(wording, "pre")] += 1
+            continue
+        step = step_of(g.get("status"), cfg)
+        if stage in ("open", "rejected"):
+            key = stage
+        elif stage == "awaiting":
+            key = "awaiting_not" if step == "not_executed" else "awaiting_executed"
+        else:
+            key = "confirmed_not" if step == "confirmed_not" else "confirmed_executed"
+        by_status[(wording, key)] = by_status.get((wording, key), 0) + 1
+        who = g.get("assigner") if key == "rejected" else g.get("holder")
+        bump(g.get("team"), who, "came")
+        bump(g.get("team"), who, key)
+    # times and hours: the read histories of the period's requests
+    hours = [{"hour": h, "came": 0, "done": 0, "confirmed": 0} for h in range(24)]
+    exec_m, confirm_m, whole_m = [], [], []
+
+    def hour(stamp, key):
+        t = _clean(stamp)
+        if len(t) >= 13 and t[11:13].isdigit():
+            hours[int(t[11:13]) % 24][key] += 1
+
+    for r in (records or {}).values():
+        if r.get("unread") or not inside(_day(r.get("request_date"))):
+            continue
+        first = r.get("first_assigned_at") or r.get("assigned_at")
+        hour(first or r.get("rejected_at"), "came")
+        if r.get("executed_at"):
+            m = _minutes(r.get("assigned_at"), r.get("executed_at"))
+            exec_m.append(m)
+            hour(r.get("executed_at"), "done")
+            bump(r.get("team"), r.get("executor") or r.get("holder"), None, minutes=m)
+        elif stage_of(r) == "rejected" and r.get("rejected_at"):
+            m = _minutes(r.get("assigned_at") or r.get("pool_at") or r.get("branch_confirmed_at"), r.get("rejected_at"))
+            exec_m.append(m)
+            hour(r.get("rejected_at"), "done")
+            bump(r.get("team"), r.get("rejected_by"), None, minutes=m)
+        if r.get("confirmed_at"):
+            hour(r.get("confirmed_at"), "confirmed")
+            if r.get("executed_at"):
+                confirm_m.append(_minutes(r.get("executed_at"), r.get("confirmed_at")))
+            whole_m.append(_minutes(r.get("assigned_at") or first, r.get("confirmed_at")))
+    for req in live or []:                               # with a security user right now (the Live tab)
+        bump((live_team or (lambda x: ""))(req), req.get("security_user"), "now")
+    out = _status_out(total, targets.get("work"))
+    timed = {k: sum(h[k] for h in hours) for k in ("came", "done", "confirmed")}
+    out.update(pre=pre, hours=hours,
+               by_status=[{"status": w, "counted_as": k, "n": n}
+                          for (w, k), n in sorted(by_status.items(), key=lambda kv: (-kv[1], kv[0][0]))],
+               untimed={"came": max(0, out["came"] - timed["came"]),
+                        "done": max(0, out["executed"] + out["not_executed"] + out["rejected"] - timed["done"]),
+                        "confirmed": max(0, out["confirmed"] - timed["confirmed"])},
+               times={"execution": _times(exec_m, targets.get("work")),
+                      "confirmation": _times(confirm_m, targets.get("review")),
+                      "whole": _times(whole_m, targets.get("sla"))})
+    rank = lambda row: (-row["came"], -row["executed"] - row["not_executed"], -row["now"])   # noqa: E731
+    out["by_team"] = sorted(({"team": k, **_status_out(t, targets.get("work"))} for k, t in teams_.items()), key=rank)
+    out["by_person"] = sorted(({"person": names[k], **_status_out(t, targets.get("work"))} for k, t in people.items()),
+                              key=rank)
+    return out
+
+
+LEFT_OUT_KEYS = ("came", "executed", "not_executed", "rejected", "open", "waiting", "confirmed", "confirmed_executed",
+                 "confirmed_not", "awaiting_executed", "awaiting_not", "now")
+
+
+def counts_only(nums, now_by_team=None):
+    """What is shown of the requests LEFT OUT of the SLA (Third Party by default - Settings › Ticketing): only how
+    many there are, by the statuses agreed (``status_numbers`` of their grid rows) - never an SLA status, a time, an
+    hour or a person. ``now_by_team`` = {team: their tickets on the Re-Assign page now} (the Live scan's count).
+    Returns {came, executed, ..., now, pre, by_team: [{team, came, ..., now}]}."""
+    rows = {r.get("team") or "—": {"team": r.get("team") or "—", **{k: int(r.get(k) or 0) for k in LEFT_OUT_KEYS}}
+            for r in (nums or {}).get("by_team") or []}
+    for team, n in (now_by_team or {}).items():
+        rows.setdefault(team or "—", {"team": team or "—", **{k: 0 for k in LEFT_OUT_KEYS}})["now"] += int(n or 0)
+    out = {k: sum(r[k] for r in rows.values()) for k in LEFT_OUT_KEYS}
+    out["pre"] = int((nums or {}).get("pre") or 0)
+    out["by_team"] = sorted(rows.values(), key=lambda r: (-r["came"], -r["now"], str(r["team"]).casefold()))
+    return out
+
+
+# ------------------------------------------------------------------- live tickets: when they were first assigned
+LIVE_FIELDS = {"user_no": "رقم المستخدم", "system": "النظام", "request_type": "نوع الطلب"}
+
+
+def _live_field(req, key):
+    fields = (req or {}).get("fields") or {}
+    want = _norm(LIVE_FIELDS[key])
+    for name, value in fields.items():
+        if _norm(name) == want:
+            return _norm(value)
+    return ""
+
+
+def match_live_requests(requests, open_records):
+    """{live request key: its open history record} - the Re-Assign page only gives «تاريخ الارسال للسرية» (when the
+    request was sent to the security team), not when the security user holding it got it. A live request is matched
+    to an OPEN record (with a security user, not yet executed) on «رقم المستخدم» + «النظام» + «نوع الطلب»; of several,
+    the one held by the same security user wins, then the latest assignment. Each record is used once."""
+    pool = {}
+    for rid, r in (open_records or {}).items():
+        if stage_of(r) != "open" or not r.get("assigned_at"):
+            continue
+        key = (_norm(r.get("user_no")), _norm(r.get("system")), _norm(r.get("request_type")))
+        if key[0]:
+            pool.setdefault(key, []).append(r)
+    out, used = {}, set()
+    # requests whose holder matches a record go first, so a shared key never steals another holder's record
+    def holder_matches(req):
+        key = tuple(_live_field(req, k) for k in ("user_no", "system", "request_type"))
+        return any(_norm(r.get("holder")) == _norm(req.get("security_user")) for r in pool.get(key, []))
+    for req in sorted(requests or [], key=lambda q: not holder_matches(q)):
+        key = tuple(_live_field(req, k) for k in ("user_no", "system", "request_type"))
+        cands = [r for r in pool.get(key, []) if r.get("id") not in used]
+        if not key[0] or not cands:
+            continue
+        cands.sort(key=lambda r: (_norm(r.get("holder")) != _norm(req.get("security_user")), -_stamp_sort(r.get("assigned_at"))))
+        best = cands[0]
+        used.add(best.get("id"))
+        out[req.get("key")] = best
+    return out
+
+
+def _stamp_sort(stamp):
+    t = parse_time(stamp)
+    return t.timestamp() if t else 0.0
+
+
+def note_assignments(requests, open_records):
+    """Note on every live request its assignments from the status history (``match_live_requests``): ``assigned_at``
+    (the FIRST «اسناد لمستخدم السرية», shown), ``holder_since`` (when the security user holding it now got it, if later
+    - a re-assignment) and ``last_assigned_at`` (the LAST assignment, to the security user holding it now: the live
+    SLA's clock - ``sla_engine.clock_requests``); None when the history has not read the request, or read it with
+    another holder. Returns how many were matched."""
+    matched = match_live_requests(requests, open_records)
+    for r in requests or []:
+        rec = matched.get(r.get("key"))
+        start = parse_time(rec.get("first_assigned_at") or rec.get("assigned_at")) if rec else None
+        holder = parse_time(rec.get("assigned_at")) if rec else None
+        r["assigned_at"] = start.strftime(_FMT) if start is not None else None
+        r["holder_since"] = holder.strftime(_FMT) if holder is not None and start is not None and holder > start else None
+        same = bool(rec) and _norm(rec.get("holder")) == _norm(r.get("security_user"))
+        r["last_assigned_at"] = holder.strftime(_FMT) if holder is not None and same else None
+    return len(matched)
+
+
+# --------------------------------------------------------------------- compared with the portal's inquiry results
+def portal_comparison(grid, index, date_from="", date_to="", cfg=None):
+    """What the portal's «الاستفسار عن الطلبات» lists for the period's request dates (the latest grid, Third Party and
+    other teams already left out by the caller) next to what the SLA history holds: every inquiry row; with the
+    security team (assigned, awaiting the reviewer or confirmed - ``closed`` of them confirmed); still with the branch;
+    rejected; status history read; not read yet (a row with an SLA step whose history is not recorded). ``rows`` =
+    with_security + with_branch + rejected."""
+    dfrom, dto = _day(date_from), _day(date_to)
+    out = {"rows": 0, "with_security": 0, "closed": 0, "with_branch": 0, "rejected": 0, "read": 0, "not_read": 0}
+    for key, g in (grid or {}).items():
+        day = _day(g.get("request_date"))
+        if (dfrom or dto) and not day:
+            continue
+        if (dfrom and day < dfrom) or (dto and day > dto):
+            continue
+        stage = row_stage(g, cfg)
+        out["rows"] += 1
+        if stage == "pre":
+            out["with_branch"] += 1
+            continue
+        if stage == "rejected":
+            out["rejected"] += 1
+        else:
+            out["with_security"] += 1
+            out["closed"] += stage == "closed"
+        if ((index or {}).get(key) or {}).get("id"):
+            out["read"] += 1
+        else:
+            out["not_read"] += 1
+    return out
+
+
+# --------------------------------------------------------------------------------------------- filter bar
+def _day(stamp):
+    return _clean(stamp)[:10]
+
+
+FILTER_TEXT = ("system", "branch", "request_type")        # exact (spelling-insensitive) matches on the record
+OUTCOMES = ("completed", "not_done", "rejected", "in_progress")
+
+
+def assignment_day(r):
+    """The day a request belongs to in the SLA Analysis (the owner's rule, like the bank's own SLA sheet): the day it
+    was FIRST assigned to a security user (a request with a period: the day its period starts, ``apply_period``), else
+    its (last) assignment; a request whose history is not read yet: the day the scans saw it reach the security team
+    (``entered_at``), else its request date / registration."""
+    return _day(r.get("first_assigned_at") or r.get("assigned_at") or r.get("entered_at") or r.get("entered_day")
+                or r.get("request_date") or r.get("registered_at") or r.get("first_seen"))
+
+
+def filter_records(records, filt):
+    """The records of one view of the SLA Analysis. The date range is the ASSIGNMENT day: every request - closed,
+    rejected, awaiting the reviewer or still open - belongs to the day it was first assigned (``assignment_day``), so
+    the period's numbers are the requests that reached the security team in it, however long they took. «Employee»
+    matches the security user who executed it or holds it now (مستخدم السرية), «Checker» the reviewer (مراجع السرية),
+    «Team» any of its teams; «Application», «Branch», «Request type» and «Outcome» their own field; «Sent back» only
+    the requests returned to the branch at least once. Blank values match everything."""
+    filt = filt or {}
+    dfrom, dto = _day(filt.get("date_from")), _day(filt.get("date_to"))
+    execu, check, team = (_norm(filt.get(k)) for k in ("executor", "checker", "team"))
+    texts = {k: _norm(filt.get(k)) for k in FILTER_TEXT if _norm(filt.get(k))}
+    outcome = _clean(filt.get("outcome"))
+    returned = str(filt.get("returned") or "").lower() in ("1", "true", "yes")
+    out = {}
+    for rid, r in (records or {}).items():
+        day = assignment_day(r)
+        if (dfrom or dto) and not day:
+            continue
+        if (dfrom and day < dfrom) or (dto and day > dto):
+            continue
+        if execu and execu not in (_norm(r.get("executor")), _norm(r.get("holder"))):
+            continue
+        if check and _norm(r.get("checker")) != check:
+            continue
+        if team and team not in {_norm(t) for t in (r.get("teams") or [r.get("team")])}:
+            continue
+        if any(_norm(r.get(k)) != v for k, v in texts.items()):
+            continue
+        if outcome and outcome_of(r) != outcome:
+            continue
+        if returned and not r.get("returned"):
+            continue
+        out[rid] = r
+    return out
+
+
+def filter_options(records):
+    """What the filter bar offers (from the records the viewer may see): employees (executors and current holders),
+    checkers, teams, applications, branches, request types, and the first / last day with data."""
+    execs, checks, teams_, days = set(), set(), set(), []
+    texts = {k: set() for k in FILTER_TEXT}
+    for r in (records or {}).values():
+        for name in (r.get("executor"), r.get("holder")):
+            if _clean(name):
+                execs.add(_clean(name))
+        if _clean(r.get("checker")):
+            checks.add(_clean(r.get("checker")))
+        for t in r.get("teams") or [r.get("team")]:
+            if _clean(t):
+                teams_.add(_clean(t))
+        for k in FILTER_TEXT:
+            if _clean(r.get(k)):
+                texts[k].add(_clean(r.get(k)))
+        day = _day(r.get("confirmed_at") or r.get("rejected_at") or r.get("assigned_at") or r.get("registered_at"))
+        if day:
+            days.append(day)
+    return {"executors": sorted(execs), "checkers": sorted(checks), "teams": sorted(teams_),
+            "systems": sorted(texts["system"]), "branches": sorted(texts["branch"]),
+            "request_types": sorted(texts["request_type"]), "outcomes": list(OUTCOMES),
+            "date_from": min(days) if days else None, "date_to": max(days) if days else None}
+
+
+# ------------------------------------------------------------------------------------------------- analysis
+def _pct(part, whole):
+    return round(100.0 * part / whole, 2) if whole else 0.0
+
+
+def percentile(values, p):
+    """The ``p``-th percentile (0-100) with linear interpolation between the closest ranks; None for no values."""
+    vals = sorted(v for v in values if v is not None)
+    if not vals:
+        return None
+    k = (len(vals) - 1) * p / 100.0
+    lo = int(k)
+    hi = min(lo + 1, len(vals) - 1)
+    return round(vals[lo] + (vals[hi] - vals[lo]) * (k - lo), 1)
+
+
+class _Agg:
+    __slots__ = ("n", "executed", "not_executed", "sla_ok", "sla_n", "_mins")
+
+    def __init__(self):
+        self.n = self.executed = self.not_executed = self.sla_ok = self.sla_n = 0
+        self._mins = []
+
+    def add(self, outcome, minutes, sla_minutes):
+        self.n += 1
+        if outcome == "not_executed":
+            self.not_executed += 1
+        else:
+            self.executed += 1
+        if minutes is not None:
+            self.sla_n += 1
+            self._mins.append(minutes)
+            if minutes <= sla_minutes:
+                self.sla_ok += 1
+
+    def out(self, **extra):
+        med = round(sorted(self._mins)[len(self._mins) // 2], 1) if self._mins else None
+        avg = round(sum(self._mins) / len(self._mins), 1) if self._mins else None
+        return dict(extra, n=self.n, executed=self.executed, not_executed=self.not_executed,
+                    executed_pct=_pct(self.executed, self.n), sla_pct=_pct(self.sla_ok, self.sla_n),
+                    median_minutes=med, average_minutes=avg, p90_minutes=percentile(self._mins, 90),
+                    breached=self.sla_n - self.sla_ok, measured=self.sla_n)
+
+
+def _stage_row(key, label, values, target):
+    vals = [v for v in values if v is not None]
+    over = sum(1 for v in vals if v > target)
+    return {"key": key, "label": label, "n": len(vals), "target": target,
+            "average_minutes": round(sum(vals) / len(vals), 1) if vals else None,
+            "p50_minutes": percentile(vals, 50), "p90_minutes": percentile(vals, 90),
+            "max_minutes": round(max(vals), 1) if vals else None,
+            "breached": over, "within_pct": _pct(len(vals) - over, len(vals)),
+            "rag": rag(sum(vals) / len(vals), target) if vals else ""}
+
+
+REQUEST_LIST_LIMIT = 1500           # the period's requests sent to the page (the CSV export has every one)
+ATTENTION_LIMIT = 150
+
+
+def stage_of(r):
+    if r.get("stage"):
+        return r["stage"]
+    if r.get("confirmed_at"):
+        return "closed"
+    if r.get("rejected_at"):
+        return "rejected"
+    if r.get("executed_at"):
+        return "awaiting"
+    return "open" if r.get("assigned_at") else "pre"
+
+
+def outcome_of(r):
+    """completed / not_done / rejected / in_progress (records read before the outcome was kept get it from stamps)."""
+    if r.get("outcome"):
+        return r["outcome"]
+    if r.get("confirmed_at"):
+        return "not_done" if r.get("final_outcome") == "not_executed" else "completed"
+    return "rejected" if r.get("rejected_at") else "in_progress"
+
+
+def _hour_of(stamp):
+    t = _clean(stamp)
+    return int(t[11:13]) % 24 if len(t) >= 13 and t[11:13].isdigit() else None
+
+
+def hourly(recs, period=None):
+    """Hour by hour, for every team together and for each team: how many requests REACHED the security team in that
+    hour (their first assignment), how many were FINISHED in that hour (confirmed by the reviewer, whenever they
+    arrived), and how many of those that arrived were finished within the same clock hour - with the percentages
+    (finished ÷ arrived: over 100 % means the hour cleared older work too). ``period`` = (first day, last day): only
+    arrivals / finishes inside it count (blank = no bound)."""
+    dfrom, dto = (_day(p) for p in (period or ("", "")))
+    inside = lambda s: bool(s) and (not dfrom or _day(s) >= dfrom) and (not dto or _day(s) <= dto)   # noqa: E731
+    blank = lambda: [{"received": 0, "done": 0, "same_hour": 0} for _ in range(24)]                  # noqa: E731
+    total, by_team = blank(), {}
+    for r in recs:
+        first = r.get("first_assigned_at") or r.get("assigned_at")
+        confirmed = r.get("confirmed_at")
+        team = by_team.setdefault(r.get("team") or "—", blank())
+        h = _hour_of(first)
+        if h is not None and inside(first):
+            for row in (total[h], team[h]):
+                row["received"] += 1
+                if confirmed and _clean(confirmed)[:13] == _clean(first)[:13]:
+                    row["same_hour"] += 1
+        h = _hour_of(confirmed)
+        if h is not None and inside(confirmed):
+            for row in (total[h], team[h]):
+                row["done"] += 1
+
+    def rates(rows):
+        return [{"hour": i, **x, "done_pct": _pct(x["done"], x["received"]) if x["received"] else None,
+                 "same_hour_pct": _pct(x["same_hour"], x["received"]) if x["received"] else None}
+                for i, x in enumerate(rows)]
+    teams = []
+    for name, rows in by_team.items():
+        received, done = sum(x["received"] for x in rows), sum(x["done"] for x in rows)
+        if received or done:
+            teams.append({"team": name, "received": received, "done": done,
+                          "same_hour": sum(x["same_hour"] for x in rows), "hours": rates(rows)})
+    teams.sort(key=lambda t: (-t["received"], -t["done"], t["team"]))
+    return {"hours": rates(total), "teams": teams}
+
+
+def analyze(records, cfg, now=None, list_limit=REQUEST_LIST_LIMIT, period=None):
+    """The SLA Analysis from the live, exact history: where the requests stand (pre / open / awaiting / closed), the
+    SECURITY USER's clock (assignment -> execution, by مستخدم السرية), the REVIEWER's clock (execution -> confirmation,
+    by مراجع السرية), the full clock (the last assignment -> confirmation, judged by the SLA target), time on hold, the
+    wait before the security team got it, who assigned, and by team / system / day. A ``now`` (ISO) ages what is still
+    open. Only history-sourced records are used: no guess, no upload."""
+    sla = int((cfg or {}).get("sla_minutes") or 180)
+    targets = stage_targets(cfg)
+    now = _clean(now)
+    recs = [r for r in (records or {}).values() if r.get("source") == SOURCE]
+    buckets = {"pre": 0, "open": 0, "awaiting": 0, "closed": 0, "rejected": 0}
+    overall, emp, mgr, wait = _Agg(), _Agg(), _Agg(), _Agg()
+    by_exec, by_check, by_team, by_system, by_day = ({} for _ in range(5))
+    by_branch, by_type = {}, {}
+    by_assigner = {}
+    hold_n, hold_min = 0, 0.0
+    open_now, awaiting_now = [], []
+    first_day = last_day = None
+    stage_values = {key: [] for key, *_ in STAGES}
+    outcomes = {k: 0 for k in OUTCOMES}
+    funnel = {"registered": 0, "branch_confirmed": 0, "assigned": 0, "executed": 0, "confirmed": 0}
+    returned_n = reassigned_n = region_n = 0
+    attention, listed = [], []
+    for r in recs:
+        stage = stage_of(r)
+        if stage in buckets:
+            buckets[stage] += 1
+        assigned, executed, confirmed = r.get("assigned_at"), r.get("executed_at"), r.get("confirmed_at")
+        first = r.get("first_assigned_at") or assigned
+        mins = stage_minutes(r)
+        for key, value in mins.items():
+            if value is not None and (key != "sla" or confirmed):
+                stage_values[key].append(value)
+        result = outcome_of(r)
+        outcomes[result] = outcomes.get(result, 0) + 1
+        unread = bool(r.get("unread"))                  # listed by the portal, its history not read yet: no times
+        moved = bool(r.get("moved"))                    # read before, moved on since: its new stage, no new times
+        for key, field in (("registered", "registered_at"), ("branch_confirmed", "branch_confirmed_at"),
+                           ("assigned", "first_assigned_at"), ("executed", "executed_at"), ("confirmed", "confirmed_at")):
+            funnel[key] += bool(r.get(field) or (key == "assigned" and assigned)) or ((unread or moved) and (
+                key in ("registered", "assigned") or (key == "executed" and stage in ("awaiting", "closed"))
+                or (key == "confirmed" and stage == "closed")))
+        returned_n += bool(r.get("returned"))
+        reassigned_n += bool(r.get("reassigned"))
+        region_n += bool(r.get("region_approved_at"))
+        if r.get("assigner"):
+            by_assigner[r["assigner"]] = by_assigner.get(r["assigner"], 0) + 1
+        if (r.get("held_minutes") or 0) > 0:
+            hold_n += 1
+            hold_min += float(r["held_minutes"])
+        start = r.get("branch_confirmed_at") or r.get("registered_at")
+        if start and first:
+            wait.add("executed", _minutes(start, first), sla)
+        if executed:
+            m = _minutes(assigned, executed)
+            emp.add(r.get("exec_outcome"), m, sla)
+            by_exec.setdefault(r.get("executor") or "—", _Agg()).add(r.get("exec_outcome"), m, sla)
+        if confirmed or ((unread or moved) and stage == "closed"):
+            outcome = r.get("final_outcome")
+            if confirmed:
+                mgr_m = _minutes(executed, confirmed) if executed else None
+                mgr.add(outcome, mgr_m, sla)
+                by_check.setdefault(r.get("checker") or "—", _Agg()).add(outcome, mgr_m, sla)
+            full = _minutes(first, confirmed) if confirmed else None
+            overall.add(outcome, full, sla)
+            by_team.setdefault(r.get("team") or "—", _Agg()).add(outcome, full, sla)
+            by_system.setdefault(r.get("system") or "—", _Agg()).add(outcome, full, sla)
+            by_branch.setdefault(r.get("branch") or "—", _Agg()).add(outcome, full, sla)
+            by_type.setdefault(r.get("request_type") or "—", _Agg()).add(outcome, full, sla)
+            day = assignment_day(r)                     # the day it reached the security team
+            by_day.setdefault(day, _Agg()).add(outcome, full, sla)
+            first_day = day if first_day is None or day < first_day else first_day
+            last_day = day if last_day is None or day > last_day else last_day
+        # the request's line in the period's list, and what needs a look (worst first)
+        live = None                                       # the request so far: from its last assignment
+        if now and stage in ("open", "awaiting") and (assigned or first):
+            live = _minutes(assigned or first, now)
+        worst = max(((k, v / targets[k]) for k, v in mins.items() if v is not None and k in JOURNEY and targets.get(k)),
+                    key=lambda kv: kv[1], default=(None, 0))
+        line = {"id": "" if unread else r.get("id"), "unread": unread, "stage": stage, "outcome": result,
+                "request_date": r.get("request_date", ""),
+                "branch": r.get("branch", ""), "requester": r.get("requester", ""), "requester_no": r.get("requester_no", ""),
+                "system": r.get("system", ""), "team": r.get("team", ""), "request_type": r.get("request_type", ""),
+                "assigner": r.get("assigner", ""), "executor": r.get("executor") or r.get("holder") or "",
+                "checker": r.get("checker", ""), "returned": int(r.get("returned") or 0),
+                "reassigned": int(r.get("reassigned") or 0), "held_minutes": r.get("held_minutes") or 0,
+                "region": bool(r.get("region_approved_at")), "minutes": {k: (round(v, 1) if v is not None else None)
+                                                                       for k, v in mins.items()},
+                "waiting_minutes": round(live, 1) if live is not None else None,
+                "finished_at": closing_day(r) if stage in ("closed", "rejected") else "",
+                "worst_stage": worst[0], "sla_breached": bool((mins["sla"] or 0) > sla)}
+        listed.append(line)
+        reasons = []
+        if line["sla_breached"]:
+            reasons.append(("SLA breached", 3))
+        if live is not None and stage == "open" and live > sla:
+            reasons.append(("Open past the SLA", 3))
+        if result == "rejected":
+            reasons.append(("Rejected", 2))
+        if line["returned"]:
+            reasons.append(("Sent back to the branch", 2))
+        if result == "not_done":
+            reasons.append(("Not executed", 1))
+        if r.get("on_hold"):
+            reasons.append(("On hold", 1))
+        if reasons:
+            attention.append({**line, "reasons": [x for x, _ in reasons], "severity": max(s for _, s in reasons)})
+        if now and stage == "open":
+            m = _minutes(assigned, now)
+            open_now.append({"id": r.get("id"), "holder": r.get("holder") or "", "system": r.get("system") or "",
+                             "team": r.get("team") or "", "requester": r.get("requester") or "",
+                             "assigned_at": assigned, "minutes": round(m, 1) if m is not None else None,
+                             "on_hold": bool(r.get("on_hold")), "breached": m is not None and m > sla})
+        if now and stage == "awaiting":
+            m = _minutes(executed, now)
+            awaiting_now.append({"id": r.get("id"), "executor": r.get("executor") or "", "system": r.get("system") or "",
+                                 "team": r.get("team") or "", "executed_at": executed,
+                                 "minutes": round(m, 1) if m is not None else None})
+
+    numbers = {}                                         # a person's name -> their employee number (status history)
+    for r in recs:
+        for name, no in ((r.get("executor"), r.get("executor_no")), (r.get("checker"), r.get("checker_no")),
+                         (r.get("assigner"), r.get("assigner_no"))):
+            if name and no:
+                numbers.setdefault(name, no)
+
+    def top(groups, key, n=25):
+        out = [g.out(**{key: name, "employee_no": numbers.get(name, "")}) for name, g in groups.items()]
+        out.sort(key=lambda x: -x["n"])
+        return out[:n] if n else out
+
+    open_now.sort(key=lambda x: -(x["minutes"] or 0))
+    awaiting_now.sort(key=lambda x: -(x["minutes"] or 0))
+    holders = {}
+    for o in open_now:                                   # who holds the open requests right now
+        h = holders.setdefault(o["holder"] or "—", {"holder": o["holder"] or "—", "n": 0, "breached": 0,
+                                                     "on_hold": 0, "oldest_minutes": None})
+        h["n"] += 1
+        h["breached"] += o["breached"]
+        h["on_hold"] += o["on_hold"]
+        if o["minutes"] is not None:
+            h["oldest_minutes"] = max(h["oldest_minutes"] or 0, o["minutes"])
+    hours = [{"hour": h, "assigned": 0, "executed": 0, "confirmed": 0} for h in range(24)]
+    for r in recs:                                       # when in the day the work happens
+        for field, key in (("first_assigned_at", "assigned"), ("executed_at", "executed"), ("confirmed_at", "confirmed")):
+            t = _clean(r.get(field))
+            if len(t) >= 13 and t[11:13].isdigit():
+                hours[int(t[11:13]) % 24][key] += 1
+    opened_ages = [o["minutes"] for o in open_now if o["minutes"] is not None]
+    stage_rows = [_stage_row(key, label, stage_values[key], targets.get(key) or sla) for key, label, *_ in STAGES]
+    journey = [s for s in stage_rows if s["key"] in JOURNEY and s["average_minutes"]]
+    total_avg = sum(s["average_minutes"] for s in journey)
+    waterfall = [{"key": s["key"], "label": s["label"], "average_minutes": s["average_minutes"],
+                  "share_pct": _pct(s["average_minutes"], total_avg)} for s in journey]
+    bottleneck = max(waterfall, key=lambda s: s["average_minutes"], default=None)
+    attention.sort(key=lambda a: (-a["severity"], -((a["minutes"].get("sla") or a["waiting_minutes"] or 0))))
+    listed.sort(key=lambda x: (x["finished_at"] or "9999", x["request_date"] or ""), reverse=True)
+    n = len(recs)
+    return {
+        "meta": {"requests": n, "sla_minutes": sla, "date_from": first_day, "date_to": last_day,
+                 "source": SOURCE, "targets": targets},
+        "buckets": buckets,
+        "stages": stage_rows,                 # every stage of a request's life against its own target
+        "waterfall": waterfall,               # where the time goes, hand-off by hand-off
+        "bottleneck": bottleneck,
+        "outcomes": {**outcomes, "returned": returned_n, "returned_pct": _pct(returned_n, n),
+                     "rejected_pct": _pct(outcomes.get("rejected", 0), n), "reassigned": reassigned_n,
+                     "exception": region_n},
+        "funnel": [{"key": k, "n": v, "pct": _pct(v, funnel["registered"] or n)} for k, v in funnel.items()],
+        "attention": attention[:ATTENTION_LIMIT], "attention_total": len(attention),
+        "requests_list": listed[:list_limit] if list_limit else listed, "requests_total": len(listed),
+        "by_branch": top(by_branch, "branch"),
+        "by_request_type": top(by_type, "request_type"),
+        "hourly": hourly(recs, period),       # hour by hour: arrived vs finished, every team and each team
+        "overall": overall.out(),
+        "employee_clock": emp.out(),          # assignment -> execution (مستخدم السرية)
+        "manager_clock": mgr.out(),           # execution -> confirmation (مراجع السرية)
+        "branch_wait": wait.out(),            # branch confirmation -> first assignment (before the security team)
+        "hold": {"requests": hold_n, "minutes": round(hold_min, 1)},
+        "by_employee": top(by_exec, "executor"),
+        "by_checker": top(by_check, "checker"),
+        "by_assigner": sorted(({"assigner": k, "n": v, "employee_no": numbers.get(k, "")} for k, v in by_assigner.items()),
+                              key=lambda x: -x["n"]),
+        "by_team": top(by_team, "team", 0),
+        "by_system": top(by_system, "system"),
+        "by_day": [by_day[d].out(date=d) for d in sorted(by_day)],
+        "by_hour": hours,
+        "open_now": open_now[:200],
+        "awaiting_now": awaiting_now[:200],
+        "now": {"open": len(open_now), "awaiting": len(awaiting_now), "pre": buckets["pre"],
+                "breached": sum(1 for o in open_now if o["breached"]),
+                "on_hold": sum(1 for o in open_now if o["on_hold"]),
+                "oldest_minutes": round(max(opened_ages), 1) if opened_ages else None,
+                "by_holder": sorted(holders.values(), key=lambda x: (-x["breached"], -(x["oldest_minutes"] or 0)))},
+    }
