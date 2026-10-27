@@ -446,8 +446,13 @@ def test_the_sla_analysis_opens_on_the_security_teams_own_day(ops, tab, hub):
     got = {k: kpi(page, k) for k in ("g-came", "g-exec", "g-notexec", "g-rejected", "g-open", "g-awaiting", "g-confirmed")}
     assert got == {"g-came": "4", "g-exec": "2", "g-notexec": "0", "g-rejected": "1", "g-open": "1", "g-awaiting": "0",
                    "g-confirmed": "2"}
-    # the portal's own total for these dates = came to us + the registration still with the branch
-    assert (kpi(page, "g-portal"), kpi(page, "g-branch")) == ("5", "1")
+    # each status as the portal writes it, and the number it counts in (the registration: not counted)
+    rows = page.locator("[data-by-status] tbody tr")
+    by_status = {" ".join(rows.nth(i).locator("td").nth(0).inner_text().split()):
+                 (rows.nth(i).locator("td").nth(1).inner_text(), rows.nth(i).locator("td").nth(2).inner_text())
+                 for i in range(rows.count())}
+    assert sum(int(n) for n, as_ in by_status.values() if not as_.startswith("Not counted")) == 4
+    assert [as_ for n, as_ in by_status.values() if as_.startswith("Not counted")] == ["Not counted: still with the branch"]
     live_now = len(sla_snapshot()["requests"])
     assert kpi(page, "g-now") == str(live_now)                                     # = the Live tab
     assert "1 request(s) of these dates still with the branch" in text(page, "[data-glance-note]")

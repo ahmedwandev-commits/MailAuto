@@ -33,6 +33,10 @@ def test_a_confirmed_request_with_no_security_user_on_its_row_is_counted_not_lef
     nums = h.status_numbers(grid, {}, CFG, "2026-10-11", "2026-10-11")
     assert (nums["came"], nums["confirmed"], nums["confirmed_not"], nums["confirmed_executed"]) == (4, 3, 2, 1)
     assert (nums["not_executed"], nums["pre"]) == (3, 1)          # 2 confirmed not executed + 1 awaiting; the registration
+    # each status as the portal writes it, and the number it counts in - the owner checks them against the portal
+    assert {(r["status"], r["counted_as"], r["n"]) for r in nums["by_status"]} == {
+        ("تم التعزيز بعدم التنفيذ", "confirmed_not", 1), ("تم التعزيز على لم يتم التنفيذ", "confirmed_not", 1),
+        ("تم التعزيز", "confirmed_executed", 1), ("لم يتم تنفيذ", "awaiting_not", 1), ("تسجيل", "pre", 1)}
 
 
 def test_the_sla_tab_lists_the_statuses_no_setting_names(ops, admin):  # noqa: F811

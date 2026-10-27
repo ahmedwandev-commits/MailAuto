@@ -433,20 +433,17 @@ HOW TO UPDATE (your data is kept)
    - The busiest hour still comes from the status histories read (only they carry a time).
    - Days the collector kept before this version count the same way (an MFA Team row counts as Open System).
 
-41. SLA TAB: THE PORTAL'S OWN TOTAL, AND WHAT IS STILL WITH THE BRANCH
-   - "Came to us" counts only the requests that reached the security team, so it is smaller than «اجمالي عدد الطلبات»
-     of «الاستفسار عن الطلبات» for the same dates: the portal also lists the requests still with the branch
-     (registration, supervisor approval).
-   - Two new tiles come first: "On the portal" (what the inquiry lists for these dates) and "Still with the branch".
-     On the portal = Came to us + Still with the branch.
-   - Third Party stays out of the SLA, as asked: if the portal's total still differs, the difference is the Third
-     Party requests of those dates.
+41. SLA TAB: EVERY REQUEST COUNTED BY THE STATUSES WE AGREED, AND CHECKABLE STATUS BY STATUS
    - «تم التعزيز …» and «لم يتم …» always count, as agreed, in whatever words the portal writes them: «تم التعزيز»,
      «تم التعزيز بعدم التنفيذ», «تم التعزيز على لم يتم التنفيذ», «لم يتم», «لم يتم تنفيذ», «تم عدم التنفيذ», «تم تنفيذ»,
      «بانتظار التعزيز» ... Before, a wording the settings did not spell exactly counted as still with the branch when
      its row named no security user. A confirmation by the branch, its region or sector keeps its meaning.
    - A status no SLA status names is now listed under the SLA tab's numbers (administrator), with how many requests
      have it, to add to the right step in System › Settings › Ticketing › SLA recording.
+   - New card "By the portal's status": every status «الاستفسار عن الطلبات» shows for these dates, how many requests
+     have it, and the number it counts in (executed / not executed, confirmed or waiting for confirmation, rejected,
+     still with a security user, or not counted: still with the branch) - to check each number against the portal.
+   - Third Party stays out of the SLA, as asked.
 
 --------------------------------------------------------------------------------
 
@@ -816,16 +813,14 @@ IAS PORTAL - الجديد في هذا التحديث
    - أكتر ساعة شغل لسه جاية من الحالات التاريخية اللي اتقرت (هي بس اللي فيها الوقت).
    - الأيام اللي الـ collector سجلها قبل التحديث بتتحسب بنفس الطريقة (سطر MFA Team بيتحسب Open System).
 
-41. تاب الـ SLA: إجمالي البورتال نفسه، واللي لسه عند الفرع
-   - "Came to us" بيعد بس الطلبات اللي وصلت لفريق السرية، علشان كده أقل من «اجمالي عدد الطلبات» في «الاستفسار عن
-     الطلبات» لنفس التواريخ: البورتال بيعرض كمان الطلبات اللي لسه عند الفرع (تسجيل، موافقة المشرف).
-   - فيه خانتين جداد في الأول: "On the portal" (اللي الاستفسار بيعرضه للتواريخ دي) و"Still with the branch".
-     On the portal = Came to us + Still with the branch.
-   - الـ Third Party لسه برة الـ SLA زي ما طلبت: لو إجمالي البورتال لسه مختلف، الفرق هو طلبات الـ Third Party
-     للتواريخ دي.
+41. تاب الـ SLA: كل طلب بيتحسب بالحالات اللي اتفقنا عليها، وتقدر تراجعه حالة حالة
    - «تم التعزيز …» و«لم يتم …» بتتحسب دايما زي ما اتفقنا، بأي كلام البورتال يكتبه: «تم التعزيز»، «تم التعزيز بعدم
      التنفيذ»، «تم التعزيز على لم يتم التنفيذ»، «لم يتم»، «لم يتم تنفيذ»، «تم عدم التنفيذ»، «تم تنفيذ»، «بانتظار
      التعزيز» ... قبل كده، الكلام اللي مش مكتوب في الإعدادات بالظبط كان بيتحسب إنه لسه عند الفرع لو السطر مفيهوش مستخدم
      سرية. والتعزيز من الفرع أو المنطقة أو القطاع بيفضل زي ما هو.
    - أي حالة مش موجودة في حالات الـ SLA بتظهر دلوقتي تحت أرقام تاب الـ SLA (للأدمن) ومعاها عدد الطلبات، علشان تضيفها
      للخطوة الصح في System › Settings › Ticketing › SLA recording.
+   - كارت جديد "By the portal's status": كل حالة «الاستفسار عن الطلبات» بيعرضها للتواريخ دي، وعدد الطلبات اللي عليها،
+     وبتتحسب في أنهي رقم (اتنفذ / ما اتنفذش، متعزز أو مستني التعزيز، مرفوض، لسه مع مستخدم سرية، أو مش محسوب: لسه عند
+     الفرع) - علشان تراجع كل رقم على البورتال.
+   - الـ Third Party لسه برة الـ SLA زي ما طلبت.

@@ -960,13 +960,16 @@ def status_numbers(grid, records, cfg, date_from, date_to, live=None, live_team=
       from the read histories; ``untimed`` = the ones whose hour is not read yet;
     * ``by_team`` / ``by_person`` - the same numbers per team and per security user (a rejection counts for the
       assigner who rejected it), with ``now`` from the Live tickets and their execution time;
-    * ``pre`` - the period's requests still with the branch (not counted).
+    * ``pre`` - the period's requests still with the branch (not counted);
+    * ``by_status`` - each status as the portal writes it, how many of the period's requests have it and the number it
+      counts in (``counted_as``: confirmed_executed, confirmed_not, awaiting_executed, awaiting_not, rejected, open, or
+      pre = not counted), most first - to check every number against the portal's own statuses.
     ``live_team(ticket)`` gives a Live ticket its team."""
     dfrom, dto = _day(date_from), _day(date_to)
     inside = lambda d: bool(d) and (not dfrom or d >= dfrom) and (not dto or d <= dto)   # noqa: E731
     targets = stage_targets(cfg)
     total, teams_, people, names = _status_tally(), {}, {}, {}
-    pre = 0
+    pre, by_status = 0, {}
 
     def bump(team, person, key, minutes=None):
         for book, who in ((None, ""), (teams_, _clean(team) or "—"), (people, _clean(person))):
@@ -986,8 +989,11 @@ def status_numbers(grid, records, cfg, date_from, date_to, live=None, live_team=
         if not inside(_day(g.get("request_date"))):
             continue
         stage = row_stage(g, cfg)
+        wording = _clean(g.get("status")) or "—"
         if stage == "pre":
             pre += 1
+            by_status.setdefault((wording, "pre"), 0)
+            by_status[(wording, "pre")] += 1
             continue
         step = step_of(g.get("status"), cfg)
         if stage in ("open", "rejected"):
@@ -996,6 +1002,7 @@ def status_numbers(grid, records, cfg, date_from, date_to, live=None, live_team=
             key = "awaiting_not" if step == "not_executed" else "awaiting_executed"
         else:
             key = "confirmed_not" if step == "confirmed_not" else "confirmed_executed"
+        by_status[(wording, key)] = by_status.get((wording, key), 0) + 1
         who = g.get("assigner") if key == "rejected" else g.get("holder")
         bump(g.get("team"), who, "came")
         bump(g.get("team"), who, key)
@@ -1033,6 +1040,8 @@ def status_numbers(grid, records, cfg, date_from, date_to, live=None, live_team=
     out = _status_out(total, targets.get("work"))
     timed = {k: sum(h[k] for h in hours) for k in ("came", "done", "confirmed")}
     out.update(pre=pre, hours=hours,
+               by_status=[{"status": w, "counted_as": k, "n": n}
+                          for (w, k), n in sorted(by_status.items(), key=lambda kv: (-kv[1], kv[0][0]))],
                untimed={"came": max(0, out["came"] - timed["came"]),
                         "done": max(0, out["executed"] + out["not_executed"] + out["rejected"] - timed["done"]),
                         "confirmed": max(0, out["confirmed"] - timed["confirmed"])},

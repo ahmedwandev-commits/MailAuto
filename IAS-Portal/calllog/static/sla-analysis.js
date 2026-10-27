@@ -113,12 +113,8 @@
   }
   function glanceKpis(d) {
     const G = d.glance || {};
-    // the portal's own «الاستفسار عن الطلبات» total for these dates = came to us + still with the branch (Third Party,
-    // left out of the SLA, never counted)
     return h("div", { class: "sx-kpis", "data-glance": "" },
-      OPS.kpi({ key: "g-portal", label: "On the portal", value: fmtNum((G.came || 0) + (G.pre || 0)), sub: "«الاستفسار عن الطلبات» lists for these dates (Third Party left out)", icon: "database", hero: true }),
-      OPS.kpi({ key: "g-branch", label: "Still with the branch", value: fmtNum(G.pre || 0), sub: "registration / supervisor: not with the security team yet", tone: G.pre ? "warn" : null, icon: "clock" }),
-      OPS.kpi({ key: "g-came", label: "Came to us", value: fmtNum(G.came || 0), sub: "of them, with the security team", icon: "activity" }),
+      OPS.kpi({ key: "g-came", label: "Came to us", value: fmtNum(G.came || 0), sub: "requests of these dates with the security team", icon: "activity", hero: true }),
       OPS.kpi({ key: "g-exec", label: "Executed", value: fmtNum(G.executed || 0), sub: "«تم التنفيذ» / «التعزيز على التنفيذ»", tone: "ok", icon: "check" }),
       OPS.kpi({ key: "g-notexec", label: "Not executed", value: fmtNum(G.not_executed || 0), sub: "«لم يتم التنفيذ» / «التعزيز على عدم التنفيذ»", tone: G.not_executed ? "warn" : null, icon: "alert" }),
       OPS.kpi({ key: "g-rejected", label: "Rejected", value: fmtNum(G.rejected || 0), sub: "«رفض» by the assigner", tone: G.rejected ? "warn" : null, icon: "x" }),
@@ -129,7 +125,7 @@
   }
   function glanceNote(d) {
     const G = d.glance || {}, R = (d.recorder || {}).stats || {}, T = R.timing || {};
-    const bits = ["Counted as the portal's «الاستفسار عن الطلبات» lists the requests of these «تاريخ الطلب» dates, by their status now: on the portal = came to us + still with the branch; came = executed + not executed + rejected + still with a security user"];
+    const bits = ["Counted as the portal's «الاستفسار عن الطلبات» lists the requests of these «تاريخ الطلب» dates, by their status now: came = executed + not executed + rejected + still with a security user (each status and where it counts: “By the portal's status” below)"];
     if (G.pre) bits.push(`${fmtNum(G.pre)} request(s) of these dates still with the branch (registration, supervisor): not with the security team yet, so not in the other numbers`);
     if (R.at) {
       bits.push(`last scan ${String(R.at).slice(11, 16)}: ${fmtNum(R.opened || 0)} status histor(ies) read, ${fmtNum(R.left || 0)} waiting to be read (times and hours come from them)`
@@ -208,11 +204,31 @@
       ], rows,
     }).el;
   }
+  // ---- each status as the portal writes it, and the number it counts in: to check every number against the portal ----
+  const COUNTED_AS = {
+    confirmed_executed: "Executed · confirmed", confirmed_not: "Not executed · confirmed",
+    awaiting_executed: "Executed · waiting for confirmation", awaiting_not: "Not executed · waiting for confirmation",
+    rejected: "Rejected", open: "Still with a security user", pre: "Not counted: still with the branch",
+  };
+  function glanceStatuses(d) {
+    const rows = ((d.glance || {}).by_status || []).map((r) => ({ ...r, as: COUNTED_AS[r.counted_as] || r.counted_as }));
+    const hint = "every status «الاستفسار عن الطلبات» shows for these dates, how many requests have it and the number it counts in";
+    if (!rows.length) return OPS.card("By the portal's status", { hint }, h("p", { class: "hint" }, "Nothing in this period."));
+    return OPS.card("By the portal's status", { hint }, h("div", { "data-by-status": "" }, OPS.table({
+      search: rows.length > 12, copy: true, pageSize: 15, pageSizes: [15, 50, 200], caption: "By the portal's status",
+      sort: { key: "n", desc: true },
+      columns: [
+        { key: "status", label: "Status on the portal", sort: true, render: (r) => h("span", { dir: "auto" }, r.status), text: (r) => r.status },
+        { key: "n", label: "Requests", num: true, sort: true, render: (r) => fmtNum(r.n) },
+        { key: "as", label: "Counted in", sort: true, render: (r) => h("span", { class: r.counted_as === "pre" ? "hint" : "" }, r.as), text: (r) => r.as },
+      ], rows,
+    }).el));
+  }
   function glanceSection(d) {
     const G = d.glance || {};
     return [
       h("h2", { class: "sx-glance-title" }, `The security team · ${periodText(d)}`),
-      glanceKpis(d), glanceNote(d), glanceHours(d), glanceTimes(d),
+      glanceKpis(d), glanceNote(d), glanceStatuses(d), glanceHours(d), glanceTimes(d),
       OPS.card("Each team", { hint: "the same numbers, team by team" }, glanceTable(G.by_team, "team", "Team", "Each team")),
       OPS.card("Each employee", { hint: "مستخدم السرية of each request · a rejection counts for the assigner who rejected it" }, glanceTable(G.by_person, "person", "Employee", "Each employee")),
     ];
