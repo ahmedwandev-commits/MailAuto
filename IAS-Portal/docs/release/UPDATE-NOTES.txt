@@ -426,6 +426,13 @@ HOW TO UPDATE (your data is kept)
      classification rule, so the next e-mail like it goes to team X by itself. Nothing changes before the approval.
    - A team's manager sees their team's suggestions, marked "waiting for the administrator's approval".
 
+40. INSIGHTS › ANALYSIS: THE TICKETS CARD HOLDS ITS NUMBERS AGAIN
+   - The Tickets card (and its tab) counted only the requests whose status history had been read, so it showed 0 or
+     far too few. It now counts like the SLA tab and the portal's own «الاستفسار عن الطلبات»: for each «تاريخ الطلب»,
+     the requests that came to the security team and, of them, the ones confirmed - by team, a manager their own.
+   - The busiest hour still comes from the status histories read (only they carry a time).
+   - Days the collector kept before this version count the same way (an MFA Team row counts as Open System).
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -786,3 +793,10 @@ IAS PORTAL - الجديد في هذا التحديث
    - الأدمن بس هو اللي بيوافق (أو يرفض). بعد الموافقة الإيميل بيروح لفريق X والكلمة بتبقى قاعدة تصنيف، فالإيميل
      الجاي اللي زيه بيروح لفريق X لوحده. ومفيش حاجة بتتغير قبل الموافقة.
    - مدير الفريق بيشوف اقتراحات فريقه مكتوب عليها "waiting for the administrator's approval".
+
+40. Insights › Analysis: كارت الـ Tickets رجع يعرض أرقامه
+   - كارت الـ Tickets (والتاب بتاعه) كان بيعد بس الطلبات اللي الحالة التاريخية بتاعتها اتقرت، فكان بيطلع 0 أو أقل
+     بكتير. دلوقتي بيعد زي تاب الـ SLA وزي «الاستفسار عن الطلبات» في البورتال: لكل «تاريخ الطلب»، الطلبات اللي
+     وصلت لفريق السرية، ومنها اللي اتعززت - لكل فريق، والمدير بيشوف فريقه.
+   - أكتر ساعة شغل لسه جاية من الحالات التاريخية اللي اتقرت (هي بس اللي فيها الوقت).
+   - الأيام اللي الـ collector سجلها قبل التحديث بتتحسب بنفس الطريقة (سطر MFA Team بيتحسب Open System).

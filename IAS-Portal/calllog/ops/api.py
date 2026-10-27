@@ -1256,7 +1256,7 @@ ANALYTICS_TTL = 60.0              # one answer per view and minute: 70 people at
 ANALYTICS_DEFAULT_DAYS = 30
 ANALYTICS_LABELS = {"calls": ("Calls", "Calls logged", None),
                     "email": ("E-mails", "E-mails received", None),
-                    "tickets": ("Tickets", "Assigned to the security team", "Confirmed (closed)"),
+                    "tickets": ("Tickets", "Came to the security team (by request date)", "Confirmed"),
                     "crs": ("Change requests", "New on the ITSM board", "Completed")}
 
 
@@ -1275,6 +1275,36 @@ def _analytics_users():
     return users if isinstance(users, dict) else {u.get("user_id"): u for u in users or []}
 
 
+def _analytics_ticket_days(d_from, d_to):
+    """(arrived, confirmed) {day: DayDoc} of the security requests, counted like the SLA tab and the portal's own
+    «الاستفسار عن الطلبات»: each day the collector kept (``performance.save_day_log``, by «تاريخ الطلب») gives, per
+    team, the requests of that date that came to the security team and, of them, the ones confirmed - so the card holds
+    the numbers even while few status histories are read. The hours of the day come from the status histories read
+    (only they have times). A day with no kept log (before that version) counts the read histories alone."""
+    view = sla_history_view(None, d_from, "")           # every request closed from d_from on, and the open ones
+    team_of = lambda r: [r.get("team") or analytics.NO_TEAM]          # noqa: E731
+    arrived = analytics.stamp_days(view["records"], "first_assigned_at", team_of, fallback="assigned_at")
+    closed = analytics.stamp_days(view["records"], "confirmed_at", team_of)
+    merges = team_resolver().merges
+    for day in ops().history_days("sla"):
+        if not d_from <= day <= d_to:
+            continue
+        log = (ops().read_history("sla", day) or {}).get("day_log")
+        if not isinstance(log, dict) or "came" not in (log.get("totals") or {}):
+            continue                                    # an older kind of log: the read histories count that day
+        for days, key in ((arrived, "came"), (closed, "confirmed")):
+            kept = {}
+            for row in log.get("by_team") or []:
+                analytics.add(kept, day, None, [teams.merged_team(row.get("team"), merges) or analytics.NO_TEAM],
+                              int(row.get(key) or 0))
+            read = (days.get(day) or {}).get("g") or {}
+            for group, g in ((kept.get(day) or {}).get("g") or {}).items():
+                g["h"] = list((read.get(group) or {}).get("h") or [0] * 24)    # the hours of the ones read
+            days[day] = kept.get(day) or {"g": {}}
+    cut = lambda days: {d: v for d, v in days.items() if d_from <= d <= d_to}   # noqa: E731
+    return cut(arrived), cut(closed)
+
+
 def _analytics_module_days(module, d_from, d_to):
     """{day: DayDoc} of one module over [d_from, d_to], every team (the scope is applied by ``series``)."""
     if module == "email":
@@ -1289,13 +1319,7 @@ def _analytics_module_days(module, d_from, d_to):
             return [t for t in overlay.user_teams(u) if teams._real_team(t)] or [analytics.NO_TEAM]
         return analytics.calls_days(ops(), auth.store(), d_from, d_to, teams_of_user, auth.now())
     if module == "tickets":
-        view = sla_history_view(None, d_from, "")           # every request closed from d_from on, and the open ones
-        recs = view["records"]
-        team_of = lambda r: [r.get("team") or analytics.NO_TEAM]          # noqa: E731
-        arrived = analytics.stamp_days(recs, "first_assigned_at", team_of, fallback="assigned_at")
-        closed = analytics.stamp_days(recs, "confirmed_at", team_of)
-        cut = lambda days: {d: v for d, v in days.items() if d_from <= d <= d_to}   # noqa: E731
-        return cut(arrived), cut(closed)
+        return _analytics_ticket_days(d_from, d_to)
     if module == "crs":
         recs = (ops().read_itsm_records() or {}).get("records") or {}
         resolver = team_resolver()
