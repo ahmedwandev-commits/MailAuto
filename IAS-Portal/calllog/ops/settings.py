@@ -39,9 +39,6 @@ DEFAULTS = {
             "address_team_map": {},             # business mailbox the mail was sent TO -> team
             "unclassified_team": "",            # mails with no detected team go here instead of "Unclassified" ("" = keep)
             "extra_no_action_keywords": [],     # extra phrases (Arabic or English) that mean "no reply needed"
-            # an Unclassified mail a team member answers goes to their team, and a keyword is learned from it so the
-            # next mail like it classifies itself (off: the reply is only a suggestion an administrator approves)
-            "learn_from_replies": True,
         },
         "outlook_connect_retries": 5,
         "outlook_connect_retry_seconds": 15,
@@ -455,8 +452,7 @@ FIELDS = {
         "mail_copies": {"scope": _choice(*schemas.MAIL_COPY_SCOPES), "max_per_scan": _int(1, 500),
                         "max_msg_mb": _int(1, 200), "keep_days": _int(1, 365)},
         "classification": {"system_team_map": _map(_str(80, allow_empty=False)), "address_team_map": _addr_map,
-                           "unclassified_team": _str(80), "extra_no_action_keywords": _strs(120),
-                           "learn_from_replies": _bool},
+                           "unclassified_team": _str(80), "extra_no_action_keywords": _strs(120)},
         "report": {"send": _bool, "send_times": _times, "to": _emails, "cc": _emails, "subject_prefix": _str(120),
                    "attach_excel": _bool, "attach_pending_msg": _bool, "max_pending_attachments": _int(1, 500),
                    "team_recipients": _map(_recipients)},

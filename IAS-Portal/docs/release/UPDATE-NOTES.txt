@@ -416,18 +416,15 @@ HOW TO UPDATE (your data is kept)
    - An application no rule names has no team: the administrator sees it under "Applications with no team" on the
      SLA Analysis and gives it one there.
 
-39. E-MAIL: AN UNCLASSIFIED E-MAIL A TEAM MEMBER ANSWERS GOES TO THEIR TEAM - AND THE PORTAL LEARNS FROM IT
-   - When someone of team X replies to an e-mail that had no team, the e-mail goes to team X at the next scan (no
-     approval needed any more).
-   - The scan also learns a keyword from its subject - the word that names the system (e.g. "FileNet"), never a
-     person's name, a ticket number or an everyday word, and never a word another team's e-mails use. The next e-mail
-     with that keyword goes to team X by itself, even before anyone answers.
-   - A learned keyword is used only for an e-mail nothing else classifies: the built-in words, your keyword rules
-     and the mailbox rules always come first.
-   - E-mail › Unclassified › "Learned from replies" lists every learned keyword (which e-mail it came from, who
-     answered). The administrator, or the manager of that team, can remove one: it is then never learned again.
-   - System › Settings › Classification › "Learn from replies" turns it off (then a reply is only a suggestion to
-     approve, as before). Fixed: those suggestions never reached the page before.
+39. E-MAIL: SUGGESTED CLASSIFICATIONS WORK - THE ADMINISTRATOR APPROVES THEM
+   - Fixed: when someone of team X replied to an e-mail with no team, the suggestion "file it under X" was made but
+     never reached the page. It now appears on E-mail › Unclassified › "Suggested classifications".
+   - The suggestion comes with the keyword to learn, already filled in: the word of the subject that names the
+     system (e.g. "FileNet") - never a person's name, a ticket number, an everyday word or a word other teams' e-mails
+     use. The other words of the subject are offered in the keyword box; it can be changed before approving.
+   - Only the administrator approves (or dismisses). On approval the e-mail goes to team X and the keyword becomes a
+     classification rule, so the next e-mail like it goes to team X by itself. Nothing changes before the approval.
+   - A team's manager sees their team's suggestions, marked "waiting for the administrator's approval".
 
 --------------------------------------------------------------------------------
 
@@ -780,14 +777,12 @@ IAS PORTAL - الجديد في هذا التحديث
    - التطبيق اللي مفيش قاعدة بتسميه ملوش فريق: الأدمن بيلاقيه في "Applications with no team" في الـ SLA Analysis
      ويحدد له فريقه من هناك.
 
-39. الإيميل: الإيميل اللي ملوش فريق ورد عليه حد من فريق بيروح لفريقه - والبورتال بيتعلم منه
-   - لما حد من فريق X يرد على إيميل ملوش فريق، الإيميل بيروح لفريق X في الـ scan الجاي (من غير موافقة).
-   - الـ scan كمان بيتعلم كلمة من الـ subject - الكلمة اللي بتسمي السيستم (زي "FileNet")، عمرها ما بتكون اسم شخص
-     ولا رقم تيكت ولا كلمة عامة، ولا كلمة بتيجي في إيميلات فريق تاني. الإيميل الجاي اللي فيه الكلمة دي بيروح لفريق X
-     لوحده، حتى قبل ما حد يرد.
-   - الكلمة المتعلمة بتستخدم بس لإيميل مفيش حاجة تانية صنفته: الكلمات الأساسية وقواعدك وقواعد الـ mailbox ليها
-     الأولوية دايما.
-   - E-mail › Unclassified › "Learned from replies" فيها كل الكلمات المتعلمة (من أنهي إيميل ومين رد). الأدمن أو مدير
-     الفريق ده يقدر يشيل أي كلمة: ساعتها مبتتعلمش تاني.
-   - System › Settings › Classification › "Learn from replies" بيقفلها (وساعتها الرد بيبقى اقتراح بس للموافقة زي
-     الأول). واتصلح: الاقتراحات دي ماكانتش بتوصل للصفحة قبل كده.
+39. الإيميل: اقتراحات التصنيف بقت شغالة - والأدمن هو اللي بيوافق عليها
+   - اتصلح: لما حد من فريق X كان بيرد على إيميل ملوش فريق، الاقتراح "حطه في X" كان بيتعمل بس عمره ما وصل للصفحة.
+     دلوقتي بيظهر في E-mail › Unclassified › "Suggested classifications".
+   - الاقتراح جاي ومعاه الكلمة اللي هتتعلم جاهزة: الكلمة من الـ subject اللي بتسمي السيستم (زي "FileNet") - عمرها ما
+     بتكون اسم شخص ولا رقم تيكت ولا كلمة عامة ولا كلمة بتيجي في إيميلات فرق تانية. باقي كلمات الـ subject موجودة
+     كاختيارات في خانة الكلمة، وممكن تتغير قبل الموافقة.
+   - الأدمن بس هو اللي بيوافق (أو يرفض). بعد الموافقة الإيميل بيروح لفريق X والكلمة بتبقى قاعدة تصنيف، فالإيميل
+     الجاي اللي زيه بيروح لفريق X لوحده. ومفيش حاجة بتتغير قبل الموافقة.
+   - مدير الفريق بيشوف اقتراحات فريقه مكتوب عليها "waiting for the administrator's approval".

@@ -429,8 +429,6 @@
         { path: "email.classification.address_team_map", type: "kv", label: "Mailbox rules", wide: true,
           hint: "Mail sent TO one of your business mailboxes goes to that mailbox's team.",
           kv: { key: "email", value: "team", keyPlaceholder: "mailbox@example.test", add: "Add a mailbox rule", empty: "No mailbox rules yet." } },
-        { path: "email.classification.learn_from_replies", type: "switch", label: "Learn from replies",
-          hint: "An e-mail with no team that a team member answers goes to that member's team, and a keyword of its subject is learned so the next e-mail like it is classified by itself (listed on E-mail › Unclassified, where it can be removed). Off: the reply is only a suggestion to approve." },
         { path: "email.classification.unclassified_team", type: "team", label: "Where mails with no team go", empty: "Keep them in Unclassified",
           hint: "Instead of the Unclassified bucket. Leave on “Keep” to review them by hand." },
         { path: "email.classification.extra_no_action_keywords", type: "lines", kind: "text", label: "Extra “no action needed” phrases",

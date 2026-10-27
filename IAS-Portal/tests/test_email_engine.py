@@ -34,9 +34,7 @@ def email_settings(**over):
         "business_emails": [BUSINESS, BUSINESS2], "team_members": [MANAGER],
         "team_members_by_team": {"Flex Cube": [ALICE, BOB], "MFA Team": [CAROL], "Card Management": [DAVE]},
         "ignored_sender_emails": [IGNORED], "manager_emails": [MANAGER], "target_archive_name": "2026_Part3",
-        "sla_target_minutes": 60, "backlog_lookback_days": 1,
-        # these tests count Unclassified mails: the learning from replies has its own tests (test_email_learning.py)
-        "classification": {"learn_from_replies": False}}}
+        "sla_target_minutes": 60, "backlog_lookback_days": 1}}
     raw = settings.deep_merge(raw, {"email": over})
     clean, errors = settings.validate(raw)
     assert errors == [], errors

@@ -95,7 +95,6 @@ def email_settings(report=None, **over):
         "business_emails": [BUSINESS], "team_members": [MANAGER],
         "team_members_by_team": {"Flex Cube": [ALICE, BOB], "MFA Team": [CAROL]},
         "manager_emails": [MANAGER], "target_archive_name": "2026_Part3", "sla_target_minutes": 60,
-        "classification": {"learn_from_replies": False},     # the learning from replies: test_email_learning.py
         "report": {"to": [BOSS], "send_times": ["16:30"], **(report or {})}}}
     clean, errors = settings.validate(settings.deep_merge(raw, {"email": over}))
     assert errors == [], errors

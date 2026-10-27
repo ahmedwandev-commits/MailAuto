@@ -843,15 +843,17 @@ def test_classification_suggestion_approval_cannot_move_a_mail_that_is_not_a_pen
             uncls_replied_row("<u1@x>")]
     put_snapshot(ops, "email", email_data(rows))
     beat(ops, "email")
-    # another team's classified mail is not a suggestion: it cannot be pulled into the manager's own team
-    assert flex_mgr.post(SUG, {"message_id": "<card1@x>", "keyword": "card stuff", "team": "Flex Cube"}).status_code == 404
-    # a suggestion for another team cannot be filed under the manager's own team either
+    # only the administrator approves or dismisses: a manager, even of the suggested team, is refused
+    assert flex_mgr.post(SUG, {"message_id": "<u1@x>", "keyword": "password reset", "team": "Flex Cube"}).status_code == 403
     assert cara.post(SUG, {"message_id": "<u1@x>", "keyword": "password reset", "team": "Card Management"}).status_code == 403
+    assert flex_mgr.delete(SUG, json={"message_id": "<u1@x>"}).status_code == 403
+    # another team's classified mail is not a suggestion: it cannot be pulled into another team
+    assert admin.post(SUG, {"message_id": "<card1@x>", "keyword": "card stuff", "team": "Flex Cube"}).status_code == 404
     assert ops.overrides("team") == {}
     assert ops.read_settings_raw().get("email", {}).get("classification", {}).get("system_team_map", {}) == {}
     # approving twice: the second time it is no longer pending
-    assert flex_mgr.post(SUG, {"message_id": "<u1@x>", "keyword": "password reset", "team": "Flex Cube"}).status_code == 200
-    assert flex_mgr.post(SUG, {"message_id": "<u1@x>", "keyword": "password reset", "team": "Flex Cube"}).status_code == 404
+    assert admin.post(SUG, {"message_id": "<u1@x>", "keyword": "password reset", "team": "Flex Cube"}).status_code == 200
+    assert admin.post(SUG, {"message_id": "<u1@x>", "keyword": "password reset", "team": "Flex Cube"}).status_code == 404
 
 
 def test_classification_suggestion_can_be_dismissed(app, admin, hub, ops, clock):

@@ -621,8 +621,8 @@ def _name_words(names):
 
 
 def learn_keyword(subject, other_subjects=(), names=()):
-    """The keyword to learn from an Unclassified mail a team member answered, so the next mail like it classifies
-    itself: the most system-like word of its subject - an acronym or a CamelCase name first ("CRM", "FileNet"), then
+    """The keyword to propose for an Unclassified mail a team member answered (the suggestion the administrator approves,
+    so the next mail like it classifies itself): the most system-like word of its subject - an acronym or a CamelCase name first ("CRM", "FileNet"), then
     another Latin word, then an Arabic one, each in subject order - that is not generic (``_HINT_STOPWORDS``,
     ``_LEARN_STOPWORDS``), not part of a person's name (``names``: the customer, the replier), not a ticket number and
     not in the subject of any mail another team got (``other_subjects``: it would not tell this team's mail apart).
@@ -662,32 +662,6 @@ def learn_keyword(subject, other_subjects=(), names=()):
     phrase = " ".join(best)
     real = any(normalize_arabic(w.lower()) not in _LEARN_SKIP | blocked for w in best)   # never generic words or names only
     return phrase if len(best) >= 2 and real and len(phrase) <= LEARNED_KEYWORD_MAX else ""
-
-
-class Learned:
-    """Keywords learned from team members' replies (``{keyword: team}``, see ``learn_keyword``): used only for a mail
-    nothing else classifies - the built-in map, the administrator's rules and the mailbox rules always come first.
-    The longest keyword that matches wins."""
-
-    def __init__(self, learned=None):
-        items = [(str(k).strip(), str(t).strip()) for k, t in (learned or {}).items() if str(k).strip() and str(t).strip()]
-        items.sort(key=lambda kt: (-len(kt[0]), kt[0].casefold()))
-        self._rules = [(kw, team, _system_pattern(kw, strict=True), _needle(kw)) for kw, team in items]
-
-    def __bool__(self):
-        return bool(self._rules)
-
-    def match(self, subject, body=""):
-        """(keyword, team) of the first learned keyword in the subject or the body, else None."""
-        if not self._rules:
-            return None
-        for part in (subject, body):
-            text = normalize_arabic(detection_text(part))
-            lowered = text.lower()
-            for kw, team, pattern, needle in self._rules:
-                if (not needle or needle in lowered) and pattern.search(text):
-                    return kw, team
-        return None
 
 
 # ---------------------------------------------------------------------------------------------------------------------
