@@ -323,7 +323,7 @@
         h("td", {}, OPS.statusChip(r.status)),
         h("td", { class: "nowrap my-age", "data-age": "", "data-since": r.clock_from || "sent",
           title: (r.clock_from === "assignment" ? "Since it was assigned to you (" + (since || "").slice(11, 16) + ")"
-            : r.clock_from === "seen" ? "Since it moved to you (about " + (since || "").slice(11, 16) + ")"
+            : r.clock_from === "seen" ? "Since about " + (since || "").slice(11, 16) + ", when the scans first saw it with you (its assignment time is read at the next scans)"
               : "Since it was sent to the security team («تاريخ الارسال للسرية»)")
             + (r.assigned_at && r.assigned_at !== since ? "; first assigned " + r.assigned_at.slice(11, 16) : "") },
         OPS.fmtDuration(liveMinutes(since, r.age_minutes))),

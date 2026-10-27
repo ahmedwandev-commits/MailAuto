@@ -4,8 +4,8 @@
    Reads GET /api/ops/sla (the last good scan + collector health) every 15 s with ?since=, so an unchanged scan costs
    almost nothing, and draws: KPI tiles, a per-security-user table, the request list (filters, sorting, paging) and
    today's timeline. Ages tick live between scans from "clock_at" - the LAST «اسناد لمستخدم السرية», to the user
-   holding the request now (a re-assignment restarts it; «تاريخ الارسال للسرية» when it was never re-assigned) - and
-   the server clock. "Run scan now" asks the
+   holding the request now (a re-assignment restarts it; not read yet: since the scans first saw it with them; not
+   assigned yet: «تاريخ الارسال للسرية») - and the server clock. "Run scan now" asks the
    collector for a scan and waits (visibly, with a time limit) until a newer scan appears.
 
    Every scraped text goes in with textContent (CL.h) - never innerHTML - and Arabic text carries dir="auto". */
@@ -326,20 +326,22 @@
   }
 
   /** The clock of the age - the last assignment to the user holding it: "with this user since 10:15" (the status
-      history), "moved to this user ~10:15" (a re-assignment the scans saw) or "sent 09:30" («تاريخ الارسال للسرية»:
-      never re-assigned); then, for information, the sent date and the first assignment when they differ. */
+      history), "with this user since ~10:15 · assignment not read yet" (since the scans first saw it with them) or
+      "not assigned yet · sent 09:30"; then, for information, the sent date and the first assignment when they differ. */
   function sinceText(r) {
     const today = state.snap.generated_at.slice(0, 10);
     const when = (s) => (s.slice(0, 10) === today ? hhmm(s) : `${s.slice(8, 10)}/${s.slice(5, 7)} ${hhmm(s)}`);
     const from = r.clock_at && r.clock_from === "assignment" ? `with this user since ${when(r.clock_at)}`
-      : r.clock_at && r.clock_from === "seen" ? `moved to this user ~${when(r.clock_at)}` : "";
+      : r.clock_at && r.clock_from === "seen" ? `with this user since ~${when(r.clock_at)} · assignment not read yet`
+        : r.clock_from === "sent" ? "not assigned yet" : "";
     return [from, r.sent_at ? `sent ${when(r.sent_at)}` : (from ? "" : "no sent date"),
             r.assigned_at && r.assigned_at !== r.clock_at ? `first assigned ${when(r.assigned_at)}` : ""]
       .filter(Boolean).join(" · ");
   }
-  const sinceTitle = (r) => "Age from the last «اسناد لمستخدم السرية» (a re-assignment restarts it; «تاريخ الارسال للسرية» "
-    + "when it was never re-assigned): reminder from " + fmtLimit(limits().warn) + ", breached from " + fmtLimit(limits().breach)
-    + (r.clock_from === "seen" ? ". Moved to this user since an earlier scan: its status history is read at the next scans" : "");
+  const sinceTitle = (r) => "Age from the last «اسناد لمستخدم السرية» (a re-assignment restarts it; a request not assigned "
+    + "yet: from «تاريخ الارسال للسرية»): reminder from " + fmtLimit(limits().warn) + ", breached from " + fmtLimit(limits().breach)
+    + (r.clock_from === "seen" ? ". Its assignment time is not read yet: counted from the first scan that saw it with this "
+      + "user (at least that old); the status history is read first at the next scans" : "");
 
   function requestRow(r, cols) {
     const cue = cueText(r);

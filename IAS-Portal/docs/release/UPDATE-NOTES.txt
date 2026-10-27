@@ -389,6 +389,17 @@ HOW TO UPDATE (your data is kept)
    - In the SLA Analysis, a request re-assigned whose new assignment is not read yet shows "not read yet" until the
      next scans read it - never the previous person's time.
 
+36. THE LIVE SLA NEVER COUNTS AN ASSIGNED REQUEST FROM «تاريخ الارسال للسرية»
+   - «تاريخ الارسال للسرية» is not when the security user got the request: a request sent on 20/10 and assigned on
+     26/10 at 23:02 counted 6 days instead of hours. Now:
+       - its status history gives the time it was assigned to the user holding it (exact);
+       - until that is read, it counts from the first scan that saw it with that user, at least that old ("with this
+         user since ~08:48 · assignment not read yet");
+       - only a request nobody holds yet counts from «تاريخ الارسال للسرية» ("not assigned yet").
+   - The scan now reads FIRST the status history of the Live tickets whose assignment is not known: their rows are
+     opened before any other, and their request days are searched every other scan. The collector's log says how many
+     are still not read.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -713,3 +724,13 @@ IAS PORTAL - الجديد في هذا التحديث
    - تاب الـ Live بيقول ده لكل طلب: "with this user since 10:15 · sent 09:30 · first assigned 09:40".
    - في الـ SLA Analysis، الطلب اللي اتنقل ولسه الإسناد الجديد ما اتقراش بيظهر "not read yet" لحد ما الـ scans الجاية
      تقراه - عمره ما بيتحسب بوقت الشخص اللي كان معاه قبل كده.
+
+36. الـ Live SLA مبقاش بيحسب الطلب المسند من «تاريخ الارسال للسرية»
+   - «تاريخ الارسال للسرية» مش وقت ما مستخدم السرية استلم الطلب: طلب اتبعت 20/10 واتسند 26/10 الساعة 23:02 كان بيتحسب
+     6 أيام بدل ساعات. دلوقتي:
+       - الحالة التاريخية للطلب بتدي وقت إسناده للمستخدم اللي معاه (بالظبط)؛
+       - لحد ما تتقري، بيتحسب من أول scan شافه مع المستخدم ده، على الأقل ("with this user since ~08:48 · assignment
+         not read yet")؛
+       - الطلب اللي لسه محدش ماسكه بس هو اللي بيتحسب من «تاريخ الارسال للسرية» ("not assigned yet").
+   - الـ scan بقى بيقرا الأول الحالة التاريخية لتذاكر الـ Live اللي وقت إسنادها مش معروف: بتتفتح قبل أي طلب تاني، وأيام
+     طلبها بتتدور عليها scan آه وscan لأ. والـ log بتاع الـ collector بيقول كام لسه ما اتقراش.

@@ -796,6 +796,14 @@ def _live_key_of_grid(g):
     return (_norm(g.get("user_no")), _norm(g.get("system")), _norm(g.get("request_type")))
 
 
+grid_live_key = _live_key_of_grid                        # an inquiry row's (user number, system, request type)
+
+
+def live_key(req):
+    """A Live ticket's («رقم المستخدم», «النظام», «نوع الطلب») - what matches it to its inquiry row and record."""
+    return tuple(_live_field(req, k) for k in ("user_no", "system", "request_type"))
+
+
 def _live_unlisted(live, open_keys):
     """The live tickets (Re-Assign page) that match no OPEN row of the inquiry grid (same «رقم المستخدم», «النظام»,
     «نوع الطلب»; each grid row matched once, the same security user first)."""

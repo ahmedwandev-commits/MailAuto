@@ -64,9 +64,30 @@ def store(tmp_path):
     return OpsStore(tmp_path / "data").init()
 
 
-def run(store, table=None, cfg=None, now=NOW, **kw):
+def read_assignments(store, headers, rows, cfg=None, now=NOW):
+    """The SLA history as the scans keep it once every Live ticket's status history is read: each assigned ticket's
+    last «اسناد لمستخدم السرية» (here at the time it was sent), so the live clock runs from the assignment."""
+    columns, table = sla.build_table(headers, rows)
+    try:
+        found = sla.analyze(columns, table, cfg or sla_settings(), now)
+    except sla.PortalError:
+        return                                            # a table the scan cannot read: nothing to have read
+    seeds = {}
+    for n, r in enumerate(found):
+        if r["security_user"] != sla.UNASSIGNED and r["_sent"] is not None:
+            f = r["fields"]
+            seeds[f"H{n}"] = {"id": f"H{n}", "stage": "open", "user_no": f.get("رقم المستخدم", ""),
+                              "system": f.get("النظام", ""), "request_type": f.get("نوع الطلب", ""),
+                              "holder": r["security_user"], "assigned_at": r["_sent"].strftime("%Y-%m-%dT%H:%M:%S")}
+    store.update_sla_history_state(lambda d: d.setdefault("open", {}).update(seeds))
+
+
+def run(store, table=None, cfg=None, now=NOW, history=True, **kw):
+    """One SLA scan. ``history`` (the usual case): every assigned ticket's assignment is read (``read_assignments``)."""
     ctx = make_ctx(store, cfg, now, **kw)
     headers, rows = table or sample_table()
+    if history:
+        read_assignments(store, headers, rows, cfg, now)
     return sla.run(ctx, scraper=scraper_of(headers, rows)), ctx
 
 
@@ -550,45 +571,71 @@ class TestRun:
         retry, ctx2 = run(store, now=NOW + timedelta(minutes=15))
         assert retry.emails_sent == 1 and len(ctx2.mailer.sent) == 1
 
-    def test_a_live_ticket_is_aged_from_its_last_assignment_to_the_user_holding_it(self, store):
+    def test_a_live_ticket_is_aged_from_its_last_assignment_never_from_its_sent_date(self, store):
         """The owner's rule: the live SLA runs from the LAST «اسناد لمستخدم السرية» - the status history's assignment
-        to the security user holding it now - reminder from warning_minutes, breached from breach_minutes; a ticket
-        never re-assigned (no history yet) from «تاريخ الارسال للسرية» on the Re-Assign page."""
+        to the security user holding it now. «تاريخ الارسال للسرية» is not that moment: an assigned ticket whose
+        assignment is not read yet counts from the first scan that saw it with its user (at least that old, read first
+        at the next scans); only a ticket nobody holds yet counts from the day it was sent."""
         assigned = (NOW - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
         store.update_sla_history_state(lambda d: d.update(open={"R1": {
             "id": "R1", "stage": "open", "user_no": "1000", "system": "نظام", "request_type": "نوع",
             "holder": OWNER_A, "assigned_at": assigned}}))
         result, ctx = run(store, (HEADERS, [row("a", 200, OWNER_A), row("b", 70, OWNER_B, user_no="1001"),
-                                            row("c", 20, OWNER_B, user_no="1002")]))
+                                            row("c", 20, "", user_no="1002")]), history=False)
         a, b, c = (by_name(result)[k] for k in "abc")
         assert (a["clock_from"], a["clock_at"], a["age_minutes"], a["status"]) == ("assignment", assigned, 30, schemas.SLA_WITHIN)
         assert a["sent_at"] == (NOW - timedelta(minutes=200)).isoformat(timespec="seconds")       # still shown
-        assert (b["clock_from"], b["age_minutes"], b["status"]) == ("sent", 70, schemas.SLA_REMINDER)
-        assert c["age_minutes"] == 20 and c["status"] == schemas.SLA_WITHIN
-        assert [r["fields"]["اسم الموظف"] for r in result.snapshot_data["requests"]] == ["b", "a", "c"]   # oldest first
+        assert (b["clock_from"], b["clock_at"], b["age_minutes"], b["status"]) == (
+            "seen", NOW.isoformat(timespec="seconds"), 0, schemas.SLA_WITHIN)                    # not its sent date
+        assert (c["security_user"], c["clock_from"], c["age_minutes"]) == (sla.UNASSIGNED, "sent", 20)
+        assert [r["fields"]["اسم الموظف"] for r in result.snapshot_data["requests"]] == ["a", "c", "b"]   # oldest first
         totals = result.snapshot_data["totals"]
-        assert (totals["within"], totals["reminder"], totals["breached"], totals["oldest_minutes"]) == (2, 1, 0, 70)
+        assert (totals["within"], totals["reminder"], totals["breached"], totals["oldest_minutes"]) == (3, 0, 0, 30)
         assert result.history_extra["first_breach"] == {}
-        assert any("3 request(s) aged from their last «اسناد لمستخدم السرية»: 1 from the status history, 0 re-assigned"
-                   " since an earlier scan, 2 from «تاريخ الارسال للسرية»" in line for line in ctx.logs)
+        assert any("3 request(s) aged from their last «اسناد لمستخدم السرية»: 1 from the status history, 1 not read yet"
+                   in line and "1 not assigned yet" in line for line in ctx.logs)
+
+    def test_a_request_that_waited_days_before_it_was_assigned_counts_from_its_assignment(self, store):
+        """The owner's example: sent six days ago, assigned to the security user yesterday at 23:02 (step
+        «اسناد لمستخدم السرية» of its status history): its age counts from 23:02, never from the day it was sent."""
+        assigned = (NOW - timedelta(hours=10, minutes=58)).strftime("%Y-%m-%dT%H:%M:%S")       # yesterday 23:02
+        store.update_sla_history_state(lambda d: d.update(open={"R8": {
+            "id": "R8", "stage": "open", "user_no": "1008", "system": "نظام", "request_type": "نوع",
+            "holder": OWNER_A, "first_assigned_at": assigned, "assigned_at": assigned}}))
+        result, _ = run(store, (HEADERS, [row("late", 6 * 24 * 60 + 18 * 60, OWNER_A, user_no="1008")]), history=False)
+        r = by_name(result)["late"]
+        assert (r["clock_from"], r["clock_at"], r["age_minutes"]) == ("assignment", assigned, 658)
 
     def test_a_re_assignment_the_scans_see_restarts_the_clock_before_its_history_is_read(self, store):
-        """No status history yet: when a later scan finds the request with another security user, its clock starts at
-        that scan (it moved since the one before), and stays there at the next scans with the same user."""
-        first, _ = run(store, (HEADERS, [row("x", 200, OWNER_A)]))
+        """No status history yet: a ticket counts from the first scan that saw it with its user; when a later scan finds
+        it with another security user, its clock starts again at that scan, and stays there at the next scans."""
+        first, _ = run(store, (HEADERS, [row("x", 200, OWNER_A)]), history=False)
         x = by_name(first)["x"]
-        assert (x["clock_from"], x["age_minutes"], x["status"]) == ("sent", 200, schemas.SLA_BREACHED)
+        assert (x["clock_from"], x["age_minutes"], x["status"]) == ("seen", 0, schemas.SLA_WITHIN)
         store.write_snapshot("sla", first.snapshot_data, generated_at=NOW.isoformat(timespec="seconds"))
         later = NOW + timedelta(minutes=5)
-        moved, _ = run(store, (HEADERS, [row("x", 205, OWNER_B, now=later)]), now=later)
+        moved, _ = run(store, (HEADERS, [row("x", 205, OWNER_B, now=later)]), now=later, history=False)
         x = by_name(moved)["x"]
         assert (x["security_user"], x["clock_from"], x["clock_at"], x["age_minutes"], x["status"]) == (
             OWNER_B, "seen", later.isoformat(timespec="seconds"), 0, schemas.SLA_WITHIN)
         store.write_snapshot("sla", moved.snapshot_data, generated_at=later.isoformat(timespec="seconds"))
         after = later + timedelta(minutes=70)
-        still, _ = run(store, (HEADERS, [row("x", 275, OWNER_B, now=after)]), now=after)
+        still, _ = run(store, (HEADERS, [row("x", 275, OWNER_B, now=after)]), now=after, history=False)
         x = by_name(still)["x"]
         assert (x["clock_from"], x["age_minutes"], x["status"]) == ("seen", 70, schemas.SLA_REMINDER)
+
+    def test_a_ticket_an_earlier_version_already_listed_counts_from_that_scan(self, store):
+        """The first scan after this update: a ticket the last snapshot already had with the same user (written without
+        the time the scans first saw it) counts from that snapshot - at least that old - not from its sent date."""
+        earlier = NOW - timedelta(minutes=45)
+        first, _ = run(store, (HEADERS, [row("y", 300, OWNER_A, now=earlier)]), now=earlier, history=False)
+        data = first.snapshot_data
+        for r in data["requests"]:
+            r.pop("holder_seen_at"), r.pop("clock_at"), r.pop("clock_from")             # as v5.4 and before wrote it
+        store.write_snapshot("sla", data, generated_at=earlier.isoformat(timespec="seconds"))
+        now, _ = run(store, (HEADERS, [row("y", 345, OWNER_A)]), history=False)
+        y = by_name(now)["y"]
+        assert (y["clock_from"], y["clock_at"], y["age_minutes"]) == ("seen", earlier.isoformat(timespec="seconds"), 45)
 
     def test_third_party_requests_are_left_out_of_the_live_sla(self, store):
         """As before: a request of a Third Party application is not in the live SLA - not in its list, totals, alerts
@@ -904,8 +951,11 @@ def e2e_settings(portal, timeout=8, **over):
     return cfg
 
 
-def portal_run(store, portal, password=PASSWORD, timeout=8, **over):
+def portal_run(store, portal, password=PASSWORD, timeout=8, history=True, **over):
+    """A scan through the browser; ``history``: the sample tickets' assignments are read (``read_assignments``)."""
     ctx = make_ctx(store, e2e_settings(portal, timeout, **over), password=password)
+    if history:
+        read_assignments(store, HEADERS, [table_cells(r) for r in sample_requests(NOW)])
     return sla.run(ctx), ctx
 
 
@@ -1145,6 +1195,27 @@ class TestEndToEnd:
         finally:
             browser.close()
         assert got == [sla.norm(s) for s in samples]
+
+
+def test_the_days_of_live_tickets_whose_assignment_is_not_read_come_every_other_scan(store):
+    """The Live tab's clock is a ticket's last «اسناد لمستخدم السرية»: the request days of the Live tickets whose
+    assignment is not read yet are searched first, every other scan (the other older days in turn between), and their
+    rows are named for the reader to open first (``live_keys``); a ticket already timed by its history is not."""
+    ctx = make_ctx(store, None, NOW)
+    fields = lambda no: {"رقم المستخدم": no, "النظام": "نظام", "نوع الطلب": "نوع"}          # noqa: E731
+    store.write_snapshot("sla", {"requests": [
+        {"key": "unknown", "security_user": OWNER_A, "clock_from": "seen", "fields": fields("1001"),
+         "sent_at": (NOW - timedelta(days=6)).isoformat()},
+        {"key": "known", "security_user": OWNER_B, "clock_from": "assignment", "fields": fields("1002"),
+         "sent_at": (NOW - timedelta(days=20)).isoformat()}]}, generated_at=NOW.isoformat(timespec="seconds"))
+    day = lambda n: NOW.date() - timedelta(days=n)                                      # noqa: E731
+    plan = sla.history_plan(ctx, sla_settings(), NOW)
+    assert plan["slices"][1] == (day(9), day(9)) and plan["live_days"] == 4          # sent 6 days ago, 3 before
+    assert plan["live_keys"] == {("1001", "نظام", "نوع")}
+    store.update_sla_history_state(lambda d: d.update(history_older_day=day(6).isoformat()))
+    assert sla.history_plan(ctx, sla_settings(), NOW)["slices"][1] == (day(23), day(23))   # then the others, in turn
+    store.update_sla_history_state(lambda d: d.update(history_older_day=day(23).isoformat()))
+    assert sla.history_plan(ctx, sla_settings(), NOW)["slices"][1] == (day(9), day(9))     # and the Live ones again
 
 
 def test_the_inquiry_follows_older_live_tickets_one_day_a_scan_never_a_month_at_once(store):

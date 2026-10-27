@@ -622,14 +622,14 @@ def test_sla_ages_follow_the_server_clock_between_scans(tab, hub, clock):
 def test_a_live_ticket_is_aged_from_its_last_assignment_and_shows_where_its_clock_starts(ops, tab, hub, clock):
     """The owner's rule: the live age counts from the LAST «اسناد لمستخدم السرية», to the user holding it now (k003:
     sent 125 minutes ago, first assigned 20 minutes ago, re-assigned to this user 10 minutes ago: 10 minutes, within);
-    the sent date and the first assignment are shown for information. A ticket never re-assigned counts from
-    «تاريخ الارسال للسرية» (k004); one the scans saw move says "moved to this user ~"."""
+    the sent date and the first assignment are shown for information. A ticket whose assignment is not read yet
+    counts from the first scan that saw it with its user, and says so (k004) - never from its sent date."""
     snap = sla_snapshot()
     k003 = next(r for r in snap["requests"] if r["key"] == "k003")
     k003.update(assigned_at=iso(NOW - dt.timedelta(minutes=20)), holder_since=iso(NOW - dt.timedelta(minutes=10)),
                 clock_at=iso(NOW - dt.timedelta(minutes=10)), clock_from="assignment", age_minutes=10, status="within")
     k004 = next(r for r in snap["requests"] if r["key"] == "k004")
-    k004.update(clock_at=k004["sent_at"], clock_from="sent")
+    k004.update(clock_at=iso(NOW - dt.timedelta(minutes=12)), clock_from="seen", age_minutes=12, status="within")
     write_sla(ops, snap)
     t = tab()
     page = t.open("/sla", ".sx-requests tbody tr")
@@ -644,7 +644,9 @@ def test_a_live_ticket_is_aged_from_its_last_assignment_and_shows_where_its_cloc
     title = since.get_attribute("title")
     assert "Age from the last «اسناد لمستخدم السرية»" in title and "reminder from 1 h, breached from 2 h" in title
     other = row("k004").locator("[data-since]")
-    assert other.get_attribute("data-since") == "sent" and other.inner_text() == "sent 07:02"
+    assert other.get_attribute("data-since") == "seen"
+    assert other.inner_text() == "with this user since ~08:48 · assignment not read yet · sent 07:02"
+    assert "not read yet: counted from the first scan that saw it with this user" in other.get_attribute("title")
     clock.advance(minutes=3)
     t.poll_now()
     expect(row("k003").locator("[data-age]")).to_have_text("13 min")

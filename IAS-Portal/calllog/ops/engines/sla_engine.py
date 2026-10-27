@@ -3,8 +3,7 @@
 It logs in to the SSO portal with the PC's Edge / Chrome, opens the "User Provisioning Portal - موظف اسناد - مستخدم السرية" package,
 jumps to the Re-Assign page, reads the requests table (plain tables with paging and DataTables through their API), and
 measures the age of every request since its LAST assignment to the security user holding it (``clock_requests``: a
-re-assignment restarts the clock; «تاريخ الارسال للسرية» when it was never re-assigned). Entry point
-(docs/HUB-DESIGN.md sections 5.1, 6, 12):
+re-assignment restarts the clock). Entry point (docs/HUB-DESIGN.md sections 5.1, 6, 12):
 
     run(ctx, scraper=None) -> JobResult     what the runner calls; ``scraper(ctx) -> (headers, rows)`` replaces the browser in tests
 
@@ -1089,13 +1088,19 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
     # a «نموذج (7)» row read before its period was taken from the details: read again, after every other row
     late = {it["key"] for it in grid if it["key"] in todo
             and not sla_history.needs_details(it, index, plan["cfg"], period=False)}
-    # the FINISHED requests first (confirmed, then rejected: one read gives every stamp of a request), then the ones
-    # awaiting the reviewer, then the ones with a security user; within each, page by page starting on the page where
-    # the last scan stopped (``resume_page``: a row's post-back opens it on ITS result page only, and no page waits
-    # scan after scan), the newest request first
+    # a Live ticket whose last assignment is not known yet first (the Live tab's clock: ``plan['live_keys']``), then
+    # the FINISHED requests (confirmed, then rejected: one read gives every stamp of a request), then the ones awaiting
+    # the reviewer, then the ones with a security user; within each, page by page starting on the page where the last
+    # scan stopped (``resume_page``: a row's post-back opens it on ITS result page only, and no page waits scan after
+    # scan), the newest request first
     npages = max(1, len(pages))
     resume = int(plan.get("resume_page") or 0) % npages
-    ordered = sorted(grid, key=lambda it: (it["key"] not in todo, it["key"] in late,
+    live_keys = plan.get("live_keys") or set()
+
+    def live_wanted(it):
+        return (bool(live_keys) and sla_history.grid_live_key(it) in live_keys
+                and sla_history.grid_stage(it["status"], plan["cfg"], it.get("executor") or "") == "open")
+    ordered = sorted(grid, key=lambda it: (it["key"] not in todo, it["key"] in late, not live_wanted(it),
                                            sla_history.detail_priority(it["status"], plan["cfg"], it.get("executor") or "") or 0,
                                            (page_of[it["key"]] - resume) % npages,
                                            -((sla_history.parse_time(it["date"]) or datetime.min).toordinal())))
@@ -1310,15 +1315,17 @@ def note_assignments(ctx, cfg, requests, secrets=()):
     return sla_history.note_assignments(requests, open_records)
 
 
-def clock_requests(requests, previous, now, cfg):
+def clock_requests(requests, previous, now, cfg, previous_at=None):
     """Start each live request's SLA clock at its LAST «اسناد لمستخدم السرية» - when the security user holding it
-    now got it (the owner's rule: a re-assignment restarts the clock):
+    now got it (the owner's rule: a re-assignment restarts the clock). «تاريخ الارسال للسرية» is NOT that moment (a
+    request can wait days before it is assigned), so it is never used for an assigned request:
 
     * ``assignment`` - the status history's assignment to that user (``last_assigned_at``, exact);
-    * ``seen`` - not read yet, but the scans saw it move to that user (at the previous scan it was with someone else):
-      the scan that first saw it with them (``holder_seen_at``, carried from scan to scan);
-    * ``sent`` - otherwise «تاريخ الارسال للسرية» on the Re-Assign page (never re-assigned as far as the scans know:
-      its first assignment is its last).
+    * ``seen`` - its assignment is not read yet: since the scans first saw it with that user (``holder_seen_at``,
+      carried from scan to scan; a new holder at this scan, or a request seen for the first time: this scan; a request
+      the last snapshot already had without one: that snapshot's time ``previous_at``) - at least that old, never a
+      guess beyond it; the history read gives the exact time at the next scans;
+    * ``sent`` - a request with no security user yet (waiting to be assigned): «تاريخ الارسال للسرية».
 
     Sets ``clock_at``, ``clock_from``, ``holder_seen_at``, ``age_minutes`` and ``status``, oldest first again.
     ``previous`` = the requests of the last snapshot. Returns {source: count}."""
@@ -1328,14 +1335,17 @@ def clock_requests(requests, previous, now, cfg):
     counts = {"assignment": 0, "seen": 0, "sent": 0}
     for r in requests:
         prev = before.get(r["key"])
-        if prev is None:
-            seen = None                                  # first sighting: nothing watched yet
+        assigned = r["security_user"] != UNASSIGNED
+        if not assigned:
+            seen = None
+        elif prev is None:
+            seen = stamp                                 # first sighting: with this user since this scan, at least
         elif norm(prev.get("security_user")) == norm(r["security_user"]):
-            seen = prev.get("holder_seen_at")            # the same user: what the scans saw before still holds
+            seen = prev.get("holder_seen_at") or (previous_at or stamp)[:19]   # the same user: since then still
         else:
             seen = stamp                                 # moved to this user since the last scan
         r["holder_seen_at"] = seen
-        start, source = parse_time_iso(r.get("last_assigned_at")), "assignment"
+        start, source = (parse_time_iso(r.get("last_assigned_at")), "assignment") if assigned else (None, "sent")
         if start is None and seen:
             start, source = parse_time_iso(seen), "seen"
         if start is None:
@@ -1513,7 +1523,7 @@ def build_workbook(columns, requests, by_user):
 
     def request_row(r):                               # ASSIGNED_AT: the last assignment, the age's clock (when known)
         sent = r["_sent"].strftime("%d/%m/%Y %H:%M") if r["_sent"] else ""
-        last = parse_time_iso(r.get("clock_at")) if r.get("clock_from") in ("assignment", "seen") else None
+        last = parse_time_iso(r.get("clock_at")) if r.get("clock_from") == "assignment" else None
         assigned = last.strftime("%d/%m/%Y %H:%M") if last else ""
         return [r["security_user"], sent, assigned, r["age_minutes"], fmt_age(r["age_minutes"]), LABELS[r["status"]],
                 *r["_cells"]]
@@ -1848,7 +1858,7 @@ def history_plan(ctx, cfg, now):
     date_from = today - timedelta(days=days - 1)
     floor = today - timedelta(days=HISTORY_REACH_DAYS - 1)
     rules = sla_records.clean_config((ctx.store.read_sla_records() or {}).get("config"))
-    older = set()
+    older, live_days, live_keys = set(), set(), set()
     still_open = [r.get("request_date") for r in (state.get("open") or {}).values()]
     still_open += [g.get("request_date") for g in (state.get("grid") or {}).values()   # a branch-only request has no
                    if sla_history.row_stage(g, rules) in ("open", "awaiting")]         # SLA yet
@@ -1857,22 +1867,33 @@ def history_plan(ctx, cfg, now):
         if day and floor <= day.date() < date_from:
             older.add(day.date())
     # and every ticket of the last Live scan (the Re-Assign page): its request date is at most a few days before the
-    # day it was sent to the security team
+    # day it was sent to the security team. A ticket whose last assignment is not read yet (the Live tab's clock) is
+    # wanted first: its row is opened before any other (``live_keys``) and its days come every other scan
     with suppress(Exception):
         live = (((ctx.store.read_snapshot("sla") or {}).get("data") or {}).get("requests") or [])
         for r in live:
-            sent = sla_history.parse_time(r.get("sent_at")) if isinstance(r, dict) else None
+            if not isinstance(r, dict):
+                continue
+            sent = sla_history.parse_time(r.get("sent_at"))
+            wanted = r.get("clock_from") != "assignment" and r.get("security_user") != UNASSIGNED
+            key = sla_history.live_key(r)
+            if wanted and key[0]:
+                live_keys.add(key)
             if sent:
                 for back in range(LIVE_REACH_MARGIN_DAYS + 1):
                     day = sent.date() - timedelta(days=back)
                     if floor <= day < date_from:
                         older.add(day)
+                        if wanted:
+                            live_days.add(day)
     last = str(state.get("history_older_day") or "")
-    turn = sorted(d for d in older if d.isoformat() > last) or sorted(older)
+    pool = sorted(live_days) if live_days and last not in {d.isoformat() for d in live_days} else sorted(older)
+    turn = [d for d in pool if d.isoformat() > last] or pool
     pick = turn[0] if turn else None
     slices = [(date_from, today)] + ([(pick, pick)] if pick else [])
     return {"date_from": date_from, "date_to": today, "slices": slices, "older_day": pick.isoformat() if pick else "",
-            "older_days": len(older), "index": dict(state.get("index") or {}), "cfg": rules,
+            "older_days": len(older), "live_days": len(live_days), "live_keys": live_keys,
+            "index": dict(state.get("index") or {}), "cfg": rules,
             "excluded": sla_excluder(ctx, cfg), "seconds": history_seconds(cfg, getattr(ctx, "general", None)),
             "day_start": day_start(cfg, getattr(ctx, "general", None)),
             "resume_page": int(((state.get("history_stats") or {}).get("resume_page")) or 0)}
@@ -2055,15 +2076,17 @@ def run(ctx, scraper=None):
         except Exception as exc:
             ctx.log(f"SLA history could not be recorded: {type(exc).__name__}: {scrub(str(exc), secrets)}")
     note_assignments(ctx, cfg, requests, secrets)
-    previous = []
+    previous, previous_at = [], None
     with suppress(Exception):                             # the last scan: who held each request then
-        previous = ((ctx.store.read_snapshot("sla") or {}).get("data") or {}).get("requests") or []
-    clock = clock_requests(requests, previous, now, cfg)
+        last = ctx.store.read_snapshot("sla") or {}
+        previous, previous_at = (last.get("data") or {}).get("requests") or [], last.get("generated_at")
+    clock = clock_requests(requests, previous, now, cfg, previous_at)
     if requests:
         ctx.log(f"{len(requests)} request(s) aged from their last «اسناد لمستخدم السرية»: {clock['assignment']} from "
-                f"the status history, {clock['seen']} re-assigned since an earlier scan, {clock['sent']} from «تاريخ "
-                f"الارسال للسرية» (reminder from {fmt_hours(int(cfg['warning_minutes']))}, breached from "
-                f"{fmt_hours(int(cfg['breach_minutes']))})")
+                f"the status history, {clock['seen']} not read yet (since the scans first saw them with their user, at "
+                f"least; read first at the next scans), {clock['sent']} not assigned yet (from «تاريخ الارسال للسرية») "
+                f"- reminder from {fmt_hours(int(cfg['warning_minutes']))}, breached from "
+                f"{fmt_hours(int(cfg['breach_minutes']))}")
     if sink and not ctx.dry_run:                          # today's numbers kept for the day-by-day view
         try:
             from .. import performance

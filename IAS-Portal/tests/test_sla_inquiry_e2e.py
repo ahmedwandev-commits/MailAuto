@@ -262,6 +262,26 @@ def test_a_scan_that_cannot_read_every_row_starts_the_next_one_where_it_stopped(
     assert second["opened"] == 10 and second["resume_page"] == 2
 
 
+def test_a_live_ticket_whose_assignment_is_not_read_is_opened_before_the_finished_ones(browser, tmp_path):
+    """The Live tab's clock needs the ticket's last «اسناد لمستخدم السرية»: an open request that is a Live ticket whose
+    assignment is not read yet (``plan['live_keys']``) is opened first - before the finished ones, which otherwise come
+    first - so a detail budget smaller than the day never leaves it behind."""
+    reqs = [request(8300000 + i, DAY, "تم التعزيز على التنفيذ", executor="مستخدم اول", checker="مراجع سرية",
+                    employee=f"موظف رقم {i}", history=six_line_history()) for i in range(11)]
+    reqs.append(request(8300099, DAY, "اسناد لمستخدم السرية", executor="مستخدم اول", employee="موظف حي",
+                        user_no="700299", history=open_history()))
+    with FakeInquiryPortal(reqs, server_page=3) as portal:
+        raw = settings.deep_merge({"sla": {"username": "700101", "base_url": portal.url, "history_max_details": 10}}, {})
+        cfg = settings.validate(raw)[0]["sla"]
+        cfg["timeout_seconds"] = 8
+        live = {sla_history.live_key({"fields": {"رقم المستخدم": "700299", "النظام": "Flexcube", "نوع الطلب": "اضافة صلاحية"}})}
+        plan = {"date_from": DAY, "date_to": DAY, "index": {}, "cfg": CFG, "excluded": None, "seconds": 120,
+                "live_keys": live}
+        out = sla.read_history(browser, cfg, sla.Debug(False, tmp_path / "debug"), plan, lambda m: None)
+        opened = list(portal.details_opened)
+    assert opened[0] == "8300099" and out["opened"] == 10 and "8300099" in recorded(out)
+
+
 # ------------------------------------------------------- the recent days + one older day, within one time budget
 def test_each_scan_reads_the_recent_days_and_one_older_day_within_its_time_budget(browser, tmp_path):
     """The search never reaches a month back at once: the recent window, then the one older day with a request still
