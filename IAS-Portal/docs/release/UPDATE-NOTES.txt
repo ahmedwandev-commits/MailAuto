@@ -466,6 +466,17 @@ HOW TO UPDATE (your data is kept)
      Ticketing › "Search the last (days)" (3 by default). "Time for the history per scan (seconds)" (180 by default)
      is the longest a scan spends opening requests: lower it for a shorter scan; the rest follows at the next scans.
 
+44. THIRD PARTY: ONLY HOW MANY, NEVER IN THE SLA
+   - Third Party requests stay out of the SLA: no breached, no reminder, no age, no time, and they are not in the
+     security team's own numbers. Now you see how many there are, by the statuses we agreed (came, executed, not
+     executed, rejected, still with a security user, waiting for confirmation, confirmed):
+     - Live tab: a "Third Party" tile - how many of its tickets are on the Re-Assign page now;
+     - Insights › Analysis › SLA: a "Third Party · counted only" card for the chosen dates (days older than the
+       inquiry window come from the counts kept those days);
+     - daily summary: a "Third Party (counted only, not in the SLA)" card when it has requests that day.
+   - A manager sees them only when Third Party is their team. The teams left out are set in System › Settings ›
+     Ticketing › "Teams left out" (Third Party by default).
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -865,3 +876,14 @@ IAS PORTAL - الجديد في هذا التحديث
      والصفحات خدت قد إيه. لو البحث لسه بيطلع صفحات كتير، راجع System › Settings › Ticketing › "Search the last
      (days)" (الافتراضي 3). و"Time for the history per scan (seconds)" (الافتراضي 180) هو أقصى وقت السكان بيفتح فيه
      طلبات: قلله لو عايز السكان أقصر، والباقي بيكمل في السكانات اللي بعده.
+
+44. الـ Third Party: العدد بس، وعمره ما بيدخل في الـ SLA
+   - طلبات الـ Third Party لسه برة الـ SLA: مفيش breached ولا reminder ولا عمر ولا وقت، ومش داخلة في أرقام فريق السرية.
+     ودلوقتي بتشوف عددها بالحالات اللي اتفقنا عليها (وصلت، اتنفذت، ما اتنفذتش، اترفضت، لسه مع مستخدم سرية، مستنية
+     التعزيز، اتعززت):
+     - تاب الـ Live: مربع "Third Party" فيه عدد تذاكرها اللي على صفحة الـ Re-Assign دلوقتي؛
+     - Insights › Analysis › SLA: كارت "Third Party · counted only" للتواريخ اللي اخترتها (الأيام الأقدم من فترة
+       البحث بتيجي من الأعداد اللي اتسجلت في وقتها)؛
+     - الملخص اليومي: كارت "Third Party (counted only, not in the SLA)" لو ليها طلبات في اليوم ده.
+   - المدير بيشوفها بس لو الـ Third Party فريقه. والفرق اللي برة الـ SLA بتتحدد من System › Settings › Ticketing ›
+     "Teams left out" (الافتراضي Third Party).

@@ -224,6 +224,24 @@
       ], rows,
     }).el));
   }
+  // ---- the requests left out of the SLA (Third Party by default): only how many, by the statuses agreed ----
+  function leftOutCard(d) {
+    const L = d.left_out_numbers;
+    if (!L) return null;
+    const names = (L.teams || []).join(", ") || "Left out of the SLA";
+    const hint = "counted only: these requests are not in the SLA, its times, its breaches or the numbers above";
+    const cols = [["came", "Came"], ["executed", "Executed"], ["not_executed", "Not executed"], ["rejected", "Rejected"],
+      ["open", "Still with a security user"], ["waiting", "Waiting confirmation"], ["confirmed", "Confirmed"], ["now", "On the Re-Assign page now"]];
+    const teamsRows = L.by_team || [];
+    const rows = teamsRows.length === 1 ? teamsRows : [{ ...L, team: "All" }, ...teamsRows];
+    return OPS.card(`${names} · counted only`, { hint }, h("div", { "data-left-out": "" }, OPS.table({
+      search: false, copy: true, pageSize: 15, caption: `${names} · counted only`,
+      columns: [
+        { key: "team", label: "Team", render: (r) => h("span", { dir: "auto" }, String(r.team)), text: (r) => String(r.team) },
+        ...cols.map(([key, label]) => ({ key, label, num: true, render: (r) => fmtNum(r[key] || 0) })),
+      ], rows,
+    }).el));
+  }
   function glanceSection(d) {
     const G = d.glance || {};
     return [
@@ -231,7 +249,8 @@
       glanceKpis(d), glanceNote(d), glanceStatuses(d), glanceHours(d), glanceTimes(d),
       OPS.card("Each team", { hint: "the same numbers, team by team" }, glanceTable(G.by_team, "team", "Team", "Each team")),
       OPS.card("Each employee", { hint: "مستخدم السرية of each request · a rejection counts for the assigner who rejected it" }, glanceTable(G.by_person, "person", "Employee", "Each employee")),
-    ];
+      leftOutCard(d),
+    ].filter(Boolean);
   }
   // ---- day by day: the numbers kept at every scan (performance.read_day_logs) - the team picked, or one employee ----
   function dayByDayCard() {

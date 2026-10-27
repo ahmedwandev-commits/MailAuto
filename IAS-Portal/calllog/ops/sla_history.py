@@ -1056,6 +1056,25 @@ def status_numbers(grid, records, cfg, date_from, date_to, live=None, live_team=
     return out
 
 
+LEFT_OUT_KEYS = ("came", "executed", "not_executed", "rejected", "open", "waiting", "confirmed", "confirmed_executed",
+                 "confirmed_not", "awaiting_executed", "awaiting_not", "now")
+
+
+def counts_only(nums, now_by_team=None):
+    """What is shown of the requests LEFT OUT of the SLA (Third Party by default - Settings › Ticketing): only how
+    many there are, by the statuses agreed (``status_numbers`` of their grid rows) - never an SLA status, a time, an
+    hour or a person. ``now_by_team`` = {team: their tickets on the Re-Assign page now} (the Live scan's count).
+    Returns {came, executed, ..., now, pre, by_team: [{team, came, ..., now}]}."""
+    rows = {r.get("team") or "—": {"team": r.get("team") or "—", **{k: int(r.get(k) or 0) for k in LEFT_OUT_KEYS}}
+            for r in (nums or {}).get("by_team") or []}
+    for team, n in (now_by_team or {}).items():
+        rows.setdefault(team or "—", {"team": team or "—", **{k: 0 for k in LEFT_OUT_KEYS}})["now"] += int(n or 0)
+    out = {k: sum(r[k] for r in rows.values()) for k in LEFT_OUT_KEYS}
+    out["pre"] = int((nums or {}).get("pre") or 0)
+    out["by_team"] = sorted(rows.values(), key=lambda r: (-r["came"], -r["now"], str(r["team"]).casefold()))
+    return out
+
+
 # ------------------------------------------------------------------- live tickets: when they were first assigned
 LIVE_FIELDS = {"user_no": "رقم المستخدم", "system": "النظام", "request_type": "نوع الطلب"}
 

@@ -480,6 +480,27 @@ def test_old_links_to_the_ticketing_analysis_tab_open_its_new_place(ops, tab, hu
     t.clean()
 
 
+def test_third_party_is_only_counted_on_the_live_tab_and_the_sla_tab(ops, tab, hub):
+    """Third Party is never in the SLA: the Live tab says only how many of its tickets are on the Re-Assign page, the
+    SLA tab only how many of its requests by status - no breach, age or time, and none in the security team's own
+    numbers."""
+    ops.update_auto_assign(lambda d: d.update(applications=[{"name": "TP App", "team": "Third Party"}]))
+    write_sla(ops, {**sla_snapshot(), "left_out": {"open": 3, "by_team": {"Third Party": 3}, "teams": ["Third Party"]}},
+              history=False)
+    todays_history(ops, extra_grid={"tp1": grid_entry("تم التعزيز على التنفيذ", "closed", system="TP App"),
+                                    "tp2": grid_entry("رفض", "rejected", system="TP App")})
+    t = tab()
+    page = t.open("/sla", '[data-kpi="left-out"]')
+    assert kpi(page, "left-out") == "3" and "Third Party" in text(page, '[data-kpi="left-out"]')
+    assert kpi(page, "open") == "31" and page.locator('[data-kpi="left-out"]').evaluate("e => e.tagName") == "DIV"
+    page = t.open("/analysis?tab=sla", "[data-left-out]")
+    assert kpi(page, "g-came") == "4"                                              # the security team's own
+    cells = [c.inner_text() for c in page.locator("[data-left-out] tbody tr").first.locator("td").all()]
+    assert cells == ["Third Party", "2", "1", "0", "1", "0", "0", "1", "3"]
+    assert "Third Party" not in page.locator(".card:has-text('Each team')").first.inner_text()
+    t.clean()
+
+
 def test_the_sla_analysis_is_live(ops, tab, hub):
     """A scan that records another confirmed request shows up without a click."""
     todays_history(ops)

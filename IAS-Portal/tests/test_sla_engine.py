@@ -650,6 +650,8 @@ class TestRun:
         assert list(result.history_extra["first_breach"]) == [by_name(result)["a"]["key"]]
         assert ctx.mailer.sent and "TP Bank App" not in ctx.mailer.sent[0]["html"]
         assert any("1 request(s) of excluded applications left out of the SLA" in line for line in ctx.logs)
+        # only how many: the Live tab shows the count, never a status or an age
+        assert result.snapshot_data["left_out"] == {"open": 1, "by_team": {"Third Party": 1}, "teams": ["Third Party"]}
 
     def test_missing_mailer_falls_back_to_outlook_and_fails_cleanly_here(self, store):
         ctx = make_ctx(store)

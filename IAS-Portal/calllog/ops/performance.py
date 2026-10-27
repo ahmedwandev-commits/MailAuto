@@ -71,15 +71,20 @@ def sla_scope(store, hub, users, day_from, day_to, scope=None):
                          (r.get("assigner"), r.get("assigner_no")), (r.get("rejected_by"), r.get("rejected_by_no"))):
             if name and no:
                 number_of.setdefault(sla_history._norm(name), no)
-    grid = {}
+    grid, left_grid = {}, {}                              # left_grid: the requests left out of the SLA, counted only
     for key, g in (state.get("grid") or {}).items():
-        if excluded(g.get("system")):
-            continue
         t = teams.sla_record_team(g.get("system"), resolver)
-        if shown(t):
+        if excluded(g.get("system")) or str(t).casefold() in out_teams:
+            if teams.in_scope(scope, t):
+                left_grid[key] = {**g, "team": t}
+        elif shown(t):
             grid[key] = {**g, "team": t}
+    left = (snap.get("data") or {}).get("left_out") if snap else None
+    left_now = {t: int(n or 0) for t, n in ((left or {}).get("by_team") or {}).items() if teams.in_scope(scope, t)}
+    left_teams = [str(t).strip() for t in sla_cfg.get("exclude_teams") or [] if str(t).strip() and teams.in_scope(scope, t)]
     return {"records": records, "grid": grid, "index": state.get("index") or {}, "cfg": cfg, "live": live,
             "resolver": resolver, "people": people, "number_of": number_of,
+            "left_grid": left_grid, "left_now": left_now, "left_teams": left_teams,
             "available": bool(state.get("last_history") or raw), "last_history": state.get("last_history", "")}
 
 
@@ -196,8 +201,10 @@ def save_day_log(store, calls_store, hub, users, now):
         d = day.isoformat()
         nums = sla_history.status_numbers(sc["grid"], sc["records"], sc["cfg"], d, d,
                                           live=sc["live"] if d == today else None, live_team=live_team)
+        left = sla_history.status_numbers(sc["left_grid"], {}, sc["cfg"], d, d)
         log = {"at": now.strftime("%Y-%m-%dT%H:%M:%S"), "totals": {k: nums[k] for k in COUNT_KEYS},
-               "times": nums["times"], "by_team": nums["by_team"], "by_person": nums["by_person"]}
+               "times": nums["times"], "by_team": nums["by_team"], "by_person": nums["by_person"],
+               "left_out": sla_history.counts_only(left, sc["left_now"] if d == today else None)}
         if d == today:
             log["totals"]["now"] = nums["now"]
             log["people"] = people_day(store, calls_store, hub, users, d, now, top=50)
@@ -255,6 +262,29 @@ def add_logged_status(glance, store, day_from, day_to, scope=None, merges=None):
     glance["by_person"] = _sum_rows(list(glance.get("by_person") or []) + people_rows, "person")
     glance["logged_days"] = sorted({d for d in store.history_days("sla") if day_from <= d <= day_to})
     return glance
+
+
+def add_logged_left_out(counts, store, day_from, day_to, scope=None, merges=None):
+    """Add to ``counts`` (``sla_history.counts_only``: the requests left out of the SLA) the kept counts of the days
+    ``day_from``..``day_to`` (older than the inquiry window), as ``scope`` may see them."""
+    scope = teams.merged_scope(scope, merges)
+    rows = []
+    for day in store.history_days("sla"):
+        if day_from <= day <= day_to:
+            left = ((store.read_history("sla", day) or {}).get("day_log") or {}).get("left_out") or {}
+            rows += [r for r in _merged_rows(left.get("by_team"), merges) if teams.in_scope(scope, r.get("team"))]
+    if not rows:
+        return counts
+    keys = [k for k in sla_history.LEFT_OUT_KEYS if k != "now"]       # "now" is the Live tickets of today only
+    by = {r["team"]: dict(r) for r in counts.get("by_team") or []}
+    for r in rows:
+        t = by.setdefault(r.get("team") or "—", {"team": r.get("team") or "—", **{k: 0 for k in sla_history.LEFT_OUT_KEYS}})
+        for k in keys:
+            t[k] += int(r.get(k) or 0)
+    for k in keys:
+        counts[k] = sum(t[k] for t in by.values())
+    counts["by_team"] = sorted(by.values(), key=lambda r: (-r["came"], -r["now"], str(r["team"]).casefold()))
+    return counts
 
 
 def _team_sum(rows, scope):

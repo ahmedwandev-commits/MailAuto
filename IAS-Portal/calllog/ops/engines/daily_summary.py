@@ -136,7 +136,9 @@ def _resolver(store, hub, users):
 def tickets_block(store, hub, users, day, now, team=None):
     """The security requests of ``day``, counted like Insights › Analysis › SLA (``sla_history.status_numbers`` over
     ``performance.sla_scope``): every team's, or (``team``) only that team's - a request's team is its application's,
-    never the person's; Third Party always left out. The Live queue (Re-Assign page) is counted from its own scan."""
+    never the person's; Third Party always left out of the SLA, only counted (``left_out``: how many of its requests,
+    by status, and its tickets on the Re-Assign page - no SLA status, no time). The Live queue (Re-Assign page) is
+    counted from its own scan."""
     scope = (team,) if team else None
     sc = performance.sla_scope(store, hub, users, day, day, scope)
     out = {"available": False}
@@ -160,6 +162,9 @@ def tickets_block(store, hub, users, day, now, team=None):
                    sla_pct=whole["within_pct"] if whole["within_pct"] is not None else 0.0, measured=whole["n"],
                    median_minutes=whole["median_minutes"], sla_minutes=sc["cfg"]["sla_minutes"],
                    history_as_of=sc["last_history"])
+    if sc["left_grid"] or sc["left_now"]:
+        left = sla_history.status_numbers(sc["left_grid"], {}, sc["cfg"], day, day)
+        out["left_out"] = {**sla_history.counts_only(left, sc["left_now"]), "teams": sc["left_teams"]}
     if not out.get("available"):
         out["reason"] = "no ticketing scan yet"
     return out
@@ -373,6 +378,18 @@ def build_html(data, cfg, slot, now, next_slot=None):
                 inner += _sub("Counted as the portal's «الاستفسار عن الطلبات» lists the requests of today: "
                               "came = executed + not executed + rejected + still with a security user.")
             cards.append(_card("Tickets (security requests)", inner, er.AMBER))
+            left = tix.get("left_out") or {}
+            if left.get("came") or left.get("now"):           # counted only: never in the SLA, its times or alerts
+                names = ", ".join(left.get("teams") or []) or "Left out of the SLA"
+                cards.append(_card(f"{names} (counted only, not in the SLA)", _facts([
+                    ("Requests of today («تاريخ الطلب»)", left.get("came", 0)),
+                    ("Executed", left.get("executed", 0)), ("Not executed", left.get("not_executed", 0)),
+                    ("Rejected by the assigner (رفض)", left.get("rejected", 0)),
+                    ("Still with a security user", left.get("open", 0)),
+                    ("Waiting for the reviewer's confirmation", left.get("waiting", 0)),
+                    ("Confirmed (تم التعزيز)", left.get("confirmed", 0)),
+                    ("On the Re-Assign page now", left.get("now", 0))])
+                    + _sub("Only how many: these requests are not in the SLA, its times or its alerts."), er.MUTED))
             if live.get("breached"):
                 attention.append(f'{live["breached"]} ticket(s) open past the SLA')
         else:

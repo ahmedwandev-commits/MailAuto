@@ -179,7 +179,16 @@ def scope_sla(data, scope, resolver, header=SLA_SYSTEM_HEADER):
     from .engines import sla_engine
     scope = resolver.sla_scope(scope)
     reqs = [r for r in data.get("requests") or [] if in_scope(scope, sla_request_team(r, resolver, header))]
-    return {**data, "requests": reqs, "totals": sla_engine.totals_of(reqs), "by_user": sla_engine.summarize(reqs)}
+    out = {**data, "requests": reqs, "totals": sla_engine.totals_of(reqs), "by_user": sla_engine.summarize(reqs)}
+    out.pop("left_out", None)
+    left = data.get("left_out")
+    if isinstance(left, dict):                            # the tickets left out of the SLA: their own teams' count only
+        by_team = {t: n for t, n in (left.get("by_team") or {}).items() if in_scope(scope, t)}
+        names = [t for t in left.get("teams") or [] if in_scope(scope, t)]
+        if by_team or names:
+            out["left_out"] = {**left, "open": sum(int(n or 0) for n in by_team.values()), "by_team": by_team,
+                               "teams": names}
+    return out
 
 
 def scope_itsm(data, scope, resolver):

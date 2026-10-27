@@ -1092,7 +1092,7 @@ def sla_analysis_get():
     if hit and time.monotonic() - hit[0] < SLA_VIEW_TTL:
         return jsonify(hit[1])
     view, chosen = sla_period(scope, filt)
-    if not view["records"] and not view["grid"]:            # nothing recorded yet: say why
+    if not view["records"] and not view["grid"] and not view["left_grid"] and not view["left_now"]:   # nothing yet: say why
         return jsonify(available=False, server_time=now, scope=overlay.scope_label(scope), recorder=view["recorder"],
                        scan_interval=health.module_interval(hub_cfg(), "sla"))
     cfg = view["cfg"]
@@ -1124,13 +1124,27 @@ def sla_analysis_get():
         {k: g for k, g in view["grid"].items() if keep(g)}, mine, cfg, newer_from, filt["date_to"],
         live=[r for r in view["live"] if keep_live(r)],
         live_team=lambda r: teams.sla_request_team(r, team_resolver(), sla_system_header()))
+    older = None
     if window and filt["date_from"] and filt["date_from"] < window and not person and not grid_text.get("system") \
             and not grid_text.get("request_type"):
         older_to = (date.fromisoformat(window) - timedelta(days=1)).isoformat()
         older_to = min(older_to, filt["date_to"]) if filt["date_to"] else older_to
         team_scope = (filt["team"],) if filt.get("team") else scope
+        older = (filt["date_from"], older_to, team_scope)
         performance.add_logged_status(period["glance"], ops(), filt["date_from"], older_to, team_scope,
                                       team_resolver().merges)
+    # the requests left out of the SLA (Third Party by default): only how many, by the statuses agreed - never an SLA
+    # status, a time or a person; "now" = their tickets on the Re-Assign page (by team: kept only without other filters)
+    left_grid = {k: g for k, g in view["left_grid"].items() if keep(g)}
+    if left_grid or view["left_now"] is not None:
+        now_by_team = {} if person or grid_text.get("system") or grid_text.get("request_type") else {
+            t: n for t, n in (view["left_now"] or {}).items()
+            if not grid_text.get("team") or sla_history._norm(t) == grid_text["team"]}
+        left = sla_history.counts_only(sla_history.status_numbers(left_grid, {}, cfg, newer_from, filt["date_to"]),
+                                       now_by_team)
+        if older:
+            performance.add_logged_left_out(left, ops(), *older, team_resolver().merges)
+        period["left_out_numbers"] = {**left, "teams": view["left_teams"]}
     # the portal's own «الاستفسار عن الطلبات» rows of the period's request dates, next to what the history holds
     period["portal"] = {**sla_history.portal_comparison(view["grid"], view["index"], filt["date_from"], filt["date_to"],
                                                         cfg),
@@ -1490,21 +1504,27 @@ def sla_history_view(scope, date_from="", date_to=""):
     out_teams = {str(t).strip().casefold() for t in sla_cfg.get("exclude_teams") or [] if str(t).strip()}
     records = {k: r for k, r in records.items() if str(r["team"]).casefold() not in out_teams}
     unmapped = sum(1 for r in records.values() if r["team"] == teams.NO_TEAM)
-    grid = {}
+    grid, left_grid = {}, {}                             # left_grid: the requests left out of the SLA, counted only
     for key, row in (state.get("grid") or {}).items():
-        if excluded(row.get("system")):
-            continue
         team = teams.sla_record_team(row.get("system"), resolver)
-        if str(team).casefold() not in out_teams:
+        if excluded(row.get("system")) or str(team).casefold() in out_teams:
+            left_grid[key] = {**row, "team": team}
+        else:
             grid[key] = {**row, "team": team}
+    left_teams = [str(t).strip() for t in sla_cfg.get("exclude_teams") or [] if str(t).strip()]
     if scope is not None:                                 # a manager of a merged team sees the team it joined
         wide = resolver.sla_scope(scope)
         records = {k: r for k, r in records.items() if teams.in_scope(wide, r["team"])}
         grid = {k: r for k, r in grid.items() if teams.in_scope(wide, r["team"])}
+        left_grid = {k: r for k, r in left_grid.items() if teams.in_scope(wide, r["team"])}
+        left_teams = [t for t in left_teams if teams.in_scope(wide, t)]
     snap, _ = read_snapshot("sla")                       # the Live tickets (Re-Assign page), limited like the Live tab
-    live = [r for r in (scoped_data("sla", (snap or {}).get("data"), scope) or {}).get("requests") or []
+    live_data = scoped_data("sla", (snap or {}).get("data"), scope) or {}
+    live = [r for r in live_data.get("requests") or []
             if isinstance(r, dict) and not excluded(teams.sla_system(r, sla_system_header()))]
+    left_now = (live_data.get("left_out") or {}).get("by_team") if isinstance(live_data.get("left_out"), dict) else None
     return {"records": records, "open": {k: r for k, r in records.items() if k in open_recs}, "live": live,
+            "left_grid": left_grid, "left_now": left_now, "left_teams": left_teams,
             "index": state.get("index") or {}, "grid": grid, "cfg": cfg, "unmapped": unmapped,
             "recorder": {"enabled": bool(sla_cfg.get("history_enabled", True)), "last_read": state.get("last_history") or "",
                          "stats": state.get("history_stats") or {}, "error": state.get("history_error") or {},

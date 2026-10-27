@@ -2004,6 +2004,21 @@ def sla_excluder(ctx, cfg):
     return teams.sla_exclusion(cfg, teams.Resolver(ctx.hub or {}, None, applications))
 
 
+def left_out_count(ctx, cfg, requests):
+    """The Live tickets left out of the SLA (Third Party by default), counted only: {open, by_team: {team: n}, teams
+    (the teams left out, as the settings name them)} - a ticket's team is its application's."""
+    applications = []
+    with suppress(Exception):
+        applications = (ctx.store.read_auto_assign() or {}).get("applications") or []
+    resolver = teams.Resolver(ctx.hub or {}, None, applications)
+    by_team = {}
+    for r in requests:
+        team = resolver.sla_team(teams.sla_system(r)) or teams.NO_TEAM
+        by_team[team] = by_team.get(team, 0) + 1
+    return {"open": len(requests), "by_team": by_team,
+            "teams": [str(t).strip() for t in cfg.get("exclude_teams") or [] if str(t).strip()]}
+
+
 def history_plan(ctx, cfg, now):
     """What the inquiry read covers this scan: {date_from, date_to (the recent window), slices, recent_day, older_day,
     index, cfg, ...}. Each scan searches TODAY, ONE other day of the last ``history_days`` days (``recent_day``, in
@@ -2235,11 +2250,13 @@ def run(ctx, scraper=None):
         columns, table = build_table(headers, rows)
         requests = analyze(columns, table, cfg, now)
         excluded = sla_excluder(ctx, cfg)
+        left_out = None
         if excluded:                                      # Third Party (by default): not in the SLA, its alerts or totals
             kept = [r for r in requests if not excluded(teams.sla_system(r))]
             if len(kept) != len(requests):
                 ctx.log(f"{len(requests) - len(kept)} request(s) of excluded applications left out of the SLA "
-                        "(Settings › Ticketing › Left out of the SLA)")
+                        "(Settings › Ticketing › Left out of the SLA) - only counted")
+            left_out = left_out_count(ctx, cfg, [r for r in requests if excluded(teams.sla_system(r))])
             requests = kept
     except Exception as exc:
         if ctx.debug:
@@ -2282,6 +2299,8 @@ def run(ctx, scraper=None):
 
     by_user = summarize(requests)
     data = snapshot_data(requests, by_user, cfg)
+    if left_out is not None:                              # only how many: never an SLA status or an age
+        data["left_out"] = left_out
     totals = data["totals"]
     ctx.log(f"{totals['open']} open requests - {totals['reminder']} reminder, {totals['breached']} over "
             f"{fmt_hours(int(cfg['breach_minutes']))}")

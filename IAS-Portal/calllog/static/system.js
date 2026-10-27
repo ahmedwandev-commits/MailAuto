@@ -465,7 +465,7 @@
         { path: "sla.base_url", type: "text", max: 300, label: "Portal address", dir: "ltr" },
         SCHEDULE("sla.schedule", "Ticketing")] },
       { title: "Left out of the SLA", text: "Requests of these teams' applications, and of these applications, are not counted in the SLA, its reminder / breach e-mails, Home, or the SLA Analysis. The team of an application comes from Auto Assign › Applications, else from the classification keywords.", fields: [
-        { path: "sla.exclude_teams", type: "lines", kind: "text", label: "Teams left out", hint: "One team per line, e.g. Third Party." },
+        { path: "sla.exclude_teams", type: "lines", kind: "text", label: "Teams left out", hint: "One team per line, e.g. Third Party. Their requests are only counted (Live tab, SLA tab, daily summary): never in the SLA, its alerts or times." },
         { path: "sla.exclude_applications", type: "lines", kind: "text", label: "Applications left out", hint: "One application per line, exactly as the portal's «النظام» column shows it." }] },
       { title: "Teams counted as one", text: "In the SLA only (Live tickets, the SLA Analysis, Home, the daily summary's tickets, the day-by-day log): the security requests of the team on the left count under the team on the right, and a manager of the team on the left sees the whole team on the right. E-mails, ITSM and the accounts keep their own teams.", fields: [
         { path: "sla.merge_teams", type: "kv", label: "Merged teams", wide: true, hint: "Team on the left: counted under the team on the right.",

@@ -198,13 +198,19 @@
         "aria-pressed": String(pressed), title: key === "open" ? "Show all requests" : `Show only: ${label}`,
         onclick: () => setFilter({ status: key === "open" || state.filters.status === key ? "" : key }) }, body);
     };
-    el.kpis.replaceChildren(
+    // the tickets left out of the SLA (Third Party by default): only how many - never a status or an age
+    const left = data.left_out;
+    const leftTile = left ? h("div", { class: "sx-kpi static", "data-kpi": "left-out" },
+      h("span", { class: "sx-kpi-label" }, (left.teams || []).join(", ") || "Left out of the SLA"),
+      h("strong", { class: "sx-kpi-value", "data-kpi-value": "left-out" }, fmtNum(left.open || 0)),
+      h("span", { class: "sx-kpi-sub" }, "on the Re-Assign page · counted only, not in the SLA")) : null;
+    el.kpis.replaceChildren(...[
       tile("open", "Open requests", open, open ? `waiting for ${fmtNum(users)} security user${users === 1 ? "" : "s"}` : "nothing waiting"),
       tile("within", "Within SLA", t.within || 0, [`under ${fmtLimit(lim.warn)}`, pct(t.within || 0)].filter(Boolean).join(" · "), "within"),
       tile("reminder", `Reminder ≥ ${fmtLimit(lim.warn)}`, t.reminder || 0, pct(t.reminder || 0), "reminder"),
       tile("breached", `Breached ≥ ${fmtLimit(lim.breach)}`, t.breached || 0, pct(t.breached || 0), "breached"),
       tile("no_date", "No sent date", t.no_date || 0, "not counted in the SLA", "no_date"),
-      tile("oldest", "Oldest", oldest.minutes == null ? "—" : fmtAge(oldest.minutes), oldest.user || ""));
+      tile("oldest", "Oldest", oldest.minutes == null ? "—" : fmtAge(oldest.minutes), oldest.user || ""), leftTile].filter(Boolean));
   }
 
   /** Oldest open request by the clock now (falls back to the scan's number when the rows carry no dates). */
