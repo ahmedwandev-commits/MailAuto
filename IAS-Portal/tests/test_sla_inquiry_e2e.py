@@ -207,6 +207,33 @@ def test_a_busy_portal_gets_every_request_opened_once_on_one_search(browser, tmp
     assert "1 row(s) seen twice left out" in text and "could not be shown again" not in text and "WARNING" not in text
 
 
+def test_the_next_result_page_opens_with_a_requests_details_shown_under_the_grid(browser, tmp_path):
+    """The bank's page fills «تفاصيل الطلب» into the page under the grid, with the status history's own pager
+    «التالي» (Page$Next) in it. «عرض التالي» is the page's own button: a pager inside the details is never taken for
+    it (the owner's log: «only 2000 of the 3406 requests could be read» and a minute lost waiting)."""
+    reqs = _many(7)
+    with FakeInquiryPortal(reqs, server_page=3, pager="buttons", details="in_page") as portal:
+        out = read(browser, portal, tmp_path)
+        searches = len(portal.searches)
+    assert out["rows"] == 7 and out["complete"] is True and searches == 1
+    assert sorted(recorded(out)) == [r["number"] for r in reqs] and "WARNING" not in "\n".join(out["logs"])
+
+
+def test_a_next_page_that_will_not_open_after_the_details_is_reached_by_a_new_search(browser, tmp_path):
+    """When «عرض التالي» does nothing right after a request's details were opened, the scan does not wait out its time:
+    it searches again (the details closed) and goes forward to the next page, so every request is still counted."""
+    import time as _time
+    reqs = _many(7)
+    with FakeInquiryPortal(reqs, server_page=3, pager="buttons", next_after_details=False) as portal:
+        started = _time.monotonic()
+        out = read(browser, portal, tmp_path)
+        took = _time.monotonic() - started
+        searches = len(portal.searches)
+    assert out["rows"] == 7 and out["complete"] is True and sorted(recorded(out)) == [r["number"] for r in reqs]
+    assert searches == 3 and took < 30                      # pages 2 and 3 each reached by a new search
+    assert sum("shown again from the first" in line for line in out["logs"]) == 2
+
+
 def test_two_requests_that_look_the_same_across_two_pages_stay_two(browser, tmp_path):
     """Two real requests the grid cannot tell apart, one the last row of a page and one the first of the next: the
     portal's total did not grow, so they are two requests - both opened, none left out."""
@@ -440,6 +467,35 @@ def test_today_a_recent_day_and_an_older_day_are_each_searched_and_a_day_not_rea
     assert late["covered"] == [] and late["items"] == [] and (late["recent_day"], late["older_day"]) == ("", "")
     assert [line for line in logs if "no time left" in line] == [
         f"SLA history: no time left for {d}; it is read at a next scan" for d in ("21/10", "20/10", "12/10")]
+
+
+def test_a_day_with_more_requests_than_time_still_leaves_the_other_days_their_search(browser, tmp_path, monkeypatch):
+    """Today alone could fill the scan (the owner's log: «no time left for 21/10 / 18/10»): while one day's requests
+    are opened, time is kept for the days still to search - and for the moment a search may still start - so every
+    day of the plan is counted, and the last one gets what is left."""
+    from datetime import timedelta
+    monkeypatch.setattr(sla, "PAGE_RESERVE_S", 2)
+    monkeypatch.setattr(sla, "SLICE_RESERVE_S", 2)
+    recent, older = DAY - timedelta(days=1), DAY - timedelta(days=9)
+    reqs = [request(8500000 + 1000 * n + i, d, "تم التعزيز على التنفيذ", executor="ج مستخدم سرية",
+                    employee=f"موظف {n} {i}", history=six_line_history())
+            for n, d in enumerate((DAY, recent, older)) for i in range(30)]
+    plan = {"date_from": DAY - timedelta(days=2), "date_to": DAY, "slices": [(DAY, DAY), (recent, recent), (older, older)],
+            "recent_day": recent.isoformat(), "older_day": older.isoformat(), "index": {}, "cfg": CFG, "excluded": None,
+            "seconds": 14}
+    with FakeInquiryPortal(reqs, details_delay=0.25) as portal:
+        raw = settings.deep_merge({"sla": {"username": "700101", "base_url": portal.url}}, {})
+        cfg = settings.validate(raw)[0]["sla"]
+        cfg["timeout_seconds"] = 8
+        logs = []
+        out = sla.read_history_slices(browser, cfg, sla.Debug(False, tmp_path / "debug"), plan, logs.append)
+        searched = list(portal.searches)
+        opened = list(portal.details_opened)
+    assert [s[0] for s in searched] == ["21-10-2026", "20-10-2026", "12-10-2026"]
+    assert not any("no time left" in line for line in logs)
+    assert out["covered"] == ["2026-10-12", "2026-10-20", "2026-10-21"]
+    by_day = [sum(1 for x in opened if x[3] == str(n)) for n in range(3)]           # 850n...: the day's digit
+    assert all(by_day) and out["opened"] == len(opened) and out["left"] == 90 - len(opened)
 
 
 def test_the_result_pages_are_not_walked_past_the_time_budget(browser, tmp_path):

@@ -477,6 +477,17 @@ HOW TO UPDATE (your data is kept)
    - A manager sees them only when Third Party is their team. The teams left out are set in System › Settings ›
      Ticketing › "Teams left out" (Third Party by default).
 
+45. SLA SCAN: «عرض التالي» OPENS AGAIN AFTER A REQUEST'S DETAILS, AND EVERY DAY OF THE SCAN IS SEARCHED
+   - Your log: «only 2000 of the 3406 requests could be read - the next result page («عرض التالي») did not open» and
+     «no time left for 21/10 / 18/10». With a request's details shown under the grid, the scan could take the status
+     history's own «التالي» for the page's «عرض التالي»: the page did not move and the scan waited a whole minute.
+   - Now the details are never taken for the page's button, a press that changes nothing is given up after a few
+     seconds, and if «عرض التالي» still does not open, the scan searches again and goes on to the next page - so every
+     request of the day is counted.
+   - Time is kept for the other days of the scan (a recent day and an older day), so they are searched every time.
+   - Note: your "Search the last (days)" is 7 (the log searched 21/10 in turn); the default is 3. The scan searches
+     today every time and the other days one a scan in turn, so 7 is fine - each of them is only refreshed less often.
+
 --------------------------------------------------------------------------------
 
 IAS PORTAL - الجديد في هذا التحديث
@@ -887,3 +898,13 @@ IAS PORTAL - الجديد في هذا التحديث
      - الملخص اليومي: كارت "Third Party (counted only, not in the SLA)" لو ليها طلبات في اليوم ده.
    - المدير بيشوفها بس لو الـ Third Party فريقه. والفرق اللي برة الـ SLA بتتحدد من System › Settings › Ticketing ›
      "Teams left out" (الافتراضي Third Party).
+
+45. سكان الـ SLA: «عرض التالي» بيفتح تاني بعد تفاصيل الطلب، وكل أيام السكان بيتبحث فيها
+   - الـ log بتاعك: «only 2000 of the 3406 requests could be read - the next result page («عرض التالي») did not open»
+     و«no time left for 21/10 / 18/10». لما تفاصيل طلب بتبقى معروضة تحت الجدول، السكان كان ممكن ياخد «التالي» بتاع
+     الحالة التاريخية على إنه «عرض التالي» بتاع الصفحة: الصفحة ماتتحركش والسكان يستنى دقيقة كاملة.
+   - دلوقتي التفاصيل عمرها ما بتتاخد على إنها زرار الصفحة، والضغطة اللي ماتغيرش حاجة بتتساب بعد ثواني، ولو «عرض التالي»
+     برضه مافتحش، السكان بيبحث تاني ويكمل للصفحة اللي بعدها - فكل طلبات اليوم بتتحسب.
+   - فيه وقت متساب لباقي أيام السكان (يوم قريب ويوم قديم)، فبيتبحث فيهم كل مرة.
+   - ملاحظة: "Search the last (days)" عندك 7 (الـ log بحث في 21/10 بالدور)، والافتراضي 3. السكان بيبحث في النهارده كل
+     مرة والأيام التانية يوم كل سكان بالدور، فالـ 7 مفيهاش مشكلة - بس كل يوم منهم بيتحدث على فترات أطول.

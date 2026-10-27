@@ -31,6 +31,7 @@ import http.server
 import json
 import re
 import threading
+import time
 import urllib.parse
 from datetime import datetime
 
@@ -126,10 +127,17 @@ class FakeInquiryPortal:
     """``with FakeInquiryPortal(requests) as portal: portal.url + INQUIRY_PATH``. Public knobs can be changed."""
 
     def __init__(self, requests, grid="client", history="api", server_page=1000, dt_len=20,
-                 grid_lengths=(5, 10, 20, -1), pager="link", arrive_on_next=(), ignore_from=False):
+                 grid_lengths=(5, 10, 20, -1), pager="link", arrive_on_next=(), ignore_from=False, details="modal",
+                 next_after_details=True, details_delay=0.0):
         self.requests = requests
         self.arrive_on_next = list(arrive_on_next)  # requests registered the moment the next result page is asked for
         self.ignore_from = ignore_from          # a search that lists every request up to «الى» (its «من» not taken)
+        # "modal": «تفاصيل الطلب» in a box of its own; "in_page": filled into the page under the grid (the bank's), with
+        # the status history's own server pager «التالي» (Page$Next) inside it
+        self.details = details
+        self.next_after_details = next_after_details      # False: «عرض التالي» right after a request's details does nothing
+        self._details_shown = False
+        self.details_delay = details_delay      # seconds the portal takes to answer one «التفاصيل»
         self.pager = pager
         self.grid = grid
         self.grid_lengths = list(grid_lengths)
@@ -191,6 +199,11 @@ class FakeInquiryPortal:
                 self.refused.append(typed)
                 state, message = {"from": "", "to": "", "page": 0}, "تاريخ غير صحيح"
         target, arg = form.get("__EVENTTARGET", ""), form.get("__EVENTARGUMENT", "")
+        stuck = not self.next_after_details and self._details_shown and "btnNext" in form
+        self._details_shown = False
+        if stuck:                                       # the page comes back as it was, the details closed
+            rows = self._results(state)
+            return self._send(h, 200, self._page(state, rows, max(0, (len(rows) - 1) // self.server_page), None, ""))
         if self.arrive_on_next and ((target == GRID_TARGET and arg == "Page$Next") or "btnNext" in form):
             self.requests = self.arrive_on_next + list(self.requests)    # the newest first: the rows move down
             self.arrive_on_next = []
@@ -205,6 +218,9 @@ class FakeInquiryPortal:
             if 0 <= n < len(rows):
                 selected = rows[n]
                 self.details_opened.append(selected["number"])
+                self._details_shown = True
+                if self.details_delay:
+                    time.sleep(self.details_delay)
         return self._send(h, 200, self._page(state, rows, last, selected, message))
 
     def _results(self, state):
@@ -280,6 +296,11 @@ class FakeInquiryPortal:
                               for k, v in (("الفترة من", period[0]), ("الفترة الى", period[1])))
         elif period:
             fields += f"<div><label>الفتره من / الى</label><span>{html.escape(period)}</span></div>"
+        if self.details == "in_page":                  # in the page, with the history grid's own server pager
+            return ("<div id='pnlRequest'><div><h4>تفاصيل الطلب</h4>" + fields
+                    + _dt_wrapper(DETAIL_GRID_ID, HISTORY_HEADERS, lengths, 5, "<h5>الحالة التاريخية للطلب</h5>")
+                    + "<div class='gv-pager'><a href=\"javascript:__doPostBack('ctl00$ContentPlaceHolder1$gvHistory',"
+                    "'Page$Next')\">التالي</a></div></div></div>")
         return ("<div class='modal' role='dialog' style='display:block'><div class='modal-content'>"
                 f"<h4>تفاصيل الطلب</h4>{fields}"
                 + _dt_wrapper(DETAIL_GRID_ID, HISTORY_HEADERS, lengths, 5, "<h5>الحالة التاريخية للطلب</h5>")

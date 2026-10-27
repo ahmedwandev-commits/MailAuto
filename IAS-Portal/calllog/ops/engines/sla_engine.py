@@ -790,28 +790,53 @@ JS_GRID_NEXT = ("(() => {" + JS_NORM + JS_FIND_GRID + r"""
   const r = n.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; })()""")
 
 # The portal's OWN next page of results (the server sends at most a page of rows, «All» = 1000 on the bank's portal):
-# the button «عرض التالي» under the grid (next to «عرض السابق»), or a pager link «التالي» / Page$Next. An ASP.NET
-# post-back {t, a}, else the control's centre {x, y}; null on the last page. The DataTables pager and anything in a
-# details box are not it.
-JS_SERVER_NEXT = ("(() => {" + JS_NORM + JS_FIND_GRID + r"""
-  if (!grid) return null;
+# the button «عرض التالي» under the grid (next to «عرض السابق»), or a pager link «التالي» / Page$Next. Never the
+# DataTables pager, nor anything of an open «تفاصيل الطلب» - a box, or the part of the page it is filled into (the
+# bank's: under the grid, with the status history's own pager «التالي» / Page$Next): everything around the status
+# history table that does not hold the grid, and the request-details control's own names.
+JS_FIND_SERVER_NEXT = JS_FIND_GRID + r"""
   const PB = /__doPostBack\(\s*['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]\s*\)/;
   const src = el => (el.getAttribute('href') || '') + ' ' + (el.getAttribute('onclick') || '');
-  const after = el => !!(grid.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
-  const ctls = [...document.querySelectorAll('a, input[type=submit], input[type=button], button')]
-    .filter(visible).filter(after)
-    .filter(el => !el.closest('.dataTables_paginate, .dataTables_length, .modal, [role=dialog], .ui-dialog'));
-  const NEXT = norm('التالي'), BACK = norm('السابق');
-  const isNext = el => { const t = textOf(el);       // «عرض التالي», «التالي», «الصفحة التالية»..., never «عرض السابق»
-    return !!t && t.length <= 24 && !t.includes(BACK) && (t === NEXT || t.endsWith(NEXT) || t === 'next' || t.includes(norm('التاليه'))); };
-  const n = ctls.find(el => /Page\$Next/i.test(src(el))) || ctls.find(isNext);
-  if (!n || n.disabled || n.hasAttribute('disabled') || /aspNetDisabled|disabled/.test(n.className || '')) return null;
+  const findNext = () => {
+    if (!grid) return null;
+    const hwant = ['رقم المستخدم', 'اسم المستخدم', 'نوع المستخدم', 'التاريخ', 'الحالة'].map(norm);
+    const hfits = t => { const hr = ghead(t); if (!hr) return false; const nh = [...hr.cells].map(c => norm(c.textContent));
+      return hwant.every(w => nh.some(h => h === w || h.includes(w))); };
+    const hist = document.getElementById(""" + json.dumps(DETAIL_GRID_ID) + r""")
+      || [...document.querySelectorAll('table')].find(t => t !== grid && !t.contains(grid) && hfits(t));
+    let details = null;                                  // the largest part of the page around the history, not the grid
+    if (hist && !hist.contains(grid)) { details = hist; while (details.parentElement && !details.parentElement.contains(grid)) details = details.parentElement; }
+    const own = el => /UC_RequestDe(at|ta)ils|GridView_Req/i.test((el.id || '') + ' ' + (el.getAttribute('name') || '') + ' ' + src(el));
+    const after = el => !!(grid.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const ctls = [...document.querySelectorAll('a, input[type=submit], input[type=button], button')]
+      .filter(visible).filter(after)
+      .filter(el => !el.closest('.dataTables_paginate, .dataTables_length, .modal, [role=dialog], .ui-dialog'))
+      .filter(el => !(details && details.contains(el)) && !el.closest('[id*="UC_RequestDeatils"], [id*="UC_RequestDetails"]') && !own(el));
+    const NEXT = norm('التالي'), BACK = norm('السابق');
+    const isNext = el => { const t = textOf(el);       // «عرض التالي», «التالي», «الصفحة التالية»..., never «عرض السابق»
+      return !!t && t.length <= 24 && !t.includes(BACK) && (t === NEXT || t.endsWith(NEXT) || t === 'next' || t.includes(norm('التاليه'))); };
+    const n = ctls.find(el => /Page\$Next/i.test(src(el))) || ctls.find(isNext);
+    if (!n || n.disabled || n.hasAttribute('disabled') || /aspNetDisabled|disabled/.test(n.className || '')) return null;
+    return n; };
+"""
+# An ASP.NET post-back {t, a}, else the control's centre {x, y}; null on the last page
+JS_SERVER_NEXT = ("(() => {" + JS_NORM + JS_FIND_SERVER_NEXT + r"""
+  const n = findNext();
+  if (!n) return null;
   const m = PB.exec(src(n));
   if (m) return {t: m[1], a: m[2]};
   try { n.scrollIntoView({block: 'center'}); } catch (e) {}
   const r = n.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; })()""")
+# Press that control itself (a submit button posts the form with its name, whatever lies over it on the screen)
+JS_SERVER_NEXT_CLICK = ("(() => {" + JS_NORM + JS_FIND_SERVER_NEXT + r"""
+  const n = findNext();
+  if (!n) return false;
+  n.click();
+  return true; })()""")
 
 MAX_SERVER_PAGES = 50                      # the portal's own result pages walked per search (1000 rows each)
+NEXT_QUIET_S = 3                           # «التالي» that posted nothing back: how long the page is watched for a change
+NEXT_SETTLE_S = 8                          # a page posted back: how long its grid may take to show the new rows
 MAX_REPEAT_ROWS = 50                       # rows a result page can repeat from the one before (requests came in meanwhile)
 DRILL_GUESS_S = 3.0                        # one request's details, until the scan has timed its own
 LIVE_HOLD_MAX_S = 30                       # at most this long kept for the Live tickets the pages to come may list
@@ -1010,7 +1035,9 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
         return rows, pbs, total
 
     def server_next(sig):
-        """Go to the portal's next result page; the new page's table, or None (last page / it did not change)."""
+        """Go to the portal's next result page; the new page's table, or None (last page / it did not change). A
+        press that posts nothing back is given up after NEXT_QUIET_S, a page that came back with the same rows after
+        NEXT_SETTLE_S - never the portal's whole time limit."""
         nxt = browser.eval(JS_SERVER_NEXT)
         if not nxt:
             return None
@@ -1018,10 +1045,11 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
         if "t" in nxt:
             if not browser.eval(js_postback(nxt["t"], nxt["a"])):
                 return None
-        else:
+        elif not browser.eval(JS_SERVER_NEXT_CLICK):
             browser.click_at(nxt["x"], nxt["y"])
-        wait_postback(browser, timeout_s)
-        t = _poll(read_table, lambda t: t is not None and t["rows"] and _rows_sig(t["rows"]) != sig, timeout_s)
+        posted = wait_postback(browser, timeout_s)
+        t = _poll(read_table, lambda t: t is not None and t["rows"] and _rows_sig(t["rows"]) != sig,
+                  min(timeout_s, NEXT_SETTLE_S) if posted else NEXT_QUIET_S)
         return t if t is not None and t["rows"] and _rows_sig(t["rows"]) != sig else None
 
     t0 = time.monotonic()
@@ -1137,23 +1165,27 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
         except Exception:
             return 1
 
-    def reshow(n):
-        """Show result page ``n`` again (a new search starts on the first page, then «التالي» forward) and know its
-        rows again by their cells: a busy portal moves rows between pages and changes statuses, so a row is never
-        taken by its place. Its rows' post-backs by grid key, or None when it cannot be shown in the time left."""
+    def walk_to(n, limit):
+        """Result page ``n`` shown by a new search (it starts on the first page; an open «تفاصيل الطلب» is gone) and
+        «التالي» forward: its table, or None when it cannot be reached before ``limit``."""
         nonlocal searches, prev_sig
-        if time.monotonic() + page_s * (n + 1) >= deadline:
+        if time.monotonic() + page_s * (n + 1) >= limit:
             return None
         t = search()
         searches += 1
         prev_sig = ""
         for _ in range(n):
-            if t is None or time.monotonic() >= deadline:
+            if t is None or time.monotonic() >= limit:
                 return None
             t = server_next(_rows_sig(t["rows"]))
-        if t is None:
-            return None
-        return known_again(t)
+        return t
+
+    def reshow(n):
+        """Show result page ``n`` again and know its rows again by their cells: a busy portal moves rows between pages
+        and changes statuses, so a row is never taken by its place. Its rows' post-backs by grid key, or None when it
+        cannot be shown in the time left."""
+        t = walk_to(n, deadline)
+        return known_again(t) if t is not None else None
 
     def known_again(t):
         """The rows of the page shown now (``t``) known again by their cells: their post-backs by grid key."""
@@ -1283,15 +1315,19 @@ def read_history(browser, cfg, debug, plan, log=lambda m: None):
         if time.monotonic() >= deadline - PAGE_RESERVE_S:   # the run must never outlive its time limit
             walk_cut = True
             break
-        t1 = time.monotonic()
+        t1, moves = time.monotonic(), 1
         nxt = server_next(_rows_sig(((read_table() if drilled else None) or table)["rows"]))
+        if nxt is None and drilled:                       # «التالي» did not open with a request's details on the page:
+            log(f"SLA history: «عرض التالي» did not open after the details of result page {n + 1}; the result pages "
+                "are shown again from the first")
+            nxt, moves = walk_to(n + 1, deadline - PAGE_RESERVE_S), n + 2
         if nxt is None:
             walked_all = True                             # the last page (or «التالي» did not open: reported below)
             break
         table = nxt
         shown = take_page(table)
-        page_s = time.monotonic() - t1
-        pages_s += page_s
+        pages_s += time.monotonic() - t1
+        page_s = (time.monotonic() - t1) / moves
     walk_s = time.monotonic() - t0
 
     # 2) The rows the walk counted twice (pushed onto the next page while it was walked) are left out when the walk
@@ -2111,8 +2147,10 @@ def read_history_slices(browser, cfg, debug, plan, log=lambda m: None):
                     + (f" – {later_to:%d/%m}" if later_to != later else "") + "; it is read at a next scan")
                 not_read(later)
             break
+        # kept for the slices still to search: their own time, and PAGE_RESERVE_S so the next one may still start
+        later = len(slices) - n - 1
         sub = {**plan, "date_from": dfrom, "date_to": dto, "deadline": deadline,
-               "after_s": (len(slices) - n - 1) * SLICE_RESERVE_S,
+               "after_s": later * SLICE_RESERVE_S + (PAGE_RESERVE_S if later else 0),
                "resume_page": plan.get("resume_page", 0) if n == 0 else 0}
         got = read_history(browser, cfg, debug, sub, log)
         out["items"] += got["items"]
