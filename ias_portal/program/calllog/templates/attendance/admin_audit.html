@@ -1,0 +1,12 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, tone_chip, empty with context %}
+{% block att_title %}Audit log{% endblock %}
+{% block content %}
+{% call head('Audit log', 'Schedule imports and changes, approvals, attendance corrections, leave decisions, scoring-rule and settings changes, exports and sign-ins.', 'history') %}{% endcall %}
+<section class="card flush">
+  <form class="tbl-tools" method="get"><span class="search">{{ icon('search') }}<input type="search" name="action" value="{{ action }}" placeholder="Action, e.g. schedule_changed"></span><button class="btn btn-ghost">Filter</button></form>
+  <div class="tbl-wrap"><table class="tbl"><thead><tr><th>When</th><th>User</th><th>Action</th><th>Entity</th><th>Detail</th><th>IP</th></tr></thead><tbody>
+  {% for r in rows %}<tr><td class="nowrap">{{ r.ts|ts }}</td><td dir="auto" class="bidi">{{ r.username or r.user_id }}</td><td>{{ tone_chip(r.action, 't-na') }}</td><td>{{ r.entity or '' }} {{ r.entity_id or '' }}</td><td class="small bidi" dir="auto">{{ json.dumps(r.detail, ensure_ascii=False)[:260] }}</td><td>{{ r.ip or '' }}</td></tr>
+  {% else %}<tr><td colspan="6">{% call empty('history', 'Nothing logged') %}{% endcall %}</td></tr>{% endfor %}</tbody></table></div>
+</section>
+{% endblock %}

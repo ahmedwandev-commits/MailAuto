@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "attendance/_ui.html" import icon with context %}
+{% block head %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='attendance/attendance.css') }}">
+  <script defer src="{{ url_for('static', filename='attendance/attendance.js') }}"></script>
+{% endblock %}
+{% block title %}{% block att_title %}Attendance{% endblock %} · Attendance{% endblock %}
+{% block body %}
+{% include "_topbar.html" %}
+<div class="att">
+{# the sections are in the portal's side menu; a page of a group with several pages shows that group's tabs only #}
+{% if att_user and nav and nav.tabs %}
+<nav class="subtabs" aria-label="{{ nav.group }}">{% if nav.group == 'Attendance analysis' and current_user.role in ('admin', 'manager') %}<a class="subtabs-group" href="/analysis">‹ Analysis</a>{% elif nav.group == 'Attendance settings' and current_user.role == 'admin' %}<a class="subtabs-group" href="/system#settings">‹ Settings</a>{% else %}<span class="subtabs-group">{{ nav.group }}</span>{% endif %}{% for t in nav.tabs %}<a href="{{ t.href }}"{% if t.active %} aria-current="page"{% endif %}>{{ icon(t.icon) }}{{ t.label }}</a>{% endfor %}</nav>
+{% endif %}
+<main class="page">
+  {% with msgs = get_flashed_messages(with_categories=true) %}{% if msgs %}<div class="flashes">{% for cat, m in msgs %}
+    <div class="banner flash-{{ cat }}" role="status">{{ icon({'ok': 'check-circle', 'warn': 'alert-triangle', 'error': 'alert-circle'}.get(cat, 'info')) }}<div class="grow">{{ m }}</div></div>{% endfor %}</div>{% endif %}{% endwith %}
+  {% block content %}{% endblock %}
+</main>
+</div>
+{% endblock %}

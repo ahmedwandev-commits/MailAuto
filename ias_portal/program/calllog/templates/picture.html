@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}My picture · IAS Portal{% endblock %}
+{% block body %}
+{% include "_topbar.html" %}
+<main class="page pic-page">
+  <section class="card pic-card">
+    <div class="pic-head">
+      <span class="pic-now" id="picNow">{{ avatar_of(current_user, cls='avatar-xl') }}</span>
+      <div>
+        <h1>My picture</h1>
+        <p class="muted"><b dir="auto" translate="no">{{ current_user.name }}</b></p>
+        <p class="muted">It shows in the top bar, on the Users page and next to your name in Attendance.</p>
+      </div>
+    </div>
+    {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+    {% if saved %}<p class="form-ok" role="status">Your picture is saved.</p>{% endif %}
+
+    <h2>Your photo</h2>
+    <form method="post" action="{{ url_for('pages.picture') }}" enctype="multipart/form-data" class="pic-upload" id="picForm">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="photo">
+      <input type="hidden" name="photo_data" id="picData">
+      <label class="field">Choose a photo <span class="hint">JPEG, PNG or WebP - it is cut to a square</span>
+        <input type="file" name="photo" id="picFile" accept="image/jpeg,image/png,image/webp" required>
+      </label>
+      <div class="pic-preview" id="picPreview" hidden><img id="picPreviewImg" alt="Preview" width="112" height="112"></div>
+      <button class="btn btn-primary" type="submit">Save photo</button>
+    </form>
+
+    <h2>Or choose an avatar</h2>
+    <form method="post" action="{{ url_for('pages.picture') }}" class="pic-presets">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="preset">
+      <div class="pic-grid" role="radiogroup" aria-label="Avatars">
+        {% set mine = (current_user.avatar or {}) %}
+        {% for p in presets %}
+        <label class="pic-opt"><input type="radio" name="preset" value="{{ p }}"{% if mine.get('kind') == 'preset' and mine.get('id') == p %} checked{% endif %} required>
+          <img src="{{ url_for('static', filename='avatars/' ~ p ~ '.svg') }}" alt="Avatar {{ loop.index }}" width="64" height="64"></label>
+        {% endfor %}
+      </div>
+      <button class="btn btn-primary" type="submit">Use this avatar</button>
+    </form>
+
+    {% if current_user.avatar %}
+    <form method="post" action="{{ url_for('pages.picture') }}" class="pic-remove">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="remove">
+      <button class="btn btn-ghost" type="submit">Remove my picture (show my initials)</button>
+    </form>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}
+{% block scripts %}<script defer src="{{ url_for('static', filename='picture.js') }}"></script>{% endblock %}

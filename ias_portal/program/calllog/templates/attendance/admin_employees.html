@@ -1,0 +1,21 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, tone_chip, csrf, empty with context %}
+{% block att_title %}Staff &amp; teams{% endblock %}
+{% block content %}
+{% call head('Staff & teams', 'The roster is the portal\'s own accounts: the same employees, names and teams as the Calls and E-mail modules. Nothing is duplicated here.', 'users') %}
+  <a class="btn btn-ghost btn-sm" href="/admin">{{ icon('users') }}Edit on the portal's Users page</a>
+{% endcall %}
+<section class="card tight"><p class="small muted">A portal account is an attendance employee when its User ID is the HR employee number (digits only) and its role is <b>user</b>{% if include_managers %}, or <b>manager</b> (included, see Settings){% endif %}. Teams are the ones set on the account. To change a name, a team or to disable someone, edit the account in the portal.
+  {% if not include_managers %}Managers are not on the roster unless you tick “Include portal managers” in <a href="{{ url_for('att_admin.settings') }}">Settings</a>.{% endif %}</p></section>
+<section class="card flush">
+  <form class="tbl-tools" method="get"><span class="search">{{ icon('search') }}<input type="search" name="q" value="{{ q }}" placeholder="ID, name or team"></span><button class="btn btn-ghost">Search</button></form>
+  <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Employee</th><th>Department</th><th>Teams</th><th>Account</th></tr></thead><tbody>
+  {% for e in emps %}<tr>
+    <td class="name"><a class="person" href="{{ url_for('att_people.profile', emp_id=e.id) }}">{{ avatar_for(e.id, e.name) }}<span><b dir="auto" class="bidi">{{ e.name|short_name(4) }}</b><small>#{{ e.id }}</small></span></a></td>
+    <td dir="auto" class="bidi">{{ e.department }}</td>
+    <td>{% for t in e.teams %}<span class="chip plain bidi">{{ t }}</span> {% else %}<span class="muted small">no team</span>{% endfor %}</td>
+    <td>{{ tone_chip('Active', 't-ok') if e.active else tone_chip('Disabled', 't-na') }}</td></tr>
+  {% else %}<tr><td colspan="4">{% call empty('users', 'No employees yet', 'Create portal accounts whose User ID is the HR employee number; they appear here automatically.') %}{% endcall %}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}

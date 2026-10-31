@@ -1,0 +1,6 @@
+{
+  "_help": "Copy this file to collector_config.json (same folder as collector.py), type the user names and passwords, save. Anything written here wins over the same setting saved from the web page. Only the collector reads it. Check with: python collector.py --check",
+  "sla": {"username": "700101", "password": ""},
+  "itsm": {"username": "700101", "password": ""},
+  "_email_example": {"target_archive_name": "2026_Part3"}
+}

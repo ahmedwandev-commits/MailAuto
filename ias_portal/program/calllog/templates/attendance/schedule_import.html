@@ -1,0 +1,45 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, stepper, csrf, banner, tone_chip, empty with context %}
+{% block att_title %}Import monthly schedule{% endblock %}
+{% block content %}
+{% call head('Monthly shift schedule import', 'Upload the monthly Excel schedule and it is imported at once. The names are matched to portal employees automatically; anything that was decided automatically is reported afterwards, and a replaced schedule stays in the history.', 'upload') %}
+  <a class="btn btn-ghost btn-sm" href="{{ url_for('att_attendance.schedule_template', year=year, month=month) }}">{{ icon('download') }}Blank template</a>
+{% endcall %}
+
+<div class="grid g-main">
+<form method="post" enctype="multipart/form-data" class="card stack">
+  {{ csrf() }}
+  <h2>1 · Choose the month and the file</h2>
+  <div class="form-grid">
+    <label class="field">Month<select name="month">{% for m, n in [(1,'January'),(2,'February'),(3,'March'),(4,'April'),(5,'May'),(6,'June'),(7,'July'),(8,'August'),(9,'September'),(10,'October'),(11,'November'),(12,'December')] %}<option value="{{ m }}" {{ 'selected' if m == month }}>{{ n }}</option>{% endfor %}</select></label>
+    <label class="field">Year<input type="number" name="year" value="{{ year }}" min="2000" max="2100" required></label>
+    <label class="field">Team of the file <span class="hint">(optional, for the history only)</span><input name="team" list="teams" placeholder="Team name">
+      <datalist id="teams">{% for t in teams %}<option value="{{ t }}">{% endfor %}</datalist></label>
+  </div>
+  <label class="dropzone">{{ icon('upload', 'ic-xl') }}<b>Drop the .xlsx file here or choose it</b><span class="muted small">Layout is read from the file: day/date columns, one column group per shift with its hours, stream labels, MFA marks and stand-by rows.</span>
+    <input type="file" name="file" accept=".xlsx" required><span class="picked small"></span></label>
+  <label class="check"><input type="checkbox" name="review" value="1"> Let me review the name matching before it is saved <span class="hint">(optional)</span></label>
+  <div><button class="btn btn-primary btn-lg" type="submit">{{ icon('upload') }}Import now</button></div>
+</form>
+<aside class="stack">
+  <section class="card"><h3>What the importer checks</h3>
+    <ul class="small stack">
+      <li>{{ icon('check-circle') }} The month in the sheet title matches your selection.</li>
+      <li>{{ icon('check-circle') }} Every date and weekday name agree (typos are proposed for correction).</li>
+      <li>{{ icon('check-circle') }} First names are matched to employees; a confident single suggestion is used, anything doubtful is skipped and listed in the result.</li>
+      <li>{{ icon('check-circle') }} Overlapping shifts, short rest and duplicate assignments are flagged.</li>
+      <li>{{ icon('check-circle') }} The same file or identical content is never imported twice.</li>
+      <li>{{ icon('check-circle') }} An existing month is replaced by the new file; the old version is kept in the history.</li>
+    </ul></section>
+</aside>
+</div>
+
+<section class="card flush">
+  <div class="card-head"><h2>{{ icon('history') }}Recent imports</h2><span class="grow"></span><a href="{{ url_for('att_planning.history') }}">Full history</a></div>
+  <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Month</th><th>File</th><th>Uploaded</th><th>By</th><th>Status</th></tr></thead><tbody>
+  {% for i in imports %}<tr><td>{{ i.id }}</td><td>{{ i.year }}-{{ '%02d' % i.month }}</td><td dir="auto" class="bidi">{{ i.filename }}</td><td class="nowrap">{{ i.uploaded_at|ts }}</td><td>{{ i.uploaded_by }}</td>
+    <td>{% if i.status == 'completed' %}{{ tone_chip('Imported', 't-ok', 'check-circle') }}{% elif i.status == 'preview' %}{{ tone_chip('Awaiting confirmation', 't-info', 'clock') }} <a href="{{ url_for('att_schedule.import_preview', import_id=i.id) }}">continue</a>{% else %}{{ tone_chip('Cancelled', 't-na', 'x') }}{% endif %}</td></tr>
+  {% else %}<tr><td colspan="6">{% call empty('upload', 'No imports yet', 'Your uploads will appear here with their result.') %}{% endcall %}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}

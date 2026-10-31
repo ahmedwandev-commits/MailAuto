@@ -1,0 +1,110 @@
+{# Shared pieces of the attendance dashboards: exception chips (permits) and the staffing card. #}
+{% from "attendance/_ui.html" import icon, tone_chip, chip, shift, csrf, empty with context %}
+
+{% macro permit_chips(r) -%}
+{%- if r.late_permit == 'required' %} <span class="chip t-warn" title="Checked in {{ r.late_raw_minutes }} min after the shift start (more than the allowed threshold). Needs an attendance permit until reviewed.">{{ icon('clock') }}اذن حضور <span class="small">needed</span></span>
+{%- elif r.late_permit %} <span class="chip t-na" title="Attendance permit: {{ r.late_permit }}">{{ icon('check') }}اذن حضور <span class="small">{{ r.late_permit }}</span></span>{% endif -%}
+{%- if r.early_permit == 'required' %} <span class="chip t-warn" title="Checked out {{ r.early_raw_minutes }} min before the shift end (more than the allowed threshold). Needs a departure permit until reviewed.">{{ icon('arrow-left') }}اذن انصراف <span class="small">needed</span></span>
+{%- elif r.early_permit %} <span class="chip t-na" title="Departure permit: {{ r.early_permit }}">{{ icon('check') }}اذن انصراف <span class="small">{{ r.early_permit }}</span></span>{% endif -%}
+{%- endmacro %}
+
+{% macro staffing_table(rows, shifts, configured) -%}
+{% if not configured %}<p class="small muted">No minimum staffing percentage is configured, so no shortage can be flagged. The administrator sets it in Administration → Settings.</p>
+{% elif not rows %}<p class="small muted">Nobody is planned for this selection.</p>
+{% else %}
+<div class="tbl-wrap flat"><table class="tbl">
+  <thead><tr><th>Team</th><th>Shift</th><th class="num">Required (planned)</th><th class="num">On leave</th><th class="num">Expected available</th><th class="num">Staffing</th><th>Minimum</th><th>Status</th></tr></thead><tbody>
+  {% for s in rows %}<tr class="{{ 'short-row' if s.short }}"><td dir="auto" class="bidi">{{ s.team }}</td><td>{{ shifts[s.shift].name }}</td><td class="num">{{ s.planned }}</td><td class="num">{{ s.on_leave }}</td>
+    <td class="num">{{ s.available }}</td><td class="num"><b>{{ '%g'|format(s.pct) }}%</b></td><td>{{ ('%g'|format(s.threshold) ~ '%') if s.threshold is not none else '—' }}</td>
+    <td>{% if s.short %}{{ tone_chip('Short staffed', 't-danger', 'alert-triangle') }}{% elif s.threshold is none %}<span class="muted small">no minimum set</span>{% else %}{{ tone_chip('OK', 't-ok', 'check-circle') }}{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>
+{% endif %}
+{%- endmacro %}
+
+
+{% macro presence_table(td, day, can_edit, table_id='team-table', title='Who is expected') -%}
+<section class="card flush">
+  <div class="card-head"><h2>{{ icon('users') }}{{ title }}</h2><span class="hint">{{ td.rows|length }} employee(s)</span><span class="grow"></span>
+    <span class="legend small"><span><span class="presence p-present t-ok">{{ icon('check') }}</span> checked in</span><span><span class="presence p-missing">{{ icon('x') }}</span> expected, no check-in</span>
+      <span><span class="presence p-expected t-info">{{ icon('clock') }}</span> shift not started</span><span><span class="presence p-leave t-info">{{ icon('plane') }}</span> on leave</span><span><span class="presence p-rest t-na">{{ icon('coffee') }}</span> rest day</span></span>
+    <span class="search no-print">{{ icon('search') }}<input type="search" placeholder="Filter…" data-table-filter="{{ table_id }}" aria-label="Filter"></span></div>
+  <div class="tbl-wrap">
+  <table class="tbl" id="{{ table_id }}">
+    <thead><tr><th>Employee</th><th>Team</th><th>Scheduled shift</th><th>Expected hours</th><th>Check-in</th><th>Check-out</th><th>Status &amp; exceptions</th>{% if can_edit %}<th></th>{% endif %}</tr></thead>
+    <tbody>
+    {% for r in td.rows %}{% set pr = r.presence %}
+      <tr class="pr-{{ pr.key }}">
+        <td class="name"><a class="person" href="{{ url_for('att_people.profile', emp_id=r.employee_id, **{'from': day, 'to': day}) }}">
+          <span class="presence p-{{ pr.key }} {{ pr.tone }}" title="{{ pr.label }}">{{ icon(pr.icon) }}</span>
+          <span><b dir="auto" class="bidi">{{ r.name|short_name(4) }}</b><small>#{{ r.employee_id }} · {{ pr.label }}</small></span></a></td>
+        <td dir="auto" class="bidi small">{{ r.teams|join(', ') if r.teams else r.team }}</td>
+        <td>{% if r.planned_primary and r.planned_primary not in ('OFF', 'SB') %}{{ shift(r.planned_primary) }} <span class="small muted">{{ r.shift_name }}{% if r.default_shift %} (default){% endif %}</span>{% elif r.planned_primary %}{{ shift(r.planned_primary) }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="nowrap">{% if r.expected_start %}{{ r.expected_start }}–{{ r.expected_end }} <span class="small muted">· {{ '%g'|format(r.scheduled_hours) }} h</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if r.actual_in %}{{ r.actual_in|hm }}{% elif r.arrived_login %}<span class="small muted" title="First sign-in to the portal today">login {{ r.arrived_login }}</span>{% else %}—{% endif %}</td><td>{{ r.actual_out|hm or '—' }}</td>
+        <td>{% if r.arrived_login %}{{ tone_chip('Arrived ' ~ r.arrived_login, 't-ok', 'user-check') }}{% else %}{{ chip(r.status) }}{% endif %}{% if r.needs_replacement %} {{ tone_chip('Replacement', 't-danger', 'repeat') }}{% endif %}{{ permit_chips(r) }}{% if r.late_minutes %} <span class="small muted">{{ r.late_minutes }} min late</span>{% endif %}</td>
+        {% if can_edit %}<td class="actions"><button class="btn btn-ghost btn-sm" type="button" data-dialog="corrDlg" data-emp="{{ r.employee_id }}" data-date="{{ day }}" data-label="{{ r.name|short_name(3) }} · {{ day|dmy }}" data-in_time="{{ (r.actual_in or '')[:5] }}" data-out_time="{{ (r.actual_out or '')[:5] }}" data-exp_in="{{ r.expected_start or '' }}" data-exp_out="{{ r.expected_end or '' }}">{{ icon('clock') }}Edit attendance</button>{% if r.late_permit == 'required' or r.early_permit == 'required' %}<button class="btn btn-ghost btn-sm" type="button" data-dialog="permitDlg" data-emp="{{ r.employee_id }}" data-date="{{ day }}" data-label="{{ r.name|short_name(3) }} · {{ day|dmy }}" data-kind="{{ 'early' if (r.early_permit == 'required' and r.late_permit != 'required') else 'late' }}">{{ icon('pencil') }}Review permit</button>{% endif %}</td>{% endif %}
+      </tr>
+    {% else %}<tr><td colspan="8">{% call empty('users', 'No employees here', 'Employees appear here when they belong to a team in the portal.') %}{% endcall %}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{%- endmacro %}
+
+{% macro permit_dialog(next_url) -%}
+<dialog class="dlg" id="permitDlg" aria-labelledby="pdTitle">
+  <form method="post" action="{{ url_for('att_attendance.permit_review') }}">
+    {{ csrf() }}<input type="hidden" name="emp" data-fill="emp"><input type="hidden" name="date" data-fill="date"><input type="hidden" name="next" value="{{ next_url }}">
+    <div class="dlg-head"><h2 id="pdTitle">Permit review · <span data-fill="label"></span></h2><span class="grow"></span><button class="iconbtn" type="button" data-close aria-label="Close">{{ icon('x') }}</button></div>
+    <div class="dlg-body"><div class="form-grid"><label class="field">Permit<select name="kind" data-fill-select="kind"><option value="late">اذن حضور (late arrival)</option><option value="early">اذن انصراف (early departure)</option></select></label>
+      <label class="field">Review result<select name="decision"><option value="provided">Permit provided</option><option value="excused">Excused by management</option><option value="rejected">Not excused</option></select></label></div>
+      <label class="field">Reason<textarea name="reason" required></textarea></label>
+      <p class="small muted">Saved immediately and audited. The employee is never marked absent and no penalty is applied because a permit is missing.</p></div>
+    <div class="dlg-foot"><button class="btn btn-ghost" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save review</button></div>
+  </form>
+</dialog>
+{%- endmacro %}
+
+{% macro correction_dialog(next_url) -%}
+{# an administrator / manager sets a person's check-in and check-out of a day ("mark present"), or removes the attendance #}
+<dialog class="dlg" id="corrDlg" aria-labelledby="cdTitle">
+  <form method="post" action="{{ url_for('att_attendance.correct') }}">
+    {{ csrf() }}<input type="hidden" name="emp" data-fill="emp"><input type="hidden" name="date" data-fill="date"><input type="hidden" name="next" value="{{ next_url }}">
+    <input type="hidden" data-fill="exp_in" id="cdExpIn"><input type="hidden" data-fill="exp_out" id="cdExpOut">
+    <div class="dlg-head"><h2 id="cdTitle">Attendance · <span data-fill="label"></span></h2><span class="grow"></span><button class="iconbtn" type="button" data-close aria-label="Close">{{ icon('x') }}</button></div>
+    <div class="dlg-body">
+      <div class="form-grid"><label class="field">Check-in<input type="time" name="in_time" data-fill="in_time" id="cdIn"></label>
+        <label class="field">Check-out<input type="time" name="out_time" data-fill="out_time" id="cdOut"></label></div>
+      <button class="btn btn-ghost btn-sm" type="button" data-copy-times>{{ icon('user-check') }}Mark present (the shift's times)</button>
+      <label class="field">Reason<textarea name="reason" required placeholder="Why - kept with the change in the audit log"></textarea></label>
+      <p class="small muted">The HR file stays as it was; this correction is laid over it, with your name, the time and the reason.</p></div>
+    <div class="dlg-foot"><button class="btn btn-ghost btn-danger-text" type="submit" name="mode" value="clear" data-confirm="Remove this person's check-in and check-out for that day?">{{ icon('x') }}Remove attendance</button>
+      <span class="grow"></span><button class="btn btn-ghost" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit" name="mode" value="set">Save</button></div>
+  </form>
+</dialog>
+{%- endmacro %}
+
+{% macro team_summary_table(ts, shifts, day='') -%}
+<section class="card flush" aria-labelledby="ts-h">
+  <div class="card-head"><h2 id="ts-h">{{ icon('users') }}Teams</h2><span class="hint">numbers per team - click a team to see its people</span></div>
+  <div class="tbl-wrap"><table class="tbl" id="team-summary">
+    <thead><tr><th>Team</th><th class="num">Managers</th><th class="num">Employees</th><th class="num">Present</th>
+      {% for c in ts.codes %}<th class="num">{{ shift(c, True) }} <span class="small">{{ shifts[c].name }}</span></th>{% endfor %}
+      <th class="num">On leave</th><th class="num">Not arrived</th><th class="num">Rest / off</th></tr></thead>
+    <tbody>
+    {% for t in ts.rows %}<tr data-href="{{ url_for('att_planning.team', team=t.team, date=day) }}">
+      <td dir="auto" class="bidi"><a href="{{ url_for('att_planning.team', team=t.team, date=day) }}" title="Show the people of {{ t.team }}"><b>{{ t.team }}</b></a></td>
+      <td class="num">{{ t.manager_count }}{% if t.manager_count %} <span class="small muted">· {{ t.manager_arrived }} arrived</span>{% endif %}</td>
+      <td class="num"><b>{{ t.total }}</b></td><td class="num">{{ t.present }}</td>
+      {% for c in ts.codes %}<td class="num">{{ t.shifts[c] }}</td>{% endfor %}
+      <td class="num">{{ t.leave }}</td><td class="num {{ 'short' if t.not_arrived }}">{{ t.not_arrived }}</td><td class="num">{{ t.rest }}</td></tr>
+    {% else %}<tr><td colspan="{{ 7 + ts.codes|length }}">{% call empty('users', 'No teams to show', 'Teams come from the portal accounts of the employees.') %}{% endcall %}</td></tr>{% endfor %}
+    </tbody>
+    {% if ts.rows|length > 1 %}<tfoot><tr><td><b>All teams</b></td><td class="num">{{ ts.totals.manager_count }}{% if ts.totals.manager_count %} <span class="small muted">· {{ ts.totals.manager_arrived }} arrived</span>{% endif %}</td><td class="num"><b>{{ ts.totals.total }}</b></td><td class="num">{{ ts.totals.present }}</td>
+      {% for c in ts.codes %}<td class="num">{{ ts.totals.shifts[c] }}</td>{% endfor %}<td class="num">{{ ts.totals.leave }}</td><td class="num">{{ ts.totals.not_arrived }}</td><td class="num">{{ ts.totals.rest }}</td></tr></tfoot>{% endif %}
+  </table></div>
+  <p class="small muted pad">An employee in two teams is counted in both. “Present” = checked in (HR file) or, for today, arrived by signing in to the portal until the HR file of the day is imported. The managers are the ones chosen in Settings. Leave and rest days are never counted as absence.</p>
+</section>
+
+
+{%- endmacro %}

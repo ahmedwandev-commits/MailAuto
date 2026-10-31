@@ -1,0 +1,8 @@
+{# The عربي / English switch: kept on the account (and in a cookie for the sign-in page). Plain form: works without JS. #}
+<form class="lang-form" method="post" action="{{ url_for('pages.set_lang') }}" translate="no">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="lang" value="{{ other_lang }}">
+  <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
+  <button class="lang-toggle" type="submit" title="{{ 'Switch to English' if lang == 'ar' else 'التبديل إلى العربية' }}"
+          lang="{{ other_lang }}">{{ 'English' if lang == 'ar' else 'عربي' }}</button>
+</form>

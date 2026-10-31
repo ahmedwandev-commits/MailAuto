@@ -1,0 +1,73 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, kpi, chip, shift, tone_chip, empty, csrf with context %}
+{% block att_title %}My schedule{% endblock %}
+{% block content %}
+{% set mname = ['January','February','March','April','May','June','July','August','September','October','November','December'][month - 1] %}
+{% call head('My schedule', (emp.name if emp else att_user.name) ~ (' · ' ~ emp.teams|join(', ') if emp and emp.teams else ''), 'calendar') %}{% endcall %}
+
+{% for a in allowance %}{% set f = a.figures or {} %}
+<section class="card stack allow-confirm" id="allowance-{{ a.month }}" aria-labelledby="ac-{{ a.month }}">
+  <div class="card-head"><h2 id="ac-{{ a.month }}">{{ icon('download') }}Shift allowance · {{ a.label[0] }}</h2>
+    <span class="grow"></span>
+    {% if a.status == 'confirmed' %}{{ tone_chip('Confirmed' ~ (' by your manager' if a.on_behalf else ''), 't-ok', 'check-circle') }}
+    {% elif a.status == 'objected' %}{{ tone_chip('Objection sent to your manager', 't-warn', 'alert-triangle') }}
+    {% else %}{{ tone_chip('Waiting for your confirmation', 't-info', 'clock') }}{% endif %}</div>
+  <div class="ac-figs">
+    {% for k, label in a.kinds %}{% if f[k] %}<div class="ac-fig"><span class="ac-n">{{ f[k] }}</span><span class="ac-l">{{ label }}</span>{% if a.rates[k] %}<span class="ac-r">× {{ '%g'|format(a.rates[k]) }}</span>{% endif %}</div>{% endif %}{% endfor %}
+    <div class="ac-fig ac-total"><span class="ac-n">{{ f.total or 0 }}</span><span class="ac-l">Total days</span></div>
+    {% if f.amount %}<div class="ac-fig ac-total"><span class="ac-n">{{ '{:,.2f}'.format(f.amount) }}</span><span class="ac-l">Amount ({{ a.currency }})</span></div>{% endif %}
+  </div>
+  {% if a.not_counted %}<details><summary class="small">{{ a.not_counted|length }} day(s) with punches that were not counted</summary>
+    <ul class="small muted">{% for s in a.not_counted %}<li>{{ s.date|dmy }} · {{ (s.in_time or '—')[:5] }}–{{ (s.out_time or '—')[:5] }} · <span>{{ s.reason }}</span></li>{% endfor %}</ul></details>{% endif %}
+  {% if a.note %}<p class="small"><b>Your note:</b> <span dir="auto">{{ a.note }}</span></p>{% endif %}
+  {% if not a.team_done and a.status != 'confirmed' %}
+  <div class="ac-actions">
+    <form method="post" action="{{ url_for('att_mine.allowance_answer') }}">{{ csrf() }}<input type="hidden" name="month" value="{{ a.month }}"><input type="hidden" name="answer" value="confirm">
+      <button class="btn btn-primary" type="submit">{{ icon('check') }}Confirm my shift allowance</button></form>
+    <form method="post" action="{{ url_for('att_mine.allowance_answer') }}" class="ac-object">{{ csrf() }}<input type="hidden" name="month" value="{{ a.month }}"><input type="hidden" name="answer" value="object">
+      <input name="note" required maxlength="500" placeholder="What is wrong? (goes to your manager)" aria-label="What is wrong">
+      <button class="btn" type="submit">{{ icon('alert-triangle') }}Object</button></form>
+  </div>
+  {% elif a.team_done %}<p class="small muted">Your manager confirmed your team for this month.</p>{% endif %}
+</section>
+{% endfor %}
+
+{% macro plan(d) -%}
+  {% if d.planned_codes %}{% for c in d.planned_codes %}{{ shift('CD' if c == 'OFF' and d.planned_comp else c, False, True) }}{{ ' ' if not loop.last }}{% endfor %}
+  {% if d.expected_start %}<span class="small muted"> {{ d.expected_start }}–{{ d.expected_end }}</span>{% endif %}
+  {% elif d.status == 'on_leave' %}{{ tone_chip('On leave' ~ (' (' ~ d.leave_type ~ ')' if d.leave_type else ''), 't-info', 'plane') }}
+  {% elif d.status == 'holiday' %}{{ tone_chip('Holiday', 't-na', 'calendar') }}
+  {% elif d.status == 'rest_day' %}{{ tone_chip('Rest day', 't-na', 'coffee') }}
+  {% else %}<span class="muted small">Not scheduled</span>{% endif %}
+{%- endmacro %}
+
+<section class="card flush" aria-labelledby="up-h">
+  <div class="card-head"><h2 id="up-h">{{ icon('clock') }}Next 14 days</h2><span class="hint">from today, {{ today|dmy }}</span></div>
+  <div class="tbl-wrap"><table class="tbl" id="my-upcoming">
+    <thead><tr><th>Date</th><th>Day</th><th>My shift</th></tr></thead><tbody>
+    {% for d in upcoming %}<tr class="{{ 'today' if d.date == today }}"><td>{{ d.date|dmy }}</td><td>{{ d.date|dayname }}{{ ' · today' if d.date == today }}</td><td>{{ plan(d) }}</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+
+<section class="card flush" aria-labelledby="mo-h">
+  <div class="card-head"><h2 id="mo-h">{{ icon('calendar') }}{{ mname }} {{ year }}</h2>
+    <span class="grow"></span>
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_mine.index', year=prev_m.year, month=prev_m.month) }}" aria-label="Previous month">{{ icon('chevron-left') }}</a>
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_mine.index') }}">This month</a>
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_mine.index', year=next_m.year, month=next_m.month) }}" aria-label="Next month">{{ icon('chevron-right') }}</a></div>
+  <section class="kpis" aria-label="This month so far">
+    {{ kpi('Scheduled days', summary.scheduled_days, 'shifts planned for me', 's0', 'calendar-check') }}
+    {{ kpi('Attended', summary.present_days, 'checked in on my shift days', 't-ok', 'user-check') }}
+    {{ kpi('Late', summary.late_count, (summary.late_minutes ~ ' min in total'), 't-warn' if summary.late_count else 't-na', 'clock') }}
+    {{ kpi('On leave', summary.leave_days, 'days', 't-info', 'plane') }}
+    {{ kpi('Rest days', summary.rest_days, 'incl. weekly rest', 't-na', 'coffee') }}
+  </section>
+  <div class="tbl-wrap"><table class="tbl" id="my-month">
+    <thead><tr><th>Date</th><th>Day</th><th>My shift</th><th>Check-in</th><th>Check-out</th><th>Status</th></tr></thead><tbody>
+    {% for d in month_days %}<tr class="{{ 'today' if d.date == today }}"><td>{{ d.date|dmy }}</td><td>{{ d.date|dayname }}</td><td>{{ plan(d) }}</td>
+      <td>{{ (d.actual_in or '—')[:5] }}</td><td>{{ (d.actual_out or '—')[:5] }}</td>
+      <td>{% if d.date > today %}<span class="muted small">—</span>{% else %}{{ chip(d.status) }}{% if d.late_minutes %} <span class="small muted">{{ d.late_minutes }} min late</span>{% endif %}{% endif %}</td></tr>{% endfor %}
+    </tbody></table></div>
+  <p class="small muted pad">Your own schedule and your own check-in / check-out only. If something looks wrong, tell your manager: shifts are changed by your manager or the administrator.</p>
+</section>
+{% endblock %}

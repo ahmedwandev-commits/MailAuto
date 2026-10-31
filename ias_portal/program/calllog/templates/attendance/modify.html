@@ -1,0 +1,69 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, banner, chip, tone_chip, shift, csrf, empty with context %}
+{% block att_title %}Modification{% endblock %}
+{% block content %}
+{% set here_url = url_for('att_planning.modify', date=day, team=team) %}
+{% call head('Modification', 'Change an employee\'s shift and manage leave · ' ~ day|dmy ~ ' · ' ~ (day|dayname) ~ ' · ' ~ (team if team else 'all teams in your scope'), 'pencil') %}
+  <span class="datenav">
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_planning.modify', date=prev, team=team) }}" aria-label="Previous day">{{ icon('chevron-left') }}</a>
+    <form method="get" class="inline-form"><input type="date" name="date" value="{{ day }}" data-autosubmit aria-label="Date">
+      {% if teams|length > 1 or att_user.role == 'admin' %}<select name="team" data-autosubmit aria-label="Team">{% if att_user.role == 'admin' %}<option value="">All teams</option>{% endif %}{% for t in teams %}<option {{ 'selected' if t == team }}>{{ t }}</option>{% endfor %}</select>{% endif %}</form>
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_planning.modify', date=nxt, team=team) }}" aria-label="Next day">{{ icon('chevron-right') }}</a>
+  </span>
+  <a class="btn btn-ghost btn-sm" href="{{ url_for('att_planning.day', date=day, team=team) }}">{{ icon('layers') }}Day view</a>
+{% endcall %}
+
+{% if no_teams %}{% call banner('t-warn', 'alert-triangle') %}<b>No team is assigned to your account.</b> Ask the administrator to add your team(s) to your user profile; you only ever see the teams on your account.{% endcall %}{% endif %}
+{% call banner('t-info', 'info') %}Changes take effect at once and are recorded in the audit log with the previous value, the new value, your name and the reason. For a whole week use the <a href="{{ url_for('att_planning.week', team=team) }}">Weekly plan</a>.{% endcall %}
+
+<section class="card flush">
+  <div class="card-head"><h2>{{ icon('users') }}Employees</h2><span class="hint">{{ mv.rows|length }} employee(s)</span><span class="grow"></span>
+    <span class="search no-print">{{ icon('search') }}<input type="search" placeholder="Filter…" data-table-filter="modify-table" aria-label="Filter"></span></div>
+  <div class="tbl-wrap"><table class="tbl" id="modify-table">
+    <thead><tr><th>Employee</th><th>Team</th><th>Shift on {{ day|dm }}</th><th>Status</th><th>Leave (around this date)</th><th></th></tr></thead>
+    <tbody>
+    {% for r in mv.rows %}{% set lv = mv.leaves.get(r.employee_id, []) %}
+      <tr>
+        <td class="name"><a class="person" href="{{ url_for('att_people.profile', emp_id=r.employee_id) }}">{{ avatar_for(r.employee_id, r.name) }}<span><b dir="auto" class="bidi">{{ r.name|short_name(4) }}</b><small>#{{ r.employee_id }}</small></span></a></td>
+        <td dir="auto" class="bidi small">{{ r.teams|join(', ') if r.teams else r.team }}</td>
+        <td>{% if r.planned_primary %}{{ shift(r.planned_primary) }} <span class="small muted">{{ r.shift_name or r.planned_primary }}{% if r.default_shift %} (default){% endif %}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{{ chip(r.status) }}</td>
+        <td class="small">{% for q in lv %}<div class="row"><span>{{ icon('plane') }}{{ q.leave_type }} · {{ q.date_from|dm }}{% if q.date_to != q.date_from %}–{{ q.date_to|dm }}{% endif %}</span>
+          <form method="post" action="{{ url_for('att_people.leave_cancel', req_id=q.id) }}" class="inline-form">{{ csrf() }}<input type="hidden" name="next" value="{{ here_url }}">
+            <input name="reason" placeholder="Reason" required size="12" aria-label="Reason to cancel"><button class="btn btn-ghost btn-sm">Cancel leave</button></form></div>
+          {% else %}{% if r.status == 'on_leave' %}<span class="muted">on leave (recorded in the HR attendance file)</span>{% else %}<span class="muted">none</span>{% endif %}{% endfor %}</td>
+        <td class="actions nowrap">
+          <button class="btn btn-ghost btn-sm" type="button" data-dialog="shiftDlg" data-emp="{{ r.employee_id }}" data-label="{{ r.name|short_name(3) }}" data-code="{{ r.planned_primary or '' }}">{{ icon('pencil') }}Change shift</button>
+          <button class="btn btn-ghost btn-sm" type="button" data-dialog="leaveDlg" data-emp="{{ r.employee_id }}" data-label="{{ r.name|short_name(3) }}">{{ icon('plane') }}Add leave</button></td>
+      </tr>
+    {% else %}<tr><td colspan="6">{% call empty('users', 'No employees here', 'Employees appear here when they belong to your team in the portal.') %}{% endcall %}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<dialog class="dlg" id="shiftDlg" aria-labelledby="shTitle">
+  <form method="post" action="{{ url_for('att_schedule.edit') }}">
+    {{ csrf() }}<input type="hidden" name="emp" data-fill="emp"><input type="hidden" name="date" value="{{ day }}"><input type="hidden" name="next" value="{{ here_url }}">
+    <div class="dlg-head"><h2 id="shTitle">Change shift · <span data-fill="label"></span> · {{ day|dmy }}</h2><span class="grow"></span><button class="iconbtn" type="button" data-close aria-label="Close">{{ icon('x') }}</button></div>
+    <div class="dlg-body"><div class="form-grid"><label class="field">New shift<select name="codes" data-fill-select="code" required>
+      {% for s in mv.shifts %}<option value="{{ s.code }}">{{ s.code }} · {{ s.name }}{% if s.start_time %} {{ s.start_time }}–{{ s.end_time }}{% endif %}</option>{% endfor %}</select></label></div>
+      <label class="field">Reason (required)<textarea name="reason" required></textarea></label>
+      <p class="small muted">A rest day cannot be combined with a shift. Scheduling warnings (for example too little rest between shifts) are shown after saving; the change is still applied.</p></div>
+    <div class="dlg-foot"><button class="btn btn-ghost" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save change</button></div>
+  </form>
+</dialog>
+
+<dialog class="dlg" id="leaveDlg" aria-labelledby="lvTitle">
+  <form method="post" action="{{ url_for('att_people.leave_new') }}">
+    {{ csrf() }}<input type="hidden" name="emp" data-fill="emp"><input type="hidden" name="next" value="{{ here_url }}">
+    <div class="dlg-head"><h2 id="lvTitle">Add leave · <span data-fill="label"></span></h2><span class="grow"></span><button class="iconbtn" type="button" data-close aria-label="Close">{{ icon('x') }}</button></div>
+    <div class="dlg-body"><div class="form-grid">
+      <label class="field">Type<select name="type" required>{% for t in mv.leave_types %}<option value="{{ t.code }}">{{ t.name }}</option>{% endfor %}</select></label>
+      <label class="field">From<input type="date" name="from" value="{{ day }}" required></label>
+      <label class="field">To<input type="date" name="to" value="{{ day }}" required></label></div>
+      <label class="field">Reason<textarea name="reason"></textarea></label>
+      <p class="small muted">Recorded at once (no approval step). Overlapping leave of the same employee is refused.</p></div>
+    <div class="dlg-foot"><button class="btn btn-ghost" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save leave</button></div>
+  </form>
+</dialog>
+{% endblock %}

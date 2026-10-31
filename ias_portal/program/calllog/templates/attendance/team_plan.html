@@ -1,0 +1,67 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, tone_chip, csrf with context %}
+{% block att_title %}Team schedule · {{ b.team }}{% endblock %}
+{% block content %}
+{% call head(b.team ~ ' · ' ~ b.label[0], 'Drag your people into Morning, Normal (08:00-16:00) or Evening for every working day, or into Comp day (as many as you need, you too). Leaves are recorded on Planning › Leave and show here.' if not b.can.affairs else 'Morning, Normal, Evening and Comp day come from the team manager. Night, Day off and official holidays are yours (administrative affairs).', 'calendar') %}
+  <form method="get" class="inline-form"><input type="hidden" name="team" value="{{ b.team }}">
+    <label class="field">Month<input type="month" name="month" value="{{ b.month }}"></label><button class="btn btn-sm" type="submit">Show</button></form>
+  <a class="btn btn-ghost btn-sm" href="{{ url_for('att_plan.index', month=b.month) }}">{{ icon('arrow-left') }}All teams</a>
+{% endcall %}
+
+<div class="tp-bar card">
+  <span>{% if b.status == 'approved' %}{{ tone_chip('Approved by ' ~ (b.plan.reviewed_by_name or 'the GM'), 't-ok', 'check-circle') }}
+    {% elif b.status == 'submitted' %}{{ tone_chip('Waiting for the General Manager', 't-info', 'clock') }}
+    {% elif b.status == 'returned' %}{{ tone_chip('Sent back', 't-warn', 'alert-triangle') }}
+    {% elif b.status == 'draft' %}{{ tone_chip('Draft', 't-na', 'pencil') }}{% else %}{{ tone_chip('New', 't-na', 'pencil') }}{% endif %}
+    {% if b.status == 'approved' and b.plan.official_at %} {{ tone_chip('Official - in the monthly schedule', 't-ok', 'calendar-check') }}{% endif %}</span>
+  {% if b.plan.note %}<span class="tp-note" dir="auto">“{{ b.plan.note }}”</span>{% endif %}
+  <span class="grow"></span>
+  <span class="hint" id="tpState" role="status" aria-live="polite"></span>
+  {% if b.can.shift %}
+  <button class="btn btn-ghost btn-sm" type="button" id="tpCopy">{{ icon('repeat') }}Copy week 1 to every week</button>
+  <button class="btn btn-ghost btn-sm" type="button" id="tpClear">{{ icon('trash') }}Clear</button>
+  <button class="btn btn-primary btn-sm" type="button" id="tpSave">{{ icon('check') }}Save</button>{% endif %}
+  {% if b.can.submit %}<form method="post" action="{{ url_for('att_plan.submit') }}" id="tpSubmitForm">{{ csrf() }}<input type="hidden" name="month" value="{{ b.month }}"><input type="hidden" name="team" value="{{ b.team }}">
+    <button class="btn btn-primary btn-sm" type="submit">{{ icon('arrow-right') }}Send to the General Manager</button></form>{% endif %}
+</div>
+
+{% if b.can.review %}
+<form method="post" action="{{ url_for('att_plan.review') }}" class="card tp-review">{{ csrf() }}<input type="hidden" name="month" value="{{ b.month }}"><input type="hidden" name="team" value="{{ b.team }}">
+  <div class="grow"><b>Review</b> <span class="hint"><span>Sent by</span> <b dir="auto" translate="no">{{ b.plan.submitted_by_name }}</b></span>
+    <span class="hint">You may move people first (then Save), approve, or send it back with a note.</span>
+    <label class="field">Note to the manager (to send it back)<input name="note" maxlength="500"></label></div>
+  <button class="btn btn-ghost btn-sm" type="submit" name="decision" value="return">{{ icon('arrow-left') }}Send back</button>
+  <button class="btn btn-primary btn-sm" type="submit" name="decision" value="approve">{{ icon('check') }}Approve</button>
+</form>
+{% endif %}
+
+<div class="tp" id="tp" data-month="{{ b.month }}" data-team="{{ b.team }}" data-edit="{{ 1 if b.can.shift else 0 }}" data-affairs="{{ 1 if b.can.affairs else 0 }}"
+     data-save="{{ url_for('att_plan.save') }}">
+  <aside class="tp-people card" aria-label="People">
+    <div class="card-head"><h2>{{ icon('users') }}People <span class="hint">{{ b.employees|length }}</span></h2></div>
+    <input type="search" id="tpFind" placeholder="Search a name" aria-label="Search a name">
+    <p class="hint small">{% if b.can.shift %}Drag a name onto a shift, or click a name and then a shift. Click a name on a day to take it off.{% else %}Read only.{% endif %}</p>
+    {% if b.employees|selectattr('manager')|list %}<p class="hint small">The manager can be placed on a shift too; only their morning shift is paid the shift allowance.</p>{% endif %}
+    <ul class="tp-list" id="tpList">{% for e in b.employees %}
+      <li><button type="button" class="tp-chip" draggable="{{ 'true' if b.can.shift else 'false' }}" data-id="{{ e.id }}" translate="no">{{ avatar_for(e.id, e.name, 'avatar-sm') }}<span dir="auto">{{ e.name|short_name(3) }}</span>{% if e.manager %}<i class="tp-mgr" title="A manager is paid the shift allowance for the morning shift only">Manager</i>{% endif %}<b class="tp-count" data-count="{{ e.id }}">0</b></button></li>
+    {% endfor %}</ul>
+  </aside>
+
+  <div class="tp-weeks" id="tpWeeks">
+    {% for d in b.days %}
+      <section class="tp-day card{{ ' tp-hol' if d in b.holidays }}" data-date="{{ d }}">
+        <header><b>{{ b.weekday[d] }}</b> <span>{{ d|dmy }}</span>{% if d in b.holidays %} <span class="chip t-warn">{{ icon('sun') }}<span dir="auto">{{ b.holidays[d] }}</span></span>{% endif %}
+          {% if b.can.shift and d not in b.holidays %}<button type="button" class="tp-copyday" data-date="{{ d }}" title="Copy this day to the rest of the week">{{ icon('repeat') }}<span>Rest of week</span></button>{% endif %}</header>
+        {% if d in b.holidays %}<p class="hint small">Official holiday - nobody is placed.</p>{% else %}
+        {# Night and Day off belong to the administrative affairs: only they see those boxes (owner) #}
+        {% for code, name in (('M', 'Morning'), ('D', 'Normal 08-16'), ('E', 'Evening'), ('CD', 'Comp day'), ('N', 'Night'), ('OFF', 'Day off')) if b.can.affairs or code not in ('N', 'OFF') %}
+        <div class="tp-slot tp-{{ code }}{{ ' tp-ro' if not b.can.shift }}" data-code="{{ code }}" aria-label="{{ name }} {{ d }}">
+          <span class="tp-slot-name">{{ name }}</span><div class="tp-in"></div></div>
+        {% endfor %}{% endif %}
+      </section>
+    {% endfor %}
+  </div>
+</div>
+<script type="application/json" id="tpData">{{ {"cells": b.cells, "leaves": b.leaves, "employees": b.employees, "holidays": b.holidays}|tojson }}</script>
+{% endblock %}
+{% block scripts %}{{ super() }}<script defer src="{{ url_for('static', filename='attendance/team-plan.js') }}"></script>{% endblock %}

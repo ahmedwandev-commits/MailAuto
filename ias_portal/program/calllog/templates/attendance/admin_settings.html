@@ -1,0 +1,137 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, banner, shift, csrf, tone_chip with context %}
+{% block att_title %}Settings{% endblock %}
+{% block content %}
+{% call head('Settings', 'Attendance rules, shift types, holidays and leave types. Every change is audited.', 'sliders') %}{% endcall %}
+{% call banner('t-warn', 'alert-triangle') %}<b>HR policy decisions needed.</b> None of these values comes from an HR document. The defaults assume the least (no grace, nothing penalised, no minimum staffing). Management should confirm each one.{% endcall %}
+
+<form method="post" class="card stack">{{ csrf() }}<input type="hidden" name="action" value="team_managers">
+  <div class="card-head"><h2>{{ icon('users') }}Team managers</h2><span class="hint">The names shown as “Team manager” on Team availability. Each team lists its own people (every portal account on that team); tick the manager(s). A team with none ticked shows “no manager assigned”.</span></div>
+  {% if not team_members %}<p class="small muted">No team has people yet.</p>{% endif %}
+  <div class="stack">
+  {% for t, people in team_members.items() %}{% set picked = st.team_managers.get(t, []) %}
+    <fieldset class="field wide"><legend dir="auto" class="bidi"><b>{{ t }}</b> <span class="hint">{{ people|length }} people</span></legend>
+      {% for m in people %}<label class="check"><input type="checkbox" name="mgr:{{ t }}" value="{{ m.user_id }}" {{ 'checked' if m.user_id in picked }}> <span dir="auto" class="bidi">{{ m.name }}</span> <span class="hint">{{ m.user_id }}{% if m.hub_role == 'manager' %} · manager{% endif %}</span></label>{% endfor %}
+    </fieldset>
+  {% endfor %}
+  </div>
+  <div><button class="btn btn-primary" type="submit">{{ icon('check') }}Save team managers</button></div>
+</form>
+
+<form method="post" class="card stack">{{ csrf() }}<input type="hidden" name="action" value="allowance">
+  <div class="card-head"><h2>{{ icon('download') }}Shift allowance (بدل ورديات)</h2><span class="hint">How the Shift allowance sheet counts days - counts only, no money. It reads the HR attendance file and the portal's schedule.</span></div>
+  <div class="grid g2">
+    <div class="stack">
+      <h3>Which shift is it?</h3>
+      <label class="check"><input type="checkbox" name="use_schedule" value="1" {{ 'checked' if st.allowance_use_schedule }}> <b>Use the portal's schedule first</b> <span class="hint">the shift planned for the person that day (imported, or changed by the manager in Modification) is the shift, whatever time they checked in; they must stay the hours below</span></label>
+      <label class="field">Shift worker with no shift planned that day: <b>Evening</b> if they leave at or after (HH:MM)<input name="evening_after" value="{{ st.allowance_evening_after }}" size="6"></label>
+      <p class="small muted">A “shift worker” is somebody who has shifts in the schedule of that month. Without a planned shift, a check-in at the start of a shift counts as that shift (the times in the table); otherwise leaving at or after the time above is Evening, a check-in in the night window is Night, anything else Morning. A person with no shifts in the schedule (normal day) is not counted. <b>Managers are counted for the morning shift and holidays only</b> (no evening or night).</p>
+    </div>
+    <div class="stack">
+      <h3>Holidays</h3>
+      <p class="small muted">A day worked on a <b>weekly rest day</b> (HR day type “weekly rest”) or on an <b>official holiday</b> (a date in Holidays below, or any other non-working HR day type) counts as «عطلة», whatever the time - for employees and managers. Both are written عطلة in the file.</p>
+    </div>
+  </div>
+  <div class="tbl-wrap flat"><table class="tbl" id="allowance-rules">
+    <thead><tr><th>Kind of day</th><th>Count it</th><th>Check-in at (HH:MM)</th><th class="num">Minutes before</th><th class="num">Minutes after</th><th class="num">Stay at least (hours)</th><th>Hours required</th><th class="num">Amount per day ({{ st.allowance_currency }})</th></tr></thead>
+    <tbody>
+    {% for k, label, is_shift in allowance_kinds if k != 'holiday' %}{% set r = allowance_rules[k] %}
+      <tr><td><b>{{ label }}</b></td>
+        <td><input type="checkbox" name="{{ k }}_enabled" value="1" aria-label="Count {{ label }}" {{ 'checked' if r.enabled }}></td>
+        {% if is_shift %}
+        <td><input name="{{ k }}_start" value="{{ r.start }}" size="6" aria-label="{{ label }} check-in time"></td>
+        <td class="num"><input name="{{ k }}_early" value="{{ r.early }}" size="4" aria-label="{{ label }} minutes before"></td>
+        <td class="num"><input name="{{ k }}_grace" value="{{ r.grace }}" size="4" aria-label="{{ label }} minutes after"></td>
+        <td class="num"><input name="{{ k }}_hours" value="{{ '%g'|format(r.hours) }}" size="4" aria-label="{{ label }} hours"></td>
+        <td><span class="muted small">always</span></td>
+        {% else %}
+        <td colspan="3"><span class="muted small">any day worked, whatever the time</span></td>
+        <td class="num"><input name="{{ k }}_hours" value="{{ '%g'|format(r.hours) }}" size="4" aria-label="{{ label }} hours"></td>
+        <td><label class="check"><input type="checkbox" name="{{ k }}_needs_hours" value="1" {{ 'checked' if r.needs_hours }}> yes</label></td>
+        {% endif %}
+        <td class="num"><input name="{{ k }}_rate" value="{{ '%g'|format(r.rate or 0) }}" size="7" inputmode="decimal" aria-label="{{ label }} amount per day"></td></tr>
+    {% endfor %}
+    </tbody></table></div>
+  <p class="small muted">“Check-in at” with the minutes before / after is used only when the schedule has no shift for the day. When two shifts fit a check-in, the nearest start wins. A night shift that starts at 22:00 ends on the next day. The amount per day is shown on the allowance pages and in the confirmation e-mails (days × amount).</p>
+  <h3>Monthly confirmation</h3>
+  <div class="form-grid">
+    <label class="check"><input type="checkbox" name="reminders" value="1" {{ 'checked' if st.allowance_reminders }}> <b>Daily reminder e-mail</b> <span class="hint">every working day, to whoever has not confirmed the open month yet</span></label>
+    <label class="field">Reminder time (HH:MM)<input name="reminder_time" value="{{ st.allowance_reminder_time }}" size="6"></label>
+    <label class="field">Currency<input name="currency" value="{{ st.allowance_currency }}" size="6"></label>
+  </div>
+  <div><button class="btn btn-primary" type="submit">{{ icon('check') }}Save allowance settings</button></div>
+</form>
+
+<form method="post" class="card stack" id="team-plan">{{ csrf() }}<input type="hidden" name="action" value="team_plan">
+  <div class="card-head"><h2>{{ icon('calendar') }}Team schedule</h2>
+    <span class="hint">When the administrative affairs publish a month built on Workforce › Team schedule, one e-mail with the whole schedule goes to these addresses.</span></div>
+  <div class="form-grid">
+    <label class="field">To <span class="hint">addresses, separated by ; or ,</span><input name="team_plan_to" value="{{ (st.team_plan_to or [])|join('; ') }}" dir="ltr"></label>
+    <label class="field">Cc<input name="team_plan_cc" value="{{ (st.team_plan_cc or [])|join('; ') }}" dir="ltr"></label>
+  </div>
+  <div><button class="btn btn-primary" type="submit">{{ icon('check') }}Save team schedule e-mail</button></div>
+</form>
+
+<form method="post" class="card stack">{{ csrf() }}<input type="hidden" name="action" value="rules">
+  <div class="card-head"><h2>{{ icon('clock') }}Attendance &amp; scheduling rules</h2></div>
+  <div class="form-grid">
+    <label class="field">Lateness grace (minutes)<input name="grace_minutes" value="{{ st.grace_minutes }}"></label>
+    <label class="field">Early-departure grace (minutes)<input name="early_grace_minutes" value="{{ st.early_grace_minutes }}"></label>
+    <label class="field">Late minutes counted<select name="late_basis"><option value="from_start" {{ 'selected' if st.late_basis == 'from_start' }}>From the shift start (once grace is exceeded)</option><option value="after_grace" {{ 'selected' if st.late_basis == 'after_grace' }}>Only the minutes beyond the grace</option></select></label>
+    <label class="field">Flag punches further than (hours) from shift start<input name="punch_mismatch_hours" value="{{ st.punch_mismatch_hours }}"></label>
+    <label class="field">“Repeated lateness” from (arrivals)<input name="repeat_late_threshold" value="{{ st.repeat_late_threshold }}"></label>
+    <label class="field">Minimum rest between shifts (hours)<input name="min_rest_hours" value="{{ st.min_rest_hours }}"></label>
+    <label class="field">Attendance permit: late arrival more than (minutes) <span class="hint">اذن حضور</span><input name="late_permit_minutes" value="{{ st.late_permit_minutes }}"></label>
+    <label class="field">Departure permit: early departure more than (minutes) <span class="hint">اذن انصراف</span><input name="early_permit_minutes" value="{{ st.early_permit_minutes }}"></label>
+    <label class="field wide">HR permit texts that excuse a late arrival <span class="hint">separate with ;</span><input name="permit_excuses_late" value="{{ st.permit_excuses_late|join('; ') }}"></label>
+    <label class="field wide">…that excuse an early departure<input name="permit_excuses_early" value="{{ st.permit_excuses_early|join('; ') }}"></label>
+    <label class="field wide">HR permit texts meaning a compensatory day off was taken<input name="comp_day_labels" value="{{ st.comp_day_labels|join('; ') }}"></label>
+  </div>
+  <h3>{{ icon('building') }} Default shift</h3>
+  <p class="small muted">Used on a working day when nobody assigned Morning, Evening or Night (no rest day and no stand-by either). Working days follow the HR calendar when it has the date, otherwise the weekdays below.</p>
+  <div class="form-grid">
+    <label class="check"><input type="checkbox" name="default_shift_enabled" value="1" {{ 'checked' if st.default_shift_enabled }}> Assign the default shift automatically</label>
+    <label class="check"><input type="checkbox" name="roster_include_managers" value="1" {{ 'checked' if st.roster_include_managers }}> Include portal managers in the attendance roster <span class="hint">(on by default; untick to track only “user” accounts)</span></label>
+    <label class="field">Default shift type<select name="default_shift_code">{% for s in shifts if s.kind == 'work' %}<option value="{{ s.code }}" {{ 'selected' if s.code == st.default_shift_code }}>{{ s.code }} · {{ s.name }}</option>{% endfor %}</select></label>
+    <label class="field">Start (HH:MM)<input name="default_start" value="{{ default_shift.start_time if default_shift else '08:00' }}" size="6"></label>
+    <label class="field">End (HH:MM)<input name="default_end" value="{{ default_shift.end_time if default_shift else '16:00' }}" size="6"></label>
+    <div class="field wide">Weekly rest weekdays (not working days when the HR calendar has no row for the date)
+      <span class="row">{% for i, n in [(5, 'Sat'), (6, 'Sun'), (0, 'Mon'), (1, 'Tue'), (2, 'Wed'), (3, 'Thu'), (4, 'Fri')] %}<label class="check"><input type="checkbox" name="rest_wd" value="{{ i }}" {{ 'checked' if i in st.weekly_rest_weekdays }}> {{ n }}</label>{% endfor %}</span></div>
+  </div>
+  <h3>{{ icon('alert-triangle') }} Short-staffed detection</h3>
+  <p class="small muted">Staffing % = expected available ÷ required × 100, where required = employees planned for the team and shift and expected available = planned minus approved leave. Leave every box empty to switch the detection off: nothing is flagged without a configured threshold.</p>
+  <div class="form-grid">
+    <label class="field">Minimum staffing % (all teams and shifts) <span class="hint">e.g. 50</span><input name="min_staffing_pct" value="{{ '%g'|format(st.min_staffing_pct) if st.min_staffing_pct is not none else '' }}" size="6"></label>
+    <label class="field wide">Per-team override <span class="hint">Team A=60; Team B=40</span><input name="min_staffing_pct_team" value="{{ team_pct_text }}"></label>
+    <label class="field wide">Per-shift override <span class="hint">N=40; E=60 (M, E, N, D)</span><input name="min_staffing_pct_shift" value="{{ shift_pct_text }}"></label>
+  </div>
+  <div><button class="btn btn-primary">{{ icon('check') }}Save rules</button></div>
+</form>
+
+<div class="grid g2">
+<section class="card stack"><div class="card-head"><h2>{{ icon('layers') }}Shift types</h2></div>
+  <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Code</th><th>Name</th><th>Kind</th><th>Start</th><th>End</th><th></th></tr></thead><tbody>
+  {% for s in shifts %}<tr><td>{{ shift(s.code) }}<form method="post" id="s-{{ s.code }}">{{ csrf() }}<input type="hidden" name="action" value="shift"><input type="hidden" name="code" value="{{ s.code }}"><input type="hidden" name="order" value="{{ s.sort_order }}"></form></td>
+    <td><input form="s-{{ s.code }}" name="name" value="{{ s.name }}"></td>
+    <td><select form="s-{{ s.code }}" name="kind">{% for k in ['work', 'off', 'standby'] %}<option {{ 'selected' if k == s.kind }}>{{ k }}</option>{% endfor %}</select></td>
+    <td><input form="s-{{ s.code }}" name="start" value="{{ s.start_time or '' }}" size="6"></td><td><input form="s-{{ s.code }}" name="end" value="{{ s.end_time or '' }}" size="6"></td>
+    <td><button form="s-{{ s.code }}" class="btn btn-ghost btn-sm">Save</button></td></tr>{% endfor %}</tbody></table></div>
+  <form method="post" class="form-grid">{{ csrf() }}<input type="hidden" name="action" value="shift">
+    <label class="field">New code<input name="code" required></label><label class="field">Name<input name="name"></label>
+    <label class="field">Kind<select name="kind"><option>work</option><option>standby</option><option>off</option></select></label>
+    <label class="field">Start<input name="start" placeholder="HH:MM"></label><label class="field">End<input name="end" placeholder="HH:MM"></label><div><button class="btn btn-ghost">Add shift type</button></div></form>
+  <p class="small muted">A shift whose end is at or before its start runs into the next day (night shift).</p></section>
+
+<div class="stack">
+<section class="card stack"><div class="card-head"><h2>{{ icon('calendar') }}Official holidays</h2></div>
+  <p class="small muted">Dates here are never treated as absence. Holidays marked in the HR file's “day type” column are recognised automatically.</p>
+  <table class="tbl"><tbody>{% for h in holidays %}<tr><td>{{ h.date|dmy }}</td><td dir="auto" class="bidi">{{ h.name }}</td><td class="actions"><form method="post" class="inline-form">{{ csrf() }}<input type="hidden" name="action" value="holiday_remove"><input type="hidden" name="date" value="{{ h.date }}"><button class="btn btn-ghost btn-sm">Remove</button></form></td></tr>{% else %}<tr><td class="muted">None added.</td></tr>{% endfor %}</tbody></table>
+  <form method="post" class="form-grid">{{ csrf() }}<input type="hidden" name="action" value="holiday_add"><label class="field">Date<input type="date" name="date" required></label><label class="field">Name<input name="name" required></label><div><button class="btn btn-ghost">Add holiday</button></div></form></section>
+<section class="card stack"><div class="card-head"><h2>{{ icon('plane') }}Leave types</h2></div>
+  <table class="tbl"><thead><tr><th>Code</th><th>Name</th><th>Counts against a balance</th></tr></thead><tbody>{% for t in leave_types %}<tr><td>{{ t.code }}</td><td>{{ t.name }}</td><td>{{ 'yes' if t.counts_against_balance else 'no' }}</td></tr>{% endfor %}</tbody></table>
+  <form method="post" class="form-grid">{{ csrf() }}<input type="hidden" name="action" value="leave_type"><label class="field">Code<input name="code" required></label><label class="field">Name<input name="name" required></label>
+    <label class="check"><input type="checkbox" name="counts" value="1" checked> counts against a balance</label><div><button class="btn btn-ghost">Add / update</button></div></form>
+  <p class="small muted">The HR file's leave text is mapped to leave types by <code>leave_text_map</code> (default: اعتيادية → annual, عارضة → casual, مرضي → sick; anything else → other). Confirm with HR.</p></section>
+</div>
+</div>
+{% endblock %}

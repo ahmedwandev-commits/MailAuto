@@ -1,0 +1,25 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, shift, csrf, person with context %}
+{% block att_title %}Change schedule{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="{{ url_for('att_schedule.month', year=d[:4], month=d[5:7]|int) }}">Monthly calendar</a>{{ icon('chevron-right') }}<span>Change a day</span></nav>
+{% call head('Change schedule', d|dmy ~ ' · ' ~ (d|dayname), 'pencil') %}{% endcall %}
+<div class="grid g-side">
+  <section class="card stack">
+    {{ person(emp.name, emp.id, emp.team, url_for('att_people.profile', emp_id=emp.id)) }}
+    <dl class="kv"><dt>Currently planned</dt><dd>{% if cur %}{% for c in cur %}{{ shift(c, label=True) }} {% endfor %}{% else %}<span class="muted">nothing</span>{% endif %}</dd></dl>
+    <p class="small muted">The original imported plan is never altered: your change is stored as a new revision, the previous row is kept, and the change is logged with its reason.</p>
+  </section>
+  <form method="post" class="card stack">
+    {{ csrf() }}<input type="hidden" name="emp" value="{{ emp.id }}"><input type="hidden" name="date" value="{{ d }}"><input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
+    <h2>New assignment</h2>
+    <div class="grid g2">
+    {% for code, s in shifts.items() %}
+      <label class="card tight sh-{{ code }} check"><input type="checkbox" name="codes" value="{{ code }}" {{ 'checked' if code in cur }}>{{ shift(code) }}<span><b>{{ s.name }}</b>{% if s.start_time %}<br><span class="small muted">{{ s.start_time }}–{{ s.end_time }}</span>{% endif %}</span></label>
+    {% endfor %}
+    </div>
+    <label class="field">Reason (required)<textarea name="reason" required placeholder="e.g. swapped with a colleague, covering leave"></textarea></label>
+    <div class="row"><button class="btn btn-primary" type="submit">{{ icon('check') }}Save change</button><a class="btn btn-ghost" href="{{ url_for('att_schedule.month', year=d[:4], month=d[5:7]|int) }}">Cancel</a></div>
+  </form>
+</div>
+{% endblock %}

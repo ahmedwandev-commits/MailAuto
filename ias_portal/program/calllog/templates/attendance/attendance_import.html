@@ -1,0 +1,35 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, stepper, csrf, tone_chip, empty with context %}
+{% block att_title %}HR attendance import{% endblock %}
+{% block content %}
+{% call head('HR attendance import', 'Upload the attendance and departure workbook from HR (any month). It is imported at once. Employee numbers without a portal account are skipped and listed; days that are already stored are never overwritten.', 'file') %}
+  <a class="btn btn-ghost btn-sm" href="{{ url_for('att_attendance.attendance_template') }}">{{ icon('download') }}Template</a>
+{% endcall %}
+<div class="grid g-main">
+  <form method="post" enctype="multipart/form-data" class="card stack">
+    {{ csrf() }}
+    <h2>Choose the file</h2>
+    <label class="dropzone">{{ icon('upload', 'ic-xl') }}<b>Drop the HR .xlsx here or choose it</b>
+      <span class="muted small">Columns are found by their names (Arabic or English), in any order. If a column cannot be recognised you can map it on the review screen.</span>
+      <input type="file" name="file" accept=".xlsx" required><span class="picked small"></span></label>
+    <label class="check"><input type="checkbox" name="review" value="1"> Let me review the rows before they are saved <span class="hint">(optional)</span></label>
+    <div><button class="btn btn-primary btn-lg" type="submit">{{ icon('upload') }}Import now</button></div>
+  </form>
+  <aside class="card"><h3>Validation performed</h3>
+    <ul class="small stack">
+      <li>{{ icon('check-circle') }} Employee id, date and time formats (several formats accepted).</li>
+      <li>{{ icon('check-circle') }} Employee numbers without a portal account — skipped and listed.</li>
+      <li>{{ icon('check-circle') }} Duplicates inside the file and against stored records.</li>
+      <li>{{ icon('check-circle') }} Missing IN / OUT punches on working days.</li>
+      <li>{{ icon('check-circle') }} The same file is never imported twice.</li>
+    </ul></aside>
+</div>
+<section class="card flush">
+  <div class="card-head"><h2>{{ icon('history') }}Recent imports</h2><span class="grow"></span><a href="{{ url_for('att_planning.history') }}">Full history</a></div>
+  <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>File</th><th>Uploaded</th><th>By</th><th>Status</th><th>Period</th><th class="num">Inserted</th></tr></thead><tbody>
+  {% for i in imports %}<tr><td>{{ i.id }}</td><td dir="auto" class="bidi">{{ i.filename }}</td><td class="nowrap">{{ i.uploaded_at|ts }}</td><td>{{ i.uploaded_by }}</td>
+    <td>{% if i.status == 'completed' %}{{ tone_chip('Imported', 't-ok', 'check-circle') }}{% elif i.status == 'preview' %}{{ tone_chip('Awaiting confirmation', 't-info', 'clock') }} <a href="{{ url_for('att_attendance.import_preview', import_id=i.id) }}">continue</a>{% else %}{{ tone_chip('Cancelled', 't-na', 'x') }}{% endif %}</td>
+    <td class="nowrap">{% if i.result %}{{ i.result.period[0] }} → {{ i.result.period[1] }}{% endif %}</td><td class="num">{{ i.result.inserted if i.result }}</td></tr>
+  {% else %}<tr><td colspan="7">{% call empty('file', 'No imports yet') %}{% endcall %}</td></tr>{% endfor %}</tbody></table></div>
+</section>
+{% endblock %}

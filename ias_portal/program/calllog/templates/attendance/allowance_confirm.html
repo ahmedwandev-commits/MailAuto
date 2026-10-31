@@ -1,0 +1,60 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, tone_chip, csrf, empty with context %}
+{% block att_title %}Allowance confirmation{% endblock %}
+{% block content %}
+{% set rnd = st.round %}
+{% call head('Allowance confirmation', 'The ' ~ st.label[0] ~ ' shift allowance: employees confirm, then each team manager, then the General Manager. The administrative affairs are told at the end.', 'check-circle') %}
+  <form method="get" class="inline-form"><label class="field">Month<input type="month" name="month" value="{{ month }}"></label><button class="btn btn-sm" type="submit">Show</button></form>
+{% endcall %}
+
+{# the steps: sent -> employees -> team managers -> General Manager -> administrative affairs #}
+{% set teams_done = st.teams|selectattr('status', 'equalto', 'confirmed')|list|length %}
+<ol class="ac-steps" aria-label="Steps">
+  <li class="{{ 'done' if rnd else 'now' }}"><b>1</b><span>Sent{% if rnd %} · {{ rnd.started_at[:10]|dmy }}{% endif %}</span></li>
+  <li class="{{ 'done' if st.all_teams_confirmed else ('now' if rnd else '') }}"><b>2</b><span>Employees &amp; team managers · {{ teams_done }}/{{ st.teams|length }} teams</span></li>
+  <li class="{{ 'done' if st.gm.status == 'confirmed' else ('now' if st.all_teams_confirmed else '') }}"><b>3</b><span>General Manager{% if st.gm.status == 'confirmed' %} · {{ st.gm.by_name }}{% endif %}</span></li>
+  <li class="{{ 'done' if st.gm.status == 'confirmed' else '' }}"><b>4</b><span>Administrative affairs told</span></li>
+</ol>
+
+{% if me.role == 'admin' %}
+<form method="post" action="{{ url_for('att_confirm.start') }}" class="card ac-start">{{ csrf() }}<input type="hidden" name="month" value="{{ month }}">
+  <div class="grow"><b>{{ 'Ask again' if rnd else 'Send for confirmation' }}</b>
+    <span class="hint">{{ 'Re-sends the e-mail and the bell to everybody who has not confirmed ' ~ st.label[0] ~ ' yet.' if rnd else 'E-mail + bell to every employee and every team manager: “please confirm your ' ~ st.label[0] ~ ' shift allowance on the portal”.' }}</span></div>
+  {% if st.gm.status != 'confirmed' %}<button class="btn btn-primary" type="submit">{{ icon('arrow-right') }}{{ 'Ask again' if rnd else 'Send for confirmation' }}</button>{% endif %}
+</form>
+{% endif %}
+
+{% if not rnd %}{{ empty('clock', 'Not sent yet', 'An administrator sends the month for confirmation at the end of the month.' if me.role != 'admin' else 'Press “Send for confirmation”.') }}{% endif %}
+
+{% if me.role == 'gm' and rnd and st.gm.status != 'confirmed' %}
+<form method="post" action="{{ url_for('att_confirm.gm') }}" class="card ac-start">{{ csrf() }}<input type="hidden" name="month" value="{{ month }}">
+  <div class="grow"><b>Confirm the whole sector</b>
+    <span class="hint">{{ 'Every team manager confirmed.' if st.all_teams_confirmed else 'Waiting for ' ~ (st.teams|length - teams_done) ~ ' team(s) to confirm first.' }}{% if st.total_amount %} Total {{ '{:,.2f}'.format(st.total_amount) }} {{ st.currency }}.{% endif %}</span></div>
+  <button class="btn btn-primary" type="submit" {{ 'disabled' if not st.all_teams_confirmed }}>{{ icon('check') }}Confirm the sector</button>
+</form>
+{% endif %}
+
+{% for t in st.teams %}
+<section class="card flush{{ ' ac-focus' if team and team == t.team }}" aria-labelledby="t-{{ loop.index }}">
+  <div class="card-head"><h2 id="t-{{ loop.index }}" dir="auto">{{ icon('users') }}{{ t.team }}</h2>
+    <span class="hint">{{ t.counts.confirmed }} confirmed · {{ t.counts.objected }} objection(s) · {{ t.counts.pending }} waiting{% if t.managers %} · manager: {{ t.managers|join(', ') }}{% endif %}{% if t.amount %} · {{ '{:,.2f}'.format(t.amount) }} {{ st.currency }}{% endif %}</span>
+    <span class="grow"></span>
+    {% if t.status == 'confirmed' %}{{ tone_chip('Team confirmed · ' ~ (t.by_name or ''), 't-ok', 'check-circle') }}
+    {% elif rnd and st.gm.status != 'confirmed' and (me.role == 'admin' or me.role == 'manager') %}
+    <form method="post" action="{{ url_for('att_confirm.team') }}">{{ csrf() }}<input type="hidden" name="month" value="{{ month }}"><input type="hidden" name="team" value="{{ t.team }}">
+      <button class="btn btn-primary btn-sm" type="submit">{{ icon('check') }}Confirm the team</button></form>{% endif %}</div>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>Employee</th>{% for k, label in st.kinds %}<th class="num">{{ label }}</th>{% endfor %}<th class="num">Total days</th>{% if st.total_amount %}<th class="num">Amount</th>{% endif %}<th>Status</th><th></th></tr></thead>
+    <tbody>{% for p in t.people %}{% set f = p.figures or {} %}
+      <tr><td><b dir="auto">{{ p.name }}</b> <span class="hint">{{ p.id }}</span>{% if p.note %}<div class="small ac-note" dir="auto">“{{ p.note }}”</div>{% endif %}</td>
+        {% for k, label in st.kinds %}<td class="num">{{ f[k] or '' }}</td>{% endfor %}
+        <td class="num"><b>{{ f.total or 0 }}</b></td>{% if st.total_amount %}<td class="num">{{ '{:,.2f}'.format(f.amount) if f.amount else '' }}</td>{% endif %}
+        <td>{% if p.status == 'confirmed' %}{{ tone_chip('Confirmed' ~ (' by manager' if p.on_behalf else ''), 't-ok', 'check') }}{% elif p.status == 'objected' %}{{ tone_chip('Objection', 't-warn', 'alert-triangle') }}{% else %}{{ tone_chip('Waiting', 't-na', 'clock') }}{% endif %}</td>
+        <td class="nowrap">{% if me.role in ('admin', 'manager') %}<a class="btn btn-ghost btn-sm" href="{{ url_for('att_schedule.month', year=month[:4]|int, month=month[5:]|int) }}">{{ icon('calendar') }}Edit shifts</a>
+          {% if rnd and t.status != 'confirmed' and p.status != 'confirmed' %}<form method="post" action="{{ url_for('att_confirm.member') }}" class="inline">{{ csrf() }}<input type="hidden" name="month" value="{{ month }}"><input type="hidden" name="emp" value="{{ p.id }}"><button class="btn btn-ghost btn-sm" type="submit">Confirm for them</button></form>{% endif %}{% endif %}</td></tr>
+      {% if p.not_counted and me.role in ('admin', 'manager') %}<tr class="ac-sub"><td colspan="{{ st.kinds|length + 5 }}"><details><summary class="small">{{ p.not_counted|length }} day(s) with punches not counted</summary>
+        <ul class="small">{% for s in p.not_counted %}<li>{{ s.date|dmy }} · {{ (s.in_time or '—')[:5] }}–{{ (s.out_time or '—')[:5] }} · <span>{{ s.reason }}</span> · <a href="{{ url_for('att_schedule.edit', emp=p.id, date=s.date, next=request.full_path) }}">Make it a shift</a></li>{% endfor %}</ul></details></td></tr>{% endif %}
+    {% endfor %}</tbody></table></div>
+</section>
+{% endfor %}
+{% endblock %}

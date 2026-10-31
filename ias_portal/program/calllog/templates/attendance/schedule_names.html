@@ -1,0 +1,54 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, csrf, banner, tone_chip, empty with context %}
+{% block att_title %}Name mapping{% endblock %}
+{% block content %}
+{% call head('Name mapping', 'Link the names written in the monthly schedule to portal accounts. A choice is remembered for every later import.', 'link') %}{% endcall %}
+
+{% if not nm.include_managers %}{% call banner('t-warn', 'alert-triangle') %}<b>Manager accounts are not on the attendance roster</b>, so the names of managers cannot be linked and are skipped by the import.
+  <form method="post" class="inline-form">{{ csrf() }}<input type="hidden" name="action" value="include_managers"><button class="btn btn-primary btn-sm" type="submit">{{ icon('check') }}Include managers</button></form>{% endcall %}{% endif %}
+
+{% if not nm.rows %}
+  {% call empty('link', 'No schedule has been imported yet', 'Import a monthly schedule first: its names are listed here.') %}{% endcall %}
+{% else %}
+{% if nm.to_map %}{% call banner('t-warn', 'alert-triangle') %}<b>{{ nm.to_map }} name(s) have no account yet.</b> Choose the account for each one and save; names left empty are skipped by the import.{% endcall %}
+{% else %}{% call banner('t-ok', 'check-circle') %}Every name in the imported schedules is linked to an account.{% endcall %}{% endif %}
+
+<form method="post" class="stack">
+  {{ csrf() }}
+  <section class="card flush" aria-labelledby="nm-h">
+    <div class="card-head"><h2 id="nm-h">{{ icon('link') }}Schedule names</h2>
+      <span class="hint">Months: {{ nm.months|map('join', '-')|join(', ') }}. Matching uses the account's name; the HR attendance file is matched by employee number, so it needs no mapping.</span></div>
+    <div class="tbl-wrap flat"><table class="tbl" id="nameTable">
+      <thead><tr><th>Name in the schedule</th><th class="num">Uses</th><th>Status</th><th>Portal account</th></tr></thead>
+      <tbody>
+      {% for n, m in nm.rows %}
+        {% set linked = m.status in ('alias', 'auto') %}
+        <tr>
+          <td class="name"><b dir="auto" class="bidi">{{ m.display }}</b></td><td class="num">{{ m.count }}</td>
+          <td>{% if m.status == 'alias' %}{{ tone_chip('Linked by you', 't-ok', 'check-circle') }}{% elif m.status == 'auto' %}{{ tone_chip('Automatic', 't-ok', 'check-circle') }}
+            {% elif m.status == 'suggested' %}{{ tone_chip('Suggestion — confirm', 't-warn', 'alert-triangle') }}{% elif m.status == 'ambiguous' %}{{ tone_chip('Several candidates', 't-warn', 'alert-triangle') }}{% else %}{{ tone_chip('No match', 't-danger', 'alert-circle') }}{% endif %}</td>
+          <td>
+            <select name="map:{{ n }}" aria-label="Account for {{ m.display }}">
+              {% if linked %}<option value="">✓ {{ (nm.employees|selectattr('id', 'equalto', m.employee_id)|first).name if (nm.employees|selectattr('id', 'equalto', m.employee_id)|list) else m.employee_id }} ({{ m.employee_id }})</option>
+              {% else %}<option value="">— choose an account —</option>{% endif %}
+              {% for c in m.candidates %}<option value="{{ c.id }}">suggested: {{ c.name }} ({{ c.id }}){% if c.score < 1 %} · {{ (c.score * 100)|int }}%{% endif %}</option>{% endfor %}
+              {% if m.status == 'alias' %}<option value="clear">Forget this link</option>{% endif %}
+              <optgroup label="All accounts">{% for e in nm.employees %}<option value="{{ e.id }}">{{ e.name }} ({{ e.id }}){{ ' · manager' if e.id in nm.manager_ids }}</option>{% endfor %}</optgroup>
+            </select>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody></table></div>
+    <div class="tbl-tools"><button class="btn btn-primary" type="submit">{{ icon('check') }}Save mapping</button></div>
+  </section>
+</form>
+
+<section class="card">
+  <div class="card-head"><h2>{{ icon('refresh') }}Apply to a month that is already imported</h2>
+    <span class="hint">Rebuilds that month from the same file with the mapping above. The previous version stays in the history.</span></div>
+  <form method="post" class="inline-form">{{ csrf() }}<input type="hidden" name="action" value="reapply">
+    <select name="month" aria-label="Month">{% for y, mo in nm.months %}<option value="{{ y }}-{{ mo }}">{{ y }}-{{ '%02d'|format(mo) }}</option>{% endfor %}</select>
+    <button class="btn btn-ghost" type="submit">{{ icon('refresh') }}Rebuild</button></form>
+</section>
+{% endif %}
+{% endblock %}

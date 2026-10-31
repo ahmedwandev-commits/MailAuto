@@ -1,0 +1,67 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, banner, kpi, empty, csrf with context %}
+{% block att_title %}Monthly shifts{% endblock %}
+{% block content %}
+{% set EN = {'morning': 'Morning', 'evening': 'Evening', 'night': 'Night', 'holiday': 'Holiday', 'rest_day': 'Weekly rest day', 'official_holiday': 'Official holiday'} %}
+{% set AR = {'morning': 'صباحية', 'evening': 'مسائية', 'night': 'ليلية', 'rest_day': 'عطلة', 'official_holiday': 'عطلة'} %}
+{% set IC = {'morning': 'sun', 'evening': 'sunset', 'night': 'moon', 'holiday': 'calendar'} %}
+{% set SRC = {'schedule': 'portal schedule', 'check-in': 'check-in time', 'time': 'time of the day', 'holiday': 'holiday'} %}
+{% call head('Monthly shifts', 'The shifts the system counts for the people of your team this month. Check them, then approve - the approved shifts go to the allowance sheet.', 'calendar-check') %}
+  <span class="datenav">
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_shifts.index', month=prev_m, team=team) }}" aria-label="Previous month">{{ icon('chevron-left') }}</a>
+    <form method="get" class="inline-form"><input type="month" name="month" value="{{ month }}" data-autosubmit aria-label="Month">
+      {% if teams|length > 1 or att_user.role != 'manager' %}<select name="team" data-autosubmit aria-label="Team">{% for t in teams %}<option {{ 'selected' if t == team }}>{{ t }}</option>{% endfor %}</select>{% endif %}</form>
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_shifts.index', month=next_m, team=team) }}" aria-label="Next month">{{ icon('chevron-right') }}</a>
+  </span>
+{% endcall %}
+
+{% if no_teams %}{% call banner('t-warn', 'alert-triangle') %}<b>No team is assigned to your account.</b> Ask the administrator to add your team(s) to your user profile.{% endcall %}{% endif %}
+{% if mv %}
+{% if mv.status == 'approved' %}{% call banner('t-ok', 'check-circle') %}<b>Approved</b> by <span dir="auto" class="bidi">{{ mv.approval.by_name }}</span> on {{ mv.approval.at[:16]|replace('T', ' ') }} - {{ mv.approval.employees }} people, {{ mv.approval.days }} counted days. These shifts are in the allowance sheet.{% endcall %}
+{% elif mv.status == 'changed' %}{% call banner('t-warn', 'alert-triangle') %}<b>Changed after approval.</b> Something changed since {{ mv.approval.by_name }} approved it ({{ mv.approval.at[:10] }}): a shift was modified or an HR file was imported. Check the table and approve again.{% endcall %}
+{% else %}{% call banner('t-info', 'info') %}<b>Not approved yet.</b> Until you approve, the administrator does not see this team's shifts in the allowance sheet.{% endcall %}{% endif %}
+
+<section class="kpis" aria-label="Shifts of the month">
+  {% for k in mv.kinds %}{{ kpi(EN[k], mv.totals[k], 'days', 's0', IC[k]) }}{% endfor %}
+  {{ kpi('Total', mv.totals.total_count, 'days · ' ~ mv.rows|length ~ ' people', 't-ok', 'check-circle') }}
+</section>
+
+{% if can_approve %}
+<section class="card row">
+  <div class="grow small muted">If a shift is wrong, change it in <a href="{{ url_for('att_planning.modify', team=team) }}">Modification</a> (the shift you set there is the one that is counted), then come back. Managers are counted for the morning shift and holidays only; every shift is counted for employees.</div>
+  <form method="post" class="inline-form" data-confirm-form>{{ csrf() }}<input type="hidden" name="month" value="{{ month }}"><input type="hidden" name="team" value="{{ team }}">
+    {% if mv.status == 'approved' %}<input type="hidden" name="action" value="reopen"><button class="btn btn-ghost" data-confirm="Withdraw the approval of {{ month }} for {{ team }}?">{{ icon('refresh') }}Reopen</button>
+    {% else %}<input type="hidden" name="action" value="approve"><button class="btn btn-primary">{{ icon('check') }}Approve {{ month }}</button>{% endif %}</form>
+</section>
+{% else %}<p class="small muted">Only the manager of {{ team }} can approve these shifts. You can see them here, and in the allowance sheet, at any time.</p>
+{% endif %}
+
+<section class="card flush" aria-labelledby="ms-h">
+  <div class="card-head"><h2 id="ms-h">{{ icon('users') }}<span dir="auto" class="bidi">{{ team }}</span> · {{ month }}</h2><span class="hint">open a person to see their days</span></div>
+  <div class="tbl-wrap"><table class="tbl" id="monthly-shifts">
+    <thead><tr><th>ID</th><th>Person</th>{% for k in mv.kinds %}<th class="num">{{ EN[k] }}</th>{% endfor %}<th class="num">Total</th></tr></thead>
+    <tbody>
+    {% for r in mv.rows %}<tr><td>{{ r.employee_id }}</td><td dir="auto" class="bidi"><b>{{ r.name }}</b></td>
+      {% for k in mv.kinds %}<td class="num">{{ r[k].count }}</td>{% endfor %}<td class="num"><b>{{ r.total_count }}</b></td></tr>
+      {% set mine = mv.days|selectattr('employee_id', 'equalto', r.employee_id)|list %}
+      {% if mine %}<tr class="detail"><td></td><td colspan="{{ 2 + mv.kinds|length }}"><details><summary class="small muted">{{ mine|length }} day(s)</summary>
+        <table class="tbl" aria-label="Days of {{ r.name }}"><thead><tr><th>Date</th><th>Check-in</th><th>Check-out</th><th>Counted as</th><th>Because</th></tr></thead><tbody>
+        {% for d in mine %}<tr><td>{{ d.date|dmy }} · {{ d.date|dayname }}</td><td>{{ (d.in_time or '—')[:5] }}</td><td>{{ (d.out_time or '—')[:5] }}</td><td>{{ AR[d.kind] }} <span class="small muted">{{ EN[d.kind] }}</span></td><td class="small muted">{{ SRC[d.source] }}</td></tr>{% endfor %}
+        </tbody></table></details></td></tr>{% endif %}
+    {% else %}<tr><td colspan="{{ 3 + mv.kinds|length }}">{% call empty('users', 'Nobody in this team', 'Teams come from the portal accounts.') %}{% endcall %}</td></tr>{% endfor %}
+    </tbody>
+    {% if mv.rows %}<tfoot><tr><td colspan="2"><b>Total</b></td>{% for k in mv.kinds %}<td class="num">{{ mv.totals[k] }}</td>{% endfor %}<td class="num"><b>{{ mv.totals.total_count }}</b></td></tr></tfoot>{% endif %}
+  </table></div>
+</section>
+
+{% if mv.skipped %}
+<section class="card flush" aria-labelledby="mskip-h">
+  <div class="card-head"><h2 id="mskip-h">{{ icon('alert-triangle') }}Days with punches that were not counted</h2><span class="hint">{{ mv.skipped|length }} day(s) - the reason is shown; fix the shift in Modification if it is wrong</span></div>
+  <div class="tbl-wrap"><table class="tbl" id="monthly-skipped">
+    <thead><tr><th>Person</th><th>Date</th><th>Check-in</th><th>Check-out</th><th>Reason</th></tr></thead><tbody>
+    {% for s in mv.skipped[:200] %}<tr><td dir="auto" class="bidi">{{ mv.names.get(s.employee_id, s.employee_id) }}</td><td>{{ s.date|dmy }}</td><td>{{ (s.in_time or '—')[:5] }}</td><td>{{ (s.out_time or '—')[:5] }}</td><td>{{ s.reason }}</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

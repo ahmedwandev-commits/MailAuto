@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Team calls · IAS Portal{% endblock %}
+{% block body %}
+{% include "_topbar.html" %}
+{# Shell only: calls-team.js fills #calls-page from GET /api/ops/team-calls (the calls of the manager's own team(s)). #}
+<main class="page op-page" id="calls-page" data-role="{{ current_user.role }}" data-teams="{{ (current_user.teams or ([current_user.team] if current_user.team else []))|join('; ') }}">
+  <noscript><p class="form-error">This page needs JavaScript.</p></noscript>
+  <p class="empty" id="pageLoading">Loading your team's calls…</p>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='common.js') }}"></script>
+<script src="{{ url_for('static', filename='ops-common.js') }}"></script>
+<script src="{{ url_for('static', filename='calls-team.js') }}"></script>
+{% endblock %}

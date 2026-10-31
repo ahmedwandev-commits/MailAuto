@@ -1,0 +1,52 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, banner, kpi, empty with context %}
+{% block att_title %}Analytics{% endblock %}
+{% block content %}
+{% set k = a.k %}
+{% call head('Analytics', 'The picture of the period: indicators and charts. The tables behind every number are in Reports.', 'bars') %}{% endcall %}
+
+<section class="card tight toolbar">
+  <form method="get">
+    <label class="field">From<input type="date" name="from" value="{{ d1 }}"></label><label class="field">To<input type="date" name="to" value="{{ d2 }}"></label>
+    <label class="field">Team<select name="team"><option value="">All teams</option>{% for t in teams %}<option {{ 'selected' if t == team }}>{{ t }}</option>{% endfor %}</select></label>
+    <button class="btn btn-primary" type="submit">{{ icon('filter') }}Apply</button>
+  </form>
+  <span class="seg">{% for label, x, y in presets %}<a href="{{ url_for('att_gm.analytics_page', team=team, **{'from': x, 'to': y}) }}" {% if x == d1 and y == d2 %}aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}</span>
+</section>
+
+{% if not k.employees %}{% call empty('users', 'No employees in this selection', 'Try another team or period.') %}{% endcall %}{% else %}
+<section class="kpis" aria-label="Indicators">
+  {{ kpi('Attendance', (k.attendance_pct|num ~ '%') if k.attendance_pct is not none else '—', k.present_days ~ ' of ' ~ k.scheduled_days ~ ' planned days', 't-ok', 'user-check') }}
+  {{ kpi('Late arrivals', k.late_count, k.late_minutes ~ ' minutes in all', 't-warn' if k.late_count else 't-na', 'clock') }}
+  {{ kpi('Absent (unverified)', k.absent, k.verified_unexcused ~ ' verified unexcused', 't-danger' if k.absent else 't-na', 'user-x') }}
+  {{ kpi('Missing punches', k.missing, 'days without a check-in or out', 't-warn' if k.missing else 't-na', 'alert-circle') }}
+  {{ kpi('Permits to review', k.permits, 'late + early', 't-warn' if k.permits else 't-na', 'file') }}
+  {{ kpi('Average score', k.avg_score|num if k.avg_score is not none else '—', k.employees ~ ' employees', 's0', 'award') }}
+</section>
+
+<div class="grid g2">
+  <section class="card fit"><div class="card-head"><h2>{{ icon('clock') }}Which day of the week people are late</h2><a class="btn btn-ghost btn-sm" href="{{ url_for('att_gm.reports', kind='lateness', team=team, **{'from': d1, 'to': d2}) }}">Report</a></div>
+    {% set items = [] %}{% for w in a.weekdays %}{% set _ = items.append({'label': w.label, 'value': w.count, 'tone': 's1', 'text': w.count ~ ' late'}) %}{% endfor %}
+    <p class="small muted chart-note">A longer bar = more late arrivals on that weekday (number at the end of the bar).</p>
+    {{ hbars(items) }}<p class="chart-take">{{ a.insight.weekdays }}</p></section>
+
+  <section class="card fit"><div class="card-head"><h2>{{ icon('users') }}How often each team came to work</h2><a class="btn btn-ghost btn-sm" href="{{ url_for('att_gm.reports', kind='teams', team=team, **{'from': d1, 'to': d2}) }}">Report</a></div>
+    {% if a.teams %}{% set items = [] %}{% for t in a.teams %}{% set _ = items.append({'label': t.group, 'value': t.attendance_pct or 0, 'tone': 's2', 'text': (t.attendance_pct|num ~ '%') if t.attendance_pct is not none else '—', 'href': url_for('att_gm.analytics_page', team=t.group, **{'from': d1, 'to': d2})}) %}{% endfor %}<p class="small muted chart-note">100% = every planned day attended. Click a team to see only its people.</p>{{ hbars(items, 100) }}{% if a.insight.teams %}<p class="chart-take">{{ a.insight.teams }}</p>{% endif %}{% else %}<p class="muted small">No team data.</p>{% endif %}</section>
+
+  <section class="card fit"><div class="card-head"><h2>{{ icon('award') }}How many people in each score category</h2><a class="btn btn-ghost btn-sm" href="{{ url_for('att_gm.reports', kind='ranking', team=team, **{'from': d1, 'to': d2}) }}">Report</a></div>
+    {% if not a.configured %}<p class="small muted">The scoring rules are not set yet (Administration → Scoring rules): nobody has a category.</p>{% endif %}
+    {% set items = [] %}{% for n, c in a.categories %}{% set _ = items.append({'label': n, 'value': c, 'tone': 's0', 'text': c ~ ' people'}) %}{% endfor %}
+    <p class="small muted chart-note">The score is out of 100 and falls with late arrivals, absences and missing punches. The category comes from the score.</p>{{ hbars(items) }}{% if a.insight.categories %}<p class="chart-take">{{ a.insight.categories }}</p>{% endif %}</section>
+
+  <section class="card fit"><div class="card-head"><h2>{{ icon('calendar') }}Is attendance getting better? (last 6 months)</h2><a class="btn btn-ghost btn-sm" href="{{ url_for('att_gm.reports', kind='trends', team=team, **{'from': d1, 'to': d2}) }}">Report</a></div>
+    {% set items = [] %}{% for m in a.trend %}{% set _ = items.append({'label': m.month, 'value': m.pct or 0, 'tone': 's4', 'text': ((m.pct|num ~ '%') if m.pct is not none else 'no data')}) %}{% endfor %}
+    <p class="small muted chart-note">Share of planned days people came to work, month by month.</p>
+    {{ hbars(items, 100) }}{% if a.insight.trend %}<p class="chart-take">{{ a.insight.trend }}</p>{% endif %}</section>
+
+  <section class="card fit"><div class="card-head"><h2>{{ icon('alert-triangle') }}Who was late most often</h2><a class="btn btn-ghost btn-sm" href="{{ url_for('att_gm.reports', kind='review', team=team, **{'from': d1, 'to': d2}) }}">Month-end checklist</a></div>
+    {% if a.top_late %}<table class="tbl"><thead><tr><th>ID</th><th>Employee</th><th class="num">Times late</th><th class="num">Minutes late</th></tr></thead><tbody>
+      {% for id, name, n, mins in a.top_late %}<tr><td><a href="{{ url_for('att_people.profile', emp_id=id, **{'from': d1, 'to': d2}) }}">{{ id }}</a></td><td dir="auto" class="bidi">{{ name }}</td><td class="num">{{ n }}</td><td class="num">{{ mins }}</td></tr>{% endfor %}</tbody></table>
+    {% else %}<p class="muted small">Nobody was late in this period.</p>{% endif %}</section>
+</div>
+{% endif %}
+{% endblock %}

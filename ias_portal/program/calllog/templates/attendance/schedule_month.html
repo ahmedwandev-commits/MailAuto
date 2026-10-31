@@ -1,0 +1,90 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, banner, tone_chip, shift, monthnav, empty with context %}
+{% block att_title %}Monthly calendar{% endblock %}
+{% block content %}
+{% call head('Monthly calendar', 'The official plan imported from the monthly shift schedule, plus approved manual changes.', 'calendar') %}
+  {{ monthnav(year, month, 'att_schedule.month', {'team': team, 'view': view}) }}
+  {% if att_user.role == 'admin' %}<a class="btn btn-ghost btn-sm" href="{{ url_for('att_schedule.import_upload') }}">{{ icon('upload') }}Import</a>
+  <a class="btn btn-primary btn-sm" href="{{ url_for('att_planning.week', team=team) }}">{{ icon('calendar-check') }}Plan a week</a>{% endif %}
+{% endcall %}
+
+{% if not mv.version %}
+<section class="card">{% call empty('calendar', 'No schedule for this month yet', 'Import the monthly Excel schedule, or plan the weeks one by one.') %}
+  {% if att_user.role == 'admin' %}<p class="row"><a class="btn btn-primary" href="{{ url_for('att_schedule.import_upload') }}">{{ icon('upload') }}Import monthly schedule</a><a class="btn btn-ghost" href="{{ url_for('att_planning.week') }}">Open weekly plan</a></p>{% elif can_edit %}<p class="row"><a class="btn btn-primary" href="{{ url_for('att_planning.week') }}">Open weekly plan</a></p>{% endif %}{% endcall %}</section>
+{% else %}
+<section class="card tight toolbar">
+  <form method="get">
+    <input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}">
+    <label class="field">Team<select name="team" data-autosubmit><option value="">All teams</option>{% for t in mv.teams %}<option {{ 'selected' if t == team }}>{{ t }}</option>{% endfor %}</select></label>
+    <div class="seg" role="group" aria-label="View">
+      <a href="{{ url_for('att_schedule.month', year=year, month=month, team=team, view='matrix') }}" {% if view != 'days' %}aria-current="true"{% endif %}>{{ icon('columns') }}By employee</a>
+      <a href="{{ url_for('att_schedule.month', year=year, month=month, team=team, view='days') }}" {% if view == 'days' %}aria-current="true"{% endif %}>{{ icon('calendar') }}By day</a>
+    </div>
+  </form>
+  <span class="sp"></span>
+  {{ tone_chip('Version ' ~ mv.version.version_no, 't-ok', 'check-circle') }}
+  <span class="small muted">imported {{ mv.version.created_at[:10] }} by {{ mv.version.created_by }}{% if mv.versions|length > 1 %} · {{ mv.versions|length - 1 }} earlier version(s) kept{% endif %}</span>
+</section>
+<div class="legend small">
+  <span>{{ shift('M', True) }} Morning 07–15</span><span>{{ shift('E', True) }} Evening 14–22</span><span>{{ shift('N', True) }} Night 22–07</span><span>{{ shift('SB', True) }} Stand-by</span>
+  <span>{{ shift('OFF', True) }} Rest day</span><span><i class="sw t-danger"></i>scheduling warning</span><span><i class="sw t-info"></i>manually changed</span>
+</div>
+
+{% if view == 'days' %}
+<section class="card">
+  <div class="daygrid" role="presentation">
+    {% for h in dayheads %}<div class="small muted" aria-hidden="true">{{ h }}</div>{% endfor %}
+    {% for _ in range(pad) %}<div class="daybox pad"></div>{% endfor %}
+    {% for d in mv.dates %}{% set cov = mv.coverage[d] %}
+      <div class="daybox {{ 'today' if d == today }} {{ 'we' if d|dayname in ('Fri', 'Sat') }}">
+        <div class="dn"><span>{{ d[8:] }}</span><small>{{ d|dayname }}</small></div>
+        {% for c in ['M', 'E', 'N', 'SB'] %}{% set es = mv.by_day[d][c] %}
+          {% if es %}<div class="ln sh-{{ c }}">{{ shift(c) }}<span class="nm bidi" dir="auto" title="{% for x in es %}{{ mv.names[x.employee_id].name if x.employee_id in mv.names }}{{ ', ' if not loop.last }}{% endfor %}">{% for x in es[:2] %}{{ mv.names[x.employee_id].name.split(' ')[0] if x.employee_id in mv.names }}{{ ', ' if not loop.last }}{% endfor %}{% if es|length > 2 %} +{{ es|length - 2 }}{% endif %}</span>
+            {% if c != 'SB' and cov[c].short %}<span class="short">{{ es|length }}/{{ cov[c].min }}</span>{% endif %}</div>{% endif %}
+        {% endfor %}
+      </div>
+    {% endfor %}
+  </div>
+</section>
+{% else %}
+<section class="cal-wrap">
+  <table class="cal" aria-label="Monthly calendar by employee">
+    <thead><tr><th class="first">Employee</th>{% for d in mv.dates %}<th class="{{ 'we' if d|dayname in ('Fri', 'Sat') }} {{ 'today' if d == today }}">{{ d[8:] }}<small>{{ d|dayname }}</small></th>{% endfor %}</tr></thead>
+    <tbody>
+    {% for e in mv.roster %}
+      <tr><td class="first"><a class="person" href="{{ url_for('att_people.profile', emp_id=e.id) }}">{{ avatar_for(e.id, e.name) }}<span><b dir="auto" class="bidi">{{ e.name|short_name(3) }}</b><small>#{{ e.id }} · {{ e.team }}</small></span></a></td>
+      {% for d in mv.dates %}
+        {% set es = mv.cells.get((e.id, d), []) %}{% set code = es[0].shift_code if es else '' %}
+        {% set shown = es|map('plan_code')|join('+') %}
+        <td class="c {{ 'work sh-' ~ code if code in ('M', 'E', 'N', 'SB') else ('off' ~ (' cd' if shown == 'CD' else '') if code == 'OFF' else '') }} {{ 'we' if d|dayname in ('Fri', 'Sat') }} {{ 'today' if d == today }} {{ 'flag' if es|selectattr('flags')|list }} {{ 'edited' if es|selectattr('source', 'equalto', 'manual')|list }}"
+            title="{% for x in es %}{{ SHIFT_NAMES.get(x|plan_code, x.shift_code) }}{% if x.stream %} · {{ x.stream }}{% endif %}{% if x.note %} · {{ x.note }}{% endif %}{% if x.flags %} · warning: {{ x.flags }}{% endif %}{% if x.source == 'manual' %} · edited{% endif %}{{ '; ' if not loop.last }}{% endfor %}">
+          {% if can_edit %}<a href="{{ url_for('att_schedule.edit', emp=e.id, date=d) }}">{{ shown }}</a>{% else %}<span class="cc">{{ shown }}</span>{% endif %}
+        </td>
+      {% endfor %}</tr>
+    {% else %}<tr><td class="first muted">No employees in scope.</td></tr>{% endfor %}
+    </tbody>
+    <tfoot>
+      {% for c in ['M', 'E', 'N'] %}<tr><td class="first">{{ shift(c, True, True) }} on duty</td>
+        {% for d in mv.dates %}{% set x = mv.coverage[d][c] %}<td class="{{ 'short' if x.short }}" title="{{ SHIFT_NAMES[c] }}{% if x.min %} · minimum {{ x.min }}{% endif %}">{{ x.count or '·' }}</td>{% endfor %}</tr>{% endfor %}
+    </tfoot>
+  </table>
+</section>
+<p class="small muted">Click a cell to change that person's day. Rest days are not marked in the Excel template; they appear only when you set them or import with the “infer rest days” option.</p>
+{% endif %}
+
+<div class="grid g2">
+  <section class="card flush">
+    <div class="card-head"><h2>{{ icon('layers') }}Versions</h2></div>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Version</th><th>Status</th><th>Created</th><th>By</th><th class="num">Rows kept</th></tr></thead><tbody>
+    {% for v in mv.versions %}<tr><td>{{ v.version_no }}</td><td>{{ tone_chip('Official', 't-ok', 'check-circle') if v.status == 'active' else tone_chip('Superseded', 't-na') }}</td><td class="nowrap">{{ v.created_at|ts }}</td><td>{{ v.created_by }}</td><td class="num">{{ v.entry_count }}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">None.</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+  <section class="card flush">
+    <div class="card-head"><h2>{{ icon('history') }}Recent changes</h2></div>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>When</th><th>Employee</th><th>Date</th><th>Change</th><th>Reason</th><th>By</th></tr></thead><tbody>
+    {% for c in changes %}<tr><td class="nowrap">{{ c.changed_at|ts }}</td><td>{{ c.employee_id }}</td><td>{{ c.work_date|dm }}</td><td class="nowrap">{{ c.old_value }} → <b>{{ c.new_value }}</b></td><td dir="auto" class="bidi">{{ c.reason }}</td><td>{{ c.user_id }}</td></tr>
+    {% else %}<tr><td colspan="6" class="muted">No manual changes.</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+</div>
+{% endif %}
+{% endblock %}

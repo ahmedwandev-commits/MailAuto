@@ -1,0 +1,88 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, kpi, banner, chip, tone_chip, shift, person, csrf, empty, crumbs with context %}
+{% from "attendance/_att_parts.html" import permit_chips, team_summary_table with context %}
+{% block att_title %}Today{% endblock %}
+{% block content %}
+{# Dashboard 1 of 3 - TODAY: the day at a glance for every team in scope. A team opens the Team dashboard (2), a person their
+   own dashboard (3). #}
+{% set c = td.counts %}
+{% call head('Today' if is_today else 'Day', day|dmy ~ ' · ' ~ (day|dayname) ~ (' · live' if is_today else '') ~ ' · ' ~ (team if team else ('your teams' if att_user.role == 'manager' else 'all teams')), 'layers') %}
+  <span class="datenav">
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_planning.day', date=prev, team=team) }}" aria-label="Previous day">{{ icon('chevron-left') }}</a>
+    <form method="get" class="inline-form"><input type="date" name="date" value="{{ day }}" data-autosubmit aria-label="Date">
+      {% if teams|length > 1 or att_user.role != 'manager' %}<select name="team" data-autosubmit aria-label="Team"><option value="">{{ 'All my teams' if att_user.role == 'manager' else 'All teams' }}</option>{% for t in teams %}<option {{ 'selected' if t == team }}>{{ t }}</option>{% endfor %}</select>{% endif %}</form>
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_planning.day', date=nxt, team=team) }}" aria-label="Next day">{{ icon('chevron-right') }}</a>
+  </span>
+  {% if not is_today %}<a class="btn btn-ghost btn-sm" href="{{ url_for('att_planning.day', team=team) }}">{{ icon('refresh') }}Today</a>{% endif %}
+  {% if can_edit %}<a class="btn btn-primary btn-sm" href="{{ url_for('att_planning.modify', date=day, team=team) }}">{{ icon('pencil') }}Change a shift / leave</a>{% endif %}
+{% endcall %}
+
+{% for s in stale %}{% if s.missing %}{% call banner('t-warn', 'alert-triangle') %}<b>{{ s.people }} people of the {{ s.year }}-{{ '%02d' % s.month }} schedule are missing</b> ({{ s.missing }} person-days): their names were skipped when the file was imported, but they match an employee now{% if s.names %} - <span dir="auto" class="bidi">{{ s.names|join('، ') }}</span>{% endif %}.
+  <form method="post" action="{{ url_for('att_schedule.names') }}" class="inline-form">{{ csrf() }}<input type="hidden" name="action" value="add_missing"><input type="hidden" name="next" value="{{ url_for('att_planning.day', date=day, team=team) }}"><input type="hidden" name="month" value="{{ s.year }}-{{ '%02d' % s.month }}"><button class="btn btn-primary btn-sm">{{ icon('refresh') }}Add them now</button></form>{% endcall %}{% endif %}
+{% if s.nobody %}{% call banner('t-info', 'info') %}<b>These names of the {{ s.year }}-{{ '%02d' % s.month }} schedule are not linked to anybody:</b> <span dir="auto" class="bidi">{{ s.nobody|join('، ') }}</span>. Add the employee to the portal, or link the name in <a href="{{ url_for('att_schedule.names') }}">Name mapping</a>; then “Add them now” shows here.{% endcall %}{% endif %}{% endfor %}
+{% if no_teams %}{% call banner('t-warn', 'alert-triangle') %}<b>No team is assigned to your account.</b> Ask the administrator to add your team(s) to your user profile; you only ever see the teams on your account.{% endcall %}{% endif %}
+{% if not dv.ov.has_schedule %}{% call banner('t-warn', 'calendar') %}<b>Nothing is planned for this date.</b>{% endcall %}{% endif %}
+{% if dv.ov.short_staffed %}{% call banner('t-danger', 'alert-triangle') %}<b>Short staffed:</b>
+  {% for s in dv.ov.short_staffed if not team or s.team|lower == team|lower %}<span dir="auto" class="bidi">{{ s.team }}</span> · {{ dv.ov.shifts[s.shift].name }} {{ s.available }}/{{ s.planned }}{{ '; ' if not loop.last }}{% endfor %}{% endcall %}{% endif %}
+{% if is_today and not td.data_loaded and c.expected %}{% call banner('t-info', 'info') %}The HR file of today is not loaded yet: people who signed in to the portal count as arrived, everyone else expected shows as <b>not arrived</b> once their shift has started.{% endcall %}{% endif %}
+
+{# the day at a glance: one status strip of everyone planned (no ring - the newer version's decision), then the numbers #}
+{% set k = dv.ov.kpi %}
+<section class="card tight" aria-label="Everyone today">
+  {{ strip([('came to work', k.present_today, 't-ok', 'checked in'), ('not here yet', k.not_arrived, 't-warn', 'planned, no check-in'), ('absent', k.absent, 't-danger', 'no check-in, shift is over'),
+            ('on leave', k.annual_leave + k.other_leave, 't-info', 'annual or other'), ('rest day', k.rest_day, 't-na', 'day off')], 'everyone planned today') }}
+</section>
+<section class="dash-kpis" aria-label="The day in numbers">
+  <div class="kpis">
+    {{ kpi('Expected to work', c.expected, 'planned shift, not on leave', 's0', 'calendar-check') }}
+    {{ kpi('Arrived', c.present, 'HR check-in, or signed in to the portal today', 't-ok', 'user-check') }}
+    {{ kpi('Not arrived', c.not_arrived, 'shift started, no check-in', 't-danger' if c.not_arrived else 't-na', 'user-x') }}
+    {{ kpi('On leave', c.leave, 'never counted as absent', 't-info', 'plane') }}
+    {{ kpi('Rest / off', c.rest, 'rest day, holiday, stand-by', 't-na', 'coffee') }}
+    {{ kpi('Permits to review', c.exceptions, c.late_permit ~ ' اذن حضور · ' ~ c.early_permit ~ ' اذن انصراف', 't-warn' if c.exceptions else 't-na', 'alert-triangle') }}
+  </div>
+</section>
+
+<div class="dash-split">
+  {# the shifts of the day: who is covering each one #}
+  <section class="card" aria-labelledby="sh-h">
+    <div class="card-head"><h2 id="sh-h">{{ icon('clock') }}Shifts</h2><span class="hint">planned · expected available</span></div>
+    <div class="shift-rows">
+    {% for code in ['M', 'E', 'N', 'D'] if dv.summary[code].planned or code != 'D' %}{% set s = dv.summary[code] %}
+      <details class="shift-row sh-{{ code }}">
+        <summary>
+          <span class="sr-name">{{ shift(code) }}<b>{{ dv.ov.shifts[code].name }}</b></span>
+          <span class="sr-bar">{{ progress(s.available, s.planned) }}</span>
+          <span class="sr-num"><b>{{ s.available }}</b>/{{ s.planned }}</span>
+          {% if s.short %}{{ tone_chip('Short', 't-danger', 'alert-triangle') }}{% elif s.planned %}{{ tone_chip('Covered', 't-ok', 'check-circle') }}{% else %}{{ tone_chip('Nobody', 't-na') }}{% endif %}
+        </summary>
+        <ul class="person-list">
+        {% for r in dv.groups[code] %}
+          <li><span class="grow">{{ person(r.name, r.employee_id, r.team, url_for('att_people.profile', emp_id=r.employee_id)) }}</span><span class="chips">{% if r.arrived_login %}{{ tone_chip('Arrived ' ~ r.arrived_login, 't-ok', 'user-check') }}{% else %}{{ chip(r.status) }}{% endif %}{% if r.double %}{{ tone_chip('Double shift', 't-info', 'layers') }}{% endif %}{{ permit_chips(r) }}</span></li>
+        {% else %}<li class="muted">No one.</li>{% endfor %}
+        </ul>
+      </details>
+    {% endfor %}
+      <details class="shift-row sh-SB"><summary><span class="sr-name">{{ shift('SB') }}<b>Stand-by</b></span><span class="sr-bar"></span><span class="sr-num"><b>{{ dv.groups.SB|length }}</b></span></summary>
+        <ul class="person-list">{% for r in dv.groups.SB %}<li><span class="grow">{{ person(r.name, r.employee_id, r.team, url_for('att_people.profile', emp_id=r.employee_id)) }}</span></li>{% else %}<li class="muted">No stand-by assigned.</li>{% endfor %}</ul></details>
+      {% set away = dv.away if dv.away is defined else dv.groups.OFF + dv.unscheduled %}
+      <details class="shift-row sh-OFF"><summary><span class="sr-name">{{ shift('OFF') }}<b>Annual Leaves &amp; Rest days</b></span><span class="sr-bar"></span><span class="sr-num"><b>{{ away|length }}</b></span></summary>
+        <ul class="person-list">{% for r in away %}<li><span class="grow">{{ person(r.name, r.employee_id, r.team, url_for('att_people.profile', emp_id=r.employee_id)) }}</span>{{ chip(r.status) }}</li>{% else %}<li class="muted">None.</li>{% endfor %}</ul></details>
+    </div>
+  </section>
+
+  {# what needs a manager's eye now #}
+  <section class="card" aria-labelledby="at-h">
+    <div class="card-head"><h2 id="at-h">{{ icon('alert-triangle') }}Needs attention</h2><span class="count">{{ attention|length }}</span></div>
+    <ul class="person-list attention">
+    {% for r in attention[:14] %}
+      <li><span class="grow">{{ person(r.name, r.employee_id, r.teams|join(', ') if r.teams else r.team, url_for('att_people.profile', emp_id=r.employee_id, **{'from': day, 'to': day})) }}</span>
+        <span class="chips">{% if (r.presence or {}).key == 'missing' %}{{ tone_chip('Not arrived', 't-danger', 'user-x') }}{% endif %}{{ permit_chips(r) }}</span></li>
+    {% else %}<li>{% call empty('check-circle', 'All clear', 'Everyone expected has arrived and no permit is waiting for a review.') %}{% endcall %}</li>{% endfor %}
+    {% if attention|length > 14 %}<li class="muted small">+ {{ attention|length - 14 }} more - open a team to see them all</li>{% endif %}
+    </ul>
+  </section>
+</div>
+
+{{ team_summary_table(ts, td.shifts, day) }}
+{% endblock %}

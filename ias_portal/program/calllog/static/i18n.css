@@ -1,0 +1,26 @@
+/* The عربي / English switch, and Arabic pages: hidden for the instant the translator needs (i18n.js), right-to-left. */
+html.i18n-pending body { visibility: hidden; }
+
+.lang-form { display: inline-flex; margin: 0; }
+.lang-toggle {
+  font: inherit; font-size: 13px; font-weight: 600; line-height: 1;
+  padding: 7px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line, rgba(127, 127, 127, .35));
+  background: transparent; color: inherit;
+}
+.lang-toggle:hover { border-color: currentColor; }
+.lang-toggle:focus-visible { outline: 2px solid var(--accent, #0a7d5a); outline-offset: 2px; }
+.lang-toggle:lang(ar) { font-family: "IAS Arabic", "Dubai", "Segoe UI", Tahoma, sans-serif; font-size: 14px; }
+.theme-corner { display: flex; gap: 8px; align-items: center; }
+
+/* Arabic letters in Windows' "Dubai" (the "IAS Arabic" face of app.css covers only the Arabic range), Latin letters and digits in
+   Segoe UI; Arabic reads best a little larger and with more line spacing */
+html[lang="ar"] body { font-family: "IAS Arabic", "Segoe UI", Tahoma, Arial, sans-serif; font-size: 15.5px; line-height: 1.65; }
+html[lang="ar"] input, html[lang="ar"] select, html[lang="ar"] textarea, html[lang="ar"] button { font-family: inherit; }
+html[lang="ar"] h1, html[lang="ar"] h2, html[lang="ar"] h3 { line-height: 1.4; letter-spacing: 0; }
+html[lang="ar"] .op-nav-tx, html[lang="ar"] .op-nav-sec { letter-spacing: 0; }
+html[lang="ar"] .op-nav-sec { font-size: 12px; }
+html[lang="ar"] th { letter-spacing: 0 !important; text-transform: none; }
+/* numbers, times, IDs and e-mail addresses keep their own order inside Arabic text */
+html[dir="rtl"] input[type="email"], html[dir="rtl"] input[type="number"], html[dir="rtl"] input[type="time"],
+html[dir="rtl"] input[type="date"], html[dir="rtl"] input[name="user_id"], html[dir="rtl"] input[type="password"] { direction: ltr; text-align: end; }

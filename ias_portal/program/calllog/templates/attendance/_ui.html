@@ -1,0 +1,55 @@
+{# UI macros: icons, chips, KPI tiles, banners, empty states, page header, people, shifts. #}
+{% macro icon(name, cls='') -%}<svg class="ic {{ cls }}" aria-hidden="true"><use href="{{ url_for('static', filename='attendance/icons.svg') }}#i-{{ name }}"/></svg>{%- endmacro %}
+
+{% macro chip(status) -%}<span class="chip {{ status|status_class }}">{{ icon(status|status_icon) }}{{ status|status_label }}</span>{%- endmacro %}
+
+{% macro tone_chip(text, tone='t-na', ic='') -%}<span class="chip {{ tone }}{{ ' plain' if not ic }}">{% if ic %}{{ icon(ic) }}{% endif %}{{ text }}</span>{%- endmacro %}
+
+{% macro shift(code, soft=False, label=False) -%}<span class="shift sh-{{ code }}{{ ' soft' if soft }}" title="{{ SHIFT_NAMES.get(code, code) }}">{{ code }}</span>{% if label %} {{ SHIFT_NAMES.get(code, code) }}{% endif %}{%- endmacro %}
+
+{% macro kpi(label, value, sub='', tone='', ic='', href='') -%}
+<{{ 'a' if href else 'div' }} class="kpi {{ tone }}"{% if href %} href="{{ href }}"{% endif %}>
+  <span class="k-label">{% if ic %}{{ icon(ic) }}{% endif %}{{ label }}</span>
+  <span class="k-value">{{ value }}</span>
+  <span class="k-sub">{{ sub }}</span>
+</{{ 'a' if href else 'div' }}>
+{%- endmacro %}
+
+{% macro banner(tone='t-info', ic='info') -%}
+<div class="banner {{ tone }}" role="status">{{ icon(ic) }}<div class="grow">{{ caller() }}</div></div>
+{%- endmacro %}
+
+{% macro empty(ic, title, text='') -%}
+<div class="empty">{{ icon(ic, 'ic-xl') }}<strong>{{ title }}</strong>{% if text %}<p>{{ text }}</p>{% endif %}{{ caller() if caller else '' }}</div>
+{%- endmacro %}
+
+{% macro avatar(name, cls='') -%}<span class="avatar {{ cls }}" aria-hidden="true" translate="no">{{ name|initials }}</span>{%- endmacro %}
+
+{% macro person(name, id, sub='', href='') -%}
+<{{ 'a' if href else 'div' }} class="person"{% if href %} href="{{ href }}"{% endif %}>{{ avatar_for(id, name) }}<span><b dir="auto" class="bidi">{{ name|short_name(4) }}</b><small>#{{ id }}{% if sub %} · <span dir="auto" class="bidi">{{ sub }}</span>{% endif %}</small></span></{{ 'a' if href else 'div' }}>
+{%- endmacro %}
+
+{% macro head(title, sub='', ic='') -%}
+<header class="page-head">
+  <div><h1>{% if ic %}{{ icon(ic, 'ic-lg') }}{% endif %}{{ title }}</h1>{% if sub %}<p>{{ sub }}</p>{% endif %}</div>
+  {% if caller %}<div class="actions">{{ caller() }}</div>{% endif %}
+</header>
+{%- endmacro %}
+
+{% macro crumbs(items) -%}
+{# the three dashboards lead into each other: Today › Team › Person - items = [(label, href or '')] #}
+<nav class="crumbs" aria-label="Where you are">{% for label, href in items %}{% if href %}<a href="{{ href }}">{{ label }}</a>{% else %}<span aria-current="page" dir="auto">{{ label }}</span>{% endif %}{% if not loop.last %}<span class="sep" aria-hidden="true">›</span>{% endif %}{% endfor %}</nav>
+{%- endmacro %}
+
+{% macro stepper(labels, current) -%}
+<ol class="stepper" aria-label="Progress">{% for l in labels %}<li class="{{ 'done' if loop.index < current else ('now' if loop.index == current else '') }}"{% if loop.index == current %} aria-current="step"{% endif %}>{{ l }}</li>{% endfor %}</ol>
+{%- endmacro %}
+
+{% macro csrf() -%}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{%- endmacro %}
+
+{% macro monthnav(year, month, endpoint, args) -%}
+{% set py, pm = (year - 1, 12) if month == 1 else (year, month - 1) %}{% set ny, nm = (year + 1, 1) if month == 12 else (year, month + 1) %}
+<span class="datenav"><a class="btn btn-ghost btn-sm" href="{{ url_for(endpoint, year=py, month=pm, **args) }}" aria-label="Previous month">{{ icon('chevron-left') }}</a>
+<strong>{{ ['January','February','March','April','May','June','July','August','September','October','November','December'][month-1] }} {{ year }}</strong>
+<a class="btn btn-ghost btn-sm" href="{{ url_for(endpoint, year=ny, month=nm, **args) }}" aria-label="Next month">{{ icon('chevron-right') }}</a></span>
+{%- endmacro %}

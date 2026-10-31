@@ -1,0 +1,54 @@
+IAS PORTAL - READY TO RUN (your own data is inside)
+=============================================================
+
+This package holds the new program AND everything of your running NBE OpsHub: the data folder (users,
+roles, teams, passwords, settings, auto-assign rules, history), .secret_key, collector_config.json (the
+SSO-portal and ITSM accounts) and libs. Keep it private - it carries your collector passwords.
+Your copy was taken on 25 Oct 2026, 06:12.
+
+A NEW FOLDER OR A NEW PC
+  1. Copy everything inside "program" into the folder (e.g. the shared folder).
+  2. Start run.py, then collector.py. Everyone signs in with the same user ID and password as before.
+     (libs is already complete - no internet needed.)
+
+THE SAME FOLDER AS THE OLD VERSION
+  1. Stop the old run.py and collector.py.
+  2. Copy everything inside "program" over the old folder.
+     If the old version was used after 25 Oct 2026, 06:12, do NOT copy the "data" folder: yours is newer and
+     the new version uses it as it is (the format is the same).
+  3. Start run.py, then collector.py.  Check the collector with:  python collector.py --check
+
+THE DAILY SUMMARY IS OFF IN YOUR SETTINGS (NBE OpsHub had none): System > Settings > Daily summary - switch it on,
+type the To addresses, Save, then press "Run now" there to try it.
+
+UPDATE-NOTES.txt says what is new (16: the welcome after sign-in, 17: moving from NBE OpsHub,
+18: auto-assign "Max per run", 19: the SLA request age and complete numbers, 20: daily summary Run now and the Outlook fix, 21: a manager assigns only to their team, 22: every inquiry page read, 23: daily summary per team, 24: the live SLA counted from «تاريخ الارسال للسرية» like the SLA monitor, 25: form 7 periods and the summary's ticket numbers, 26: ITSM completed implementations by day, 27: the SLA tab opens on the security team's own day, 28: best performers, 29: no timed-out scans, fast pages, a day-by-day log, 30: the SLA numbers are the portal's own inquiry, 31: the daily summary no longer fails with Outlook out of memory, 32: a celebration e-mail for the day's best performer, 33: the Best Performance e-mail celebrates the top 3, in English, not in the daily summary, 34: Outlook out of memory - a try without the logo, the step and Outlook's memory in the message, 35: the SLA counts from the last assignment to the security user, 36: never from the sent date for an assigned request - the Live tickets' histories are read first, 37: the MFA Team's security requests count under Open System, 38: a request is classified by its system, never by the person, 39: the suggested e-mail classifications work, the administrator approves them, 40: the Analysis Tickets card holds its numbers again, 41: the SLA tab counts «تم التعزيز …» / «لم يتم …» in any wording and shows each portal status and where it counts, 42: a page never shows an old state after a change).
+The program drives Edge / Chrome over the DevTools protocol only (cdp.py): no Selenium, no Playwright.
+
+--------------------------------------------------------------------------------
+
+IAS PORTAL - نسخة جاهزة للتشغيل (بياناتك جوّاها)
+=================================================
+
+الباكدج دي فيها البرنامج الجديد ومعاه كل حاجة من NBE OpsHub الشغال عندك: مجلد data (المستخدمين والأدوار
+والفرق والباسوردات والإعدادات وقواعد الـ auto-assign والتاريخ) و .secret_key و collector_config.json
+(حسابات بورتال الـ SSO و ITSM) و libs. خليها عندك بس - فيها باسوردات الـ collector.
+النسخة اتاخدت يوم 25 Oct 2026, 06:12.
+
+مجلد جديد أو جهاز جديد
+  1. انسخ كل اللي جوه "program" في المجلد (مثلاً المجلد المشترك).
+  2. شغّل run.py وبعدين collector.py. كل واحد بيدخل بنفس اسم المستخدم والباسورد زي الأول.
+     (مجلد libs كامل - مش محتاج إنترنت.)
+
+نفس مجلد النسخة القديمة
+  1. أوقف run.py و collector.py القديمين.
+  2. انسخ كل اللي جوه "program" فوق المجلد القديم.
+     لو النسخة القديمة اتستخدمت بعد 25 Oct 2026, 06:12 ما تنسخش مجلد "data": اللي عندك أحدث والنسخة الجديدة
+     بتشتغل عليه زي ما هو (نفس شكل البيانات).
+  3. شغّل run.py وبعدين collector.py. واتأكد من الـ collector بـ:  python collector.py --check
+
+الملخص اليومي مقفول في إعداداتك (NBE OpsHub ماكانش فيه): System > Settings > Daily summary - فعّله واكتب عناوين
+To واعمل Save، وبعدين دوس "Run now" هناك علشان تجربه.
+
+UPDATE-NOTES.txt فيه الجديد (16: رسالة الترحيب بعد الدخول، 17: النقل من NBE OpsHub، 18: "Max per run" في الـ auto-assign، 19: عمر الطلب في الـ SLA وأرقام كاملة، 20: Run now للملخص اليومي وإصلاح Outlook، 21: المدير بيسند لفريقه بس، 22: كل صفحات الاستعلام بتتقري، 23: ملخص يومي لكل فريق، 24: الـ Live SLA بيتحسب من «تاريخ الارسال للسرية» زي الـ SLA monitor، 25: فترة نموذج 7 وأرقام التيكتات في الملخص، 26: الـ ITSM المنفذ حسب اليوم، 27: تاب الـ SLA بيفتح على يوم فريق السرية، 28: أفضل أداء، 29: scan مبيقفش وصفحات سريعة وسجل يوم بيوم، 30: أرقام الـ SLA هي نفس استعلام البورتال، 31: الملخص اليومي مبقاش بيفشل من ذاكرة الـ Outlook، 32: إيميل احتفال لأحسن أداء في اليوم، 33: إيميل الـ Best Performance للـ top 3 بالإنجليزي ومبقاش في الملخص اليومي، 34: Out of memory من الـ Outlook - محاولة من غير اللوجو والرسالة بتقول الخطوة والـ memory، 35: الـ SLA بقى من آخر إسناد لمستخدم السرية، 36: الطلب المسند مبقاش بيتحسب من تاريخ الارسال - وتواريخ تذاكر الـ Live بتتقري الأول، 37: طلبات السرية بتاعة MFA Team بقت تحت Open System، 38: الطلب بيتصنف بالنظام مش بالشخص، 39: اقتراحات تصنيف الإيميل بقت شغالة والأدمن بيوافق عليها، 40: كارت الـ Tickets في الـ Analysis رجع يعرض أرقامه، 41: تاب الـ SLA بيحسب «تم التعزيز …» / «لم يتم …» بأي كلام وبيعرض كل حالة من البورتال وبتتحسب فين، 42: الصفحة مبقتش تعرض حالة قديمة بعد أي تعديل).
+البرنامج بيشغّل Edge / Chrome عن طريق DevTools protocol بس (cdp.py): مفيش Selenium ولا Playwright.

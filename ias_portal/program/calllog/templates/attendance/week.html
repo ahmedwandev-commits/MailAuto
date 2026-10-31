@@ -1,0 +1,71 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, banner, chip, tone_chip, shift, csrf, empty with context %}
+{% block att_title %}Weekly plan{% endblock %}
+{% block content %}
+{% set week_label = start|dm ~ ' – ' ~ wv.end|dmy %}
+{% call head('Weekly plan', week_label ~ (' · ' ~ team if team else ' · all teams on the roster'), 'calendar-check') %}
+  <span class="datenav">
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_planning.week', start=prev, team=team) }}" aria-label="Previous week">{{ icon('chevron-left') }}</a>
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_planning.week', team=team) }}">This week</a>
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_planning.week', start=nxt, team=team) }}" aria-label="Next week">{{ icon('chevron-right') }}</a>
+  </span>
+  <form method="get" class="inline-form"><input type="hidden" name="start" value="{{ start }}">
+    <select name="team" data-autosubmit aria-label="Team"><option value="">All teams (roster only)</option>{% for t in teams %}<option {{ 'selected' if t == team }}>{{ t }}</option>{% endfor %}</select></form>
+{% endcall %}
+
+{% if can_edit and not team %}{% call banner('t-info', 'info') %}Choose a team to plan its week. Every change is recorded with the previous value, the new value, your name and a reason.{% endcall %}{% endif %}
+{% for ym, v in wv.versions.items() %}{% if not v and can_edit and team %}{% call banner('t-warn', 'calendar') %}<b>No schedule exists for {{ ym[0] }}-{{ '%02d' % ym[1] }} yet.</b> Saving this week creates a manual schedule for the month (you can still import the monthly Excel schedule later as a new version).{% endcall %}{% endif %}{% endfor %}
+
+
+
+<section class="card flush" aria-labelledby="av-h">
+  <div class="card-head"><h2 id="av-h">{{ icon('users') }}Team availability</h2><span class="hint">expected available / planned (required) per shift; approved leave and compensatory days taken are subtracted</span></div>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>Shift</th>{% for d in wv.dates %}<th class="num">{{ d|dayname }} {{ d[8:] }}</th>{% endfor %}</tr></thead>
+    <tbody>{% for c in wv.avail_codes %}<tr><td>{{ shift(c, label=True) }}</td>
+      {% for d in wv.dates %}{% set a = wv.avail[d][c] %}<td class="num {{ 'short' if a.short }}">{% if a.planned %}{{ a.available }}/{{ a.planned }} <span class="small muted">{{ '%g'|format(a.pct) }}%</span>{% else %}<span class="muted">·</span>{% endif %}{% if a.short %} {{ tone_chip('short staffed', 't-danger', 'alert-triangle') }}{% endif %}</td>{% endfor %}</tr>{% endfor %}</tbody>
+  </table></div>
+  {% if not wv.settings.min_staffing_pct and not wv.settings.min_staffing_pct_team and not wv.settings.min_staffing_pct_shift %}<p class="small muted pad">No minimum staffing percentage is configured, so shortages are not flagged (Administration → Settings).</p>{% endif %}
+</section>
+
+<form method="post" action="{{ url_for('att_planning.week_save') }}" id="weekplan" class="stack">
+  {{ csrf() }}<input type="hidden" name="start" value="{{ start }}"><input type="hidden" name="team" value="{{ team }}">
+  <section class="card flush" aria-labelledby="pl-h">
+    <div class="card-head"><h2 id="pl-h">{{ icon('calendar') }}Shift plan</h2>
+      <span class="legend small"><span>{{ shift('M', True) }} Morning 07–15</span><span>{{ shift('E', True) }} Evening 14–22</span><span>{{ shift('N', True) }} Night 22–07</span>{% if wv.default_code %}<span>{{ shift(wv.default_code, True) }} Normal day (auto when nothing is planned)</span>{% endif %}<span>{{ shift('SB', True) }} Stand-by</span><span>{{ shift('OFF', True) }} Rest day</span></span></div>
+    <div class="cal-wrap wk">
+    <table class="cal" aria-label="Weekly plan">
+      <thead><tr><th class="first">Employee</th>{% for d in wv.dates %}<th class="{{ 'we' if d|dayname in ('Fri', 'Sat') }} {{ 'today' if d == today }}">{{ d|dayname }}<small>{{ d|dm }}</small></th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for e in wv.rows %}
+        <tr><td class="first"><a class="person" href="{{ url_for('att_people.profile', emp_id=e.id) }}">{{ avatar_for(e.id, e.name) }}<span><b dir="auto" class="bidi">{{ e.name|short_name(3) }}</b><small>#{{ e.id }}{% if not team %} · {{ e.team }}{% endif %}</small></span></a></td>
+        {% for d in wv.dates %}
+          {% set es = wv.cells.get((e.id, d), []) %}{% set lv = wv.leave.get((e.id, d)) %}
+          {% set codes = es|map(attribute='shift_code')|sort|list %}{% set auto = wv.defaults.get((e.id, d)) %}
+          <td class="c {{ 'we' if d|dayname in ('Fri', 'Sat') }} {{ 'locked' if not (can_edit and team) }}">
+            {% if codes|length > 1 %}<a href="{{ url_for('att_schedule.edit', emp=e.id, date=d) if can_edit else '#' }}" title="Several entries - edit in the monthly calendar">{{ codes|join('+') }}</a>
+            {% elif can_edit and team %}
+              <select class="cellsel" name="cell_{{ e.id }}_{{ d }}" data-orig="{{ codes[0] if codes else '' }}" data-code="{{ codes[0] if codes else '' }}" aria-label="{{ e.name }} {{ d }}">
+                <option value="" {{ 'selected' if not codes }}>{{ (auto ~ ' auto') if auto else ('·' if not codes else '') }}</option>
+                {% for c in ['M', 'E', 'N', 'D', 'SB', 'OFF'] %}<option value="{{ c }}" {{ 'selected' if codes and codes[0] == c }}>{{ c }}</option>{% endfor %}
+              </select>
+            {% else %}<span class="cc{{ ' auto' if auto and not codes }}">{{ codes|join('+') if codes else ((auto ~ ' auto') if auto else '·') }}</span>{% endif %}
+            {% if lv %}<span class="lvmark">{{ icon('plane') }}{{ lv.kind }}{{ '?' if lv.state == 'pending' }}</span>{% endif %}
+          </td>
+        {% endfor %}</tr>
+      {% else %}<tr><td colspan="8">{% call empty('users', 'No employees to show', 'Pick a team, or import the monthly schedule first.') %}{% endcall %}</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </section>
+  {% if can_edit and team %}
+  <div class="sticky-bar" id="saveBar">
+    <span><b id="changeCount">0</b> unsaved change(s)</span>
+    <label class="field grow" for="weekReason"><span class="sr-only">Reason</span><input id="weekReason" name="reason" placeholder="Reason for the change (required)" autocomplete="off"></label>
+    <a class="btn btn-ghost" href="{{ url_for('att_planning.week', start=start, team=team) }}">Discard</a>
+    <button class="btn btn-primary" id="saveWeek" type="submit">{{ icon('check') }}Save week</button>
+  </div>
+  <p class="small muted">Changes apply immediately and are logged with the previous value, the new value, your name and the reason. Rest days are planned by setting OFF; compensatory days and leave come from their own pages and appear as markers on the day.</p>
+  {% endif %}
+</form>
+{% endblock %}

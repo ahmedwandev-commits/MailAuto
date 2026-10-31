@@ -1,0 +1,83 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, monthnav, tone_chip, csrf, empty, person with context %}
+{% block att_title %}Leave{% endblock %}
+{% block content %}
+{% call head('Leave planning', 'Record leave directly, see who is away, and keep balances without double deductions: a day belongs to exactly one record. There is no approval step; every entry and cancellation is audited.', 'plane') %}
+  {{ monthnav(year, month, 'att_people.leave', {'team': team, 'tab': tab}) }}
+  {% if can_edit %}<button class="btn btn-primary btn-sm" type="button" data-dialog="leaveDlg">{{ icon('plus') }}Record leave</button>{% endif %}
+{% endcall %}
+<section class="card tight toolbar">
+  <form method="get"><input type="hidden" name="year" value="{{ year }}"><input type="hidden" name="month" value="{{ month }}">
+    <label class="field">Team<select name="team" data-autosubmit><option value="">All teams</option>{% for t in teams %}<option {{ 'selected' if t == team }}>{{ t }}</option>{% endfor %}</select></label>
+    <label class="field">Status<select name="status" data-autosubmit><option value="">All</option>{% for s in ['approved','cancelled'] %}<option {{ 'selected' if s == status }}>{{ s }}</option>{% endfor %}</select></label>
+    <div class="seg"><a href="{{ url_for('att_people.leave', year=year, month=month, team=team, status=status, tab='calendar') }}" {% if tab != 'requests' %}aria-current="true"{% endif %}>{{ icon('calendar') }}Calendar</a>
+      <a href="{{ url_for('att_people.leave', year=year, month=month, team=team, status=status, tab='requests') }}" {% if tab == 'requests' %}aria-current="true"{% endif %}>{{ icon('list') }}Records</a></div>
+  </form>
+</section>
+
+{% if tab != 'requests' %}
+<div class="legend small"><span><i class="sw s0"></i>Annual</span><span><i class="sw s3"></i>Casual</span><span><i class="sw s1"></i>Sick</span><span><i class="sw s4"></i>Other</span><span><i class="sw s2"></i>Compensatory day</span><span>hatched = pending</span><span>outlined = planned</span><span>italic = taken from the HR file</span></div>
+<section class="cal-wrap">
+  <table class="cal" aria-label="Leave calendar">
+    <thead><tr><th class="first">Employee</th>{% for d in cal.dates %}<th class="{{ 'we' if d|dayname in ('Fri', 'Sat') }} {{ 'today' if d == today }}">{{ d[8:] }}<small>{{ d|dayname }}</small></th>{% endfor %}</tr></thead>
+    <tbody>
+    {% for e in cal.rows %}<tr><td class="first"><a class="person" href="{{ url_for('att_people.profile', emp_id=e.id) }}">{{ avatar_for(e.id, e.name) }}<span><b dir="auto" class="bidi">{{ e.name|short_name(3) }}</b><small>#{{ e.id }}</small></span></a></td>
+      {% for d in cal.dates %}{% set c = cal.cells.get((e.id, d)) %}
+        <td class="c {{ 'we' if d|dayname in ('Fri', 'Sat') }} {% if c %}lv lv-{{ c.kind }} {{ c.state if c.state in ('pending', 'planned', 'hr') }}{% endif %}" {% if c %}title="{{ c.kind }} · {{ c.state }}{% if c.text %} · {{ c.text }}{% endif %}"{% endif %}>{% if c %}{{ {'annual': 'AL', 'casual': 'CA', 'sick': 'SK', 'other': 'OT', 'comp': 'CD', 'hr': 'HR'}.get(c.kind, c.kind[:2]|upper) }}{% endif %}</td>
+      {% endfor %}</tr>
+    {% else %}<tr><td class="first" colspan="{{ cal.dates|length + 1 }}">{% call empty('plane', 'No leave this month', 'Nobody in your scope has leave or compensatory days in this month.') %}{% endcall %}</td></tr>{% endfor %}
+    </tbody>
+    <tfoot><tr><td class="first">Away that day</td>{% for d in cal.dates %}<td>{{ cal.per_day[d] or '·' }}</td>{% endfor %}</tr></tfoot>
+  </table>
+</section>
+
+<section class="card flush">
+  <div class="card-head"><h2>{{ icon('users') }}Balances {{ year }}</h2><span class="hint">taken counts approved requests only</span></div>
+  <div class="tbl-wrap"><table class="tbl" id="bal">
+    <thead><tr><th>Employee</th>{% for t in types %}<th class="num">{{ t.name }} taken</th>{% endfor %}<th class="num">Annual left</th><th class="num">Casual left</th></tr></thead><tbody>
+    {% for id, e in emps.items() if (not team or e.team == team) %}{% set b = bal[id] %}
+      <tr><td class="name"><a class="person" href="{{ url_for('att_people.profile', emp_id=id) }}">{{ avatar_for(id, e.name) }}<b dir="auto" class="bidi">{{ e.name|short_name(3) }}</b></a></td>
+        {% for t in types %}<td class="num">{{ b[t.code].taken|num }}{% if b[t.code].pending %} <span class="muted small">(+{{ b[t.code].pending|num }} pending)</span>{% endif %}</td>{% endfor %}
+        <td class="num">{{ b.annual.remaining|num }}</td><td class="num">{{ b.casual.remaining|num }}</td></tr>
+    {% endfor %}</tbody></table></div>
+  <p class="small muted pad mt">“—” means no entitlement has been entered; balances are never guessed.</p>
+</section>
+{% else %}
+<section class="card flush">
+  <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Employee</th><th>Type</th><th>From</th><th>To</th><th class="num">Days</th><th>Status</th><th>Reason</th><th>Requested by</th>{% if can_edit %}<th></th>{% endif %}</tr></thead><tbody>
+  {% for r in reqs %}{% set em = emps.get(r.employee_id) %}
+    <tr><td>{{ r.id }}</td><td class="name">{% if em %}<a class="person" href="{{ url_for('att_people.profile', emp_id=r.employee_id) }}">{{ avatar_for(r.employee_id, em.name) }}<b dir="auto" class="bidi">{{ em.name|short_name(3) }}</b></a>{% else %}{{ r.employee_id }}{% endif %}</td>
+      <td>{{ r.leave_type }}</td><td class="nowrap">{{ r.date_from|dmy }}</td><td class="nowrap">{{ r.date_to|dmy }}</td><td class="num">{{ r.days|num }}</td>
+      <td>{{ tone_chip(r.status, {'approved': 't-ok', 'pending': 't-info', 'rejected': 't-danger'}.get(r.status, 't-na')) }}</td><td dir="auto" class="bidi">{{ r.reason }}</td><td>{{ r.created_by }}</td>
+      {% if can_edit %}<td class="actions">{% if r.status != 'cancelled' %}<form method="post" action="{{ url_for('att_people.leave_cancel', req_id=r.id) }}" class="inline-form">{{ csrf() }}<input name="reason" placeholder="Reason (optional)" size="14" aria-label="Reason"><button class="btn btn-ghost btn-sm" data-confirm="Cancel this leave record?">Cancel leave</button></form>{% endif %}</td>{% endif %}</tr>
+  {% else %}<tr><td colspan="10">{% call empty('plane', 'No leave requests', 'Nothing matches these filters.') %}{% endcall %}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endif %}
+
+{% if att_user.role == 'admin' %}
+<section class="card"><div class="card-head"><h2>{{ icon('sliders') }}Entitlement &amp; opening balance</h2><span class="hint">administrators only</span></div>
+<form method="post" action="{{ url_for('att_people.leave_entitlement') }}" class="form-grid">{{ csrf() }}
+  <label class="field">Employee<select name="emp">{% for id, e in emps.items() %}<option value="{{ id }}">{{ e.name|short_name(3) }} ({{ id }})</option>{% endfor %}</select></label>
+  <label class="field">Year<input name="year" value="{{ year }}"></label>
+  <label class="field">Type<select name="type">{% for t in types %}<option value="{{ t.code }}">{{ t.name }}</option>{% endfor %}</select></label>
+  <label class="field">Entitlement (days)<input name="entitlement" required></label><label class="field">Opening balance<input name="opening" value="0"></label>
+  <div><button class="btn btn-primary">Save</button></div></form></section>
+{% endif %}
+
+{% if can_edit %}
+<dialog class="dlg" id="leaveDlg" aria-labelledby="lvTitle">
+  <form method="post" action="{{ url_for('att_people.leave_new') }}">{{ csrf() }}
+    <div class="dlg-head"><h2 id="lvTitle">{{ icon('plane') }}Record leave</h2><span class="grow"></span><button class="iconbtn" type="button" data-close aria-label="Close">{{ icon('x') }}</button></div>
+    <div class="dlg-body"><div class="form-grid">
+      <label class="field wide">Employee<select name="emp" required>{% for id, e in emps.items() %}<option value="{{ id }}">{{ e.name|short_name(4) }} ({{ id }})</option>{% endfor %}</select></label>
+      <label class="field">Type<select name="type">{% for t in types %}<option value="{{ t.code }}">{{ t.name }}</option>{% endfor %}</select></label>
+      <label class="field">Days (if not calendar days)<input name="days" size="4"></label>
+      <label class="field">From<input type="date" name="from" required></label><label class="field">To<input type="date" name="to" required></label>
+      <label class="field wide">Reason<input name="reason"></label></div>
+      <p class="small muted">The leave counts at once and is written to the audit trail. A record that overlaps another leave of the same employee is refused.</p></div>
+    <div class="dlg-foot"><button class="btn btn-ghost" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Record leave</button></div>
+  </form>
+</dialog>
+{% endif %}
+{% endblock %}

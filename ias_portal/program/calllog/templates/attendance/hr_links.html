@@ -1,0 +1,39 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, csrf, empty, tone_chip with context %}
+{% block att_title %}HR numbers{% endblock %}
+{% block content %}
+{% call head('HR numbers ↔ portal accounts', 'A person whose employee number in the HR attendance file is not their portal User ID is linked here once. Their days are then loaded from every stored file, and their forgotten punches reach them.', 'link') %}
+  <a class="btn btn-ghost btn-sm" href="{{ url_for('att_attendance.import_upload') }}">{{ icon('upload') }}Import a file</a>
+{% endcall %}
+
+<form method="post" class="card flush">{{ csrf() }}
+  <div class="card-head"><h2>{{ icon('alert-triangle') }}Numbers with no portal account</h2>
+    <span class="hint">From the latest files. The suggestion matches the words of the name («خالد فكري» → «خالد محمد فكري»).</span></div>
+  {% if unlinked %}
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>HR number</th><th>Name in the file</th><th>Match</th><th>Portal account</th></tr></thead>
+    <tbody>{% for u in unlinked %}
+      <tr><td>{{ u.hr_number }}</td><td dir="auto" class="bidi"><b>{{ u.name or '—' }}</b></td>
+        <td>{% if u.status == 'auto' %}{{ tone_chip('One match', 't-ok', 'check') }}{% elif u.candidates %}{{ tone_chip('Choose', 't-warn', 'alert-triangle') }}{% else %}{{ tone_chip('No match', 't-na') }}{% endif %}</td>
+        <td><select name="link:{{ u.hr_number }}" aria-label="Portal account for {{ u.hr_number }}">
+          <option value="">— leave —</option>
+          {% set picked = u.employee_id %}
+          {% for c in u.candidates %}<option value="{{ c.id }}">{{ c.name }} ({{ c.id }}) · suggested</option>{% endfor %}
+          {% for e in employees %}<option value="{{ e.id }}" {{ 'selected' if picked == e.id }}>{{ e.name }} ({{ e.id }})</option>{% endfor %}
+        </select></td></tr>
+    {% endfor %}</tbody></table></div>
+  <div class="pad"><button class="btn btn-primary" type="submit">{{ icon('check') }}Save the links</button></div>
+  {% else %}{{ empty('check-circle', 'Every number is linked', 'Every employee number of the latest files is a portal account or linked to one.') }}{% endif %}
+</form>
+
+<form method="post" class="card flush">{{ csrf() }}
+  <div class="card-head"><h2>{{ icon('link') }}Saved links</h2><span class="hint">{{ saved|length }} link(s)</span></div>
+  {% if saved %}
+  <div class="tbl-wrap"><table class="tbl"><thead><tr><th>HR number</th><th>Portal account</th><th></th></tr></thead>
+    <tbody>{% for hr, emp in saved|dictsort %}
+      <tr><td>{{ hr }}</td><td dir="auto" class="bidi">{{ names.get(emp, emp) }} <span class="hint">{{ emp }}</span></td>
+        <td><button class="btn btn-ghost btn-sm" type="submit" name="link:{{ hr }}" value="none">{{ icon('x') }}Unlink</button></td></tr>
+    {% endfor %}</tbody></table></div>
+  {% else %}<p class="pad small muted">No links yet.</p>{% endif %}
+</form>
+{% endblock %}
