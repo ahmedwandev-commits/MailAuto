@@ -2191,8 +2191,8 @@ def email_message():
     reply_row = next((r for r in rows if r.get("first_reply_time") or r.get("reply_count")), row)
     mine = overlay.normalize_email(g.user.get("email"))
     own_reply = bool(mine) and overlay.normalize_email(reply_row.get("first_reply_email")) == mine
-    # (a manager is held to their team(s) even when they are the mail's assignee: note 9)
-    hidden = (g.user["role"] in auth.OPS_ROLES and not own_reply
+    # (a manager is held to their team(s) even when they are the mail's assignee: note 9; an employee too, v5.17 - owner)
+    hidden = (g.user["role"] in (*auth.OPS_ROLES, "user") and not own_reply
               and not overlay.reply_in_scope(reply_row, overlay.scope_for_user(g.user), person_teams()))
     block = _mail_block(rows)
     if hidden and block:

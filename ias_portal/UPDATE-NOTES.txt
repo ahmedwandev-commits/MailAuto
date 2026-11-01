@@ -46,6 +46,8 @@ C. BUGS FIXED (whole application, 41 fixes - each has an automatic test)
    - E-mail outbox: a mail queued while the collector was sending could be lost.
    - Settings: two people saving rules at the same moment could overwrite each other.
    - An employee could mark a teammate's assigned mail "Done".
+   - A mail shared by two teams: an employee no longer sees the other team's reply (who, the text, the rating) - the
+     same rule managers already had; their own team's reply stays visible.
    - Records filter/export: the user filter could read other files of the data folder (path traversal).
    - Files saved by Notepad (BOM) or briefly locked by antivirus no longer break the portal.
    - "Current password" guesses are now limited like sign-in.
