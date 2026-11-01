@@ -185,7 +185,9 @@
     const btns = [h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); openMail(r); } }, OPS.icon("mail"), "Open")];
     if (!READ_ONLY) {
       const can = r.can || {};
-      btns.push(r.assignment_done
+      btns.push(r.assignment_done && r.done_auto     // answered in Outlook: the server keeps it done (Reopen = 409)
+        ? h("span", { class: "hint", title: "You answered it in Outlook, so it stays done." }, "answered in Outlook")
+        : r.assignment_done
         ? h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); reopenItem(r); } }, "Reopen")
         : h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); doneItem(r); } }, OPS.icon("check"), "Done"));
       if (can.no_action) btns.push(h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); noActionItem(r); } }, "No action"));

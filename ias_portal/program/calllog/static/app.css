@@ -498,6 +498,8 @@ tr.flash td { animation: flash 1.8s ease-out; }
 /* ---------- dialogs & toast ---------- */
 dialog.dlg {
   overflow: visible;          /* the branch drop-down may extend past the dialog */
+  overflow-y: auto;           /* ...but a dialog taller than the window (Edit call has no inner scroll) scrolls itself,
+                                 so its Save / Cancel buttons are never pushed below the screen out of reach */
   border: 1px solid var(--axis); border-radius: 14px; padding: 0; background: var(--surface); color: var(--ink);
   width: min(460px, calc(100vw - 24px)); box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3);
 }

@@ -236,7 +236,9 @@
       }
       btns.push(h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); changeTeamDialog(row); } }, "Team"));
       if (isAssigned(row)) {
-        btns.push(row.assignment_done
+        btns.push(row.assignment_done && row.done_auto     // the assignee answered in Outlook: the server keeps it done (Reopen = 409)
+          ? h("span", { class: "hint", title: "The assignee answered it in Outlook, so it stays done." }, "answered in Outlook")
+          : row.assignment_done
           ? h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); reopenRow(row); } }, "Reopen")
           : h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: (e) => { e.stopPropagation(); doneDialog(row); } }, OPS.icon("check"), "Done"));
       }

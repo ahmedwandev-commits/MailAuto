@@ -127,8 +127,8 @@
     el.body = h("div", { class: "my-stack" }, h("p", { class: "empty" }, "Loading your team's calls…"));
     el.dateInput = h("input", { type: "date", "aria-label": "Day", max: todayIso(), value: state.date,
       onchange: () => setDate(el.dateInput.value || todayIso()) });
-    el.prev = h("button", { type: "button", class: "btn btn-ghost btn-sm", "aria-label": "Previous day", onclick: () => setDate(shiftDate(state.date, -1)) }, "‹");
-    el.next = h("button", { type: "button", class: "btn btn-ghost btn-sm", "aria-label": "Next day", onclick: () => setDate(shiftDate(state.date, 1)) }, "›");
+    el.prev = h("button", { type: "button", class: "btn btn-ghost btn-sm", "aria-label": "Previous day", onclick: () => setDate(shiftDate(state.date || todayIso(), -1)) }, "‹");
+    el.next = h("button", { type: "button", class: "btn btn-ghost btn-sm", "aria-label": "Next day", onclick: () => setDate(shiftDate(state.date || todayIso(), 1)) }, "›");
     el.today = h("button", { type: "button", class: "btn btn-ghost btn-sm", onclick: () => setDate(todayIso()) }, "Today");
     page.replaceChildren(
       h("div", { class: "op-titlebar" }, h("div", {}, h("h1", {}, "Team calls"), el.sub),

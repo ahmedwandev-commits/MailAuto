@@ -635,7 +635,7 @@
   // ================================================================== Change requests: execution time + conclusion
   const CR_URL = "/api/ops/itsm-analysis";
   const CONCL = { completed: ["ok", "Completed"], rollback: ["danger", "Rollback"], pending: ["warn", "Pending"] };
-  const crToday = () => state.today || new Date().toISOString().slice(0, 10);
+  const crToday = () => state.today || OPS.localNowIso().slice(0, 10);   // this PC's LOCAL day (toISOString is UTC: yesterday after midnight in Cairo)
 
   function crSelect(label, value, options) {
     const sel = h("select", { "aria-label": label });
