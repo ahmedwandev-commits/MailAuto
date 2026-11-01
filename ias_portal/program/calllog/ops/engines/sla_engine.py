@@ -490,15 +490,23 @@ def read_requests(browser, cfg, debug):
 
     rows = list(table["rows"])
     if table["source"] == "dom":
-        # plain paging: click "next" until it is disabled or nothing new arrives
+        # plain paging: click "next" until it is disabled or the page no longer changes. A page is told apart from the
+        # one before by ALL its rows (never row by row): two requests that look the same - on one page or on two - stay
+        # two requests (a row-by-row "already seen" check dropped the second, and the count check below then refused
+        # the whole scan). A table that grows instead of turning the page keeps only the rows after the ones read.
+        shown = list(table["rows"])
         for _ in range(MAX_PAGES):
             if not _click(browser, js_next_page()):
                 break
+            sig = _rows_sig(shown)
             t = _poll(lambda: pick_table(browser.eval(READ_TABLES), cfg),
-                      lambda t: t is not None and any(r not in rows for r in t["rows"]), PAGE_MS * 4 / 1000.0)
-            new = [r for r in (t["rows"] if t else []) if r not in rows]
-            if not new:
+                      lambda t: t is not None and bool(t["rows"]) and _rows_sig(t["rows"]) != sig, PAGE_MS * 4 / 1000.0)
+            if t is None or not t["rows"] or _rows_sig(t["rows"]) == sig:
                 break
+            new = list(t["rows"])
+            if len(new) > len(rows) and new[:len(rows)] == rows:
+                new = new[len(rows):]                     # the rows read so far, then more: only the more are new
+            shown = list(t["rows"])
             rows.extend(new)
     state = browser.eval(JS_GRID_STATE) or {}
     # an empty or short read would be recorded as requests leaving the queue: refuse it rather than record it

@@ -60,11 +60,13 @@ def read_all_rows(path, encoding="utf-8"):
 
 class _Bucket:
     """Running totals for one group (overall, a team, a system, a day, an employee)."""
-    __slots__ = ("closed", "executed", "not_executed", "within_sla", "eligible", "_hours")
+    __slots__ = ("closed", "executed", "not_executed", "within_sla", "eligible", "_hours", "_target")
 
-    def __init__(self):
+    def __init__(self, target=None):
         self.closed = self.executed = self.not_executed = self.within_sla = self.eligible = 0
         self._hours = []
+        # the SLA target of THIS roll-up (never a module-wide value another call could change meanwhile)
+        self._target = SLA_HOURS if target is None else float(target)
 
     def add(self, executed, hours, keep_hours):
         self.closed += 1
@@ -74,7 +76,7 @@ class _Bucket:
             self.not_executed += 1
         if hours is not None:
             self.eligible += 1
-            if hours <= SLA_HOURS:
+            if hours <= self._target:
                 self.within_sla += 1
             if keep_hours:
                 self._hours.append(hours)
@@ -83,7 +85,8 @@ class _Bucket:
         med = None
         if self._hours:
             h = sorted(self._hours)
-            med = round(h[len(h) // 2], 2)
+            mid = len(h) // 2
+            med = round(h[mid] if len(h) % 2 else (h[mid - 1] + h[mid]) / 2.0, 2)   # even count: the two middle ones
         return dict(extra, closed=self.closed, executed=self.executed, not_executed=self.not_executed,
                     executed_pct=_pct(self.executed, self.closed), sla_pct=_pct(self.within_sla, self.eligible),
                     median_hours=med)
@@ -96,13 +99,12 @@ def compute(rows, system_team=None, sla_hours=SLA_HOURS, top=25, dedup=True):
     ``system_team`` - {application(lower): team}; an unknown application falls in "Open System".
     Returns a JSON-safe dict: meta, overall, by_status, by_day (accumulated), by_team, by_system (top), by_employee (top).
     """
-    global SLA_HOURS
-    SLA_HOURS = float(sla_hours)
+    target = float(sla_hours)             # local: concurrent roll-ups with other targets never mix (no global)
     tmap = {str(k).strip().lower(): v for k, v in (system_team or {}).items()}
 
-    overall = _Bucket()
+    overall = _Bucket(target)
     status_n = defaultdict(int)
-    by_day, by_team, by_system, by_emp = (defaultdict(_Bucket) for _ in range(4))
+    by_day, by_team, by_system, by_emp = (defaultdict(lambda: _Bucket(target)) for _ in range(4))
     first_day = last_day = None
     seen = set()
     n_raw = 0
@@ -151,7 +153,7 @@ def compute(rows, system_team=None, sla_hours=SLA_HOURS, top=25, dedup=True):
 
     return {
         "meta": {"rows_raw": n_raw, "requests": overall.closed, "date_from": first_day, "date_to": last_day,
-                 "days": len(by_day), "sla_hours": SLA_HOURS, "deduped": bool(dedup)},
+                 "days": len(by_day), "sla_hours": target, "deduped": bool(dedup)},
         "overall": overall.as_dict(),
         "by_status": status_rows,
         "by_day": day_rows,
