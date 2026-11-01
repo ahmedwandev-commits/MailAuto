@@ -161,21 +161,21 @@ def test_coverage_report_counts_a_double_shift_on_leave_in_both_shifts(app, worl
     assert cols["Evening planned"] == 2 and cols["Evening available"] == 1            # 101 (on leave) and 102
 
 
-# ---------------------------------------------------------------- the leave list of a team shows people whose second team it is
-def test_leave_list_team_filter_includes_people_of_several_teams(app, world, repo, admin_b):
+# ---------------------------------------------------------------- the leave list of a team: a person is in ONE Workforce team (v5.17)
+def test_leave_list_team_filter_uses_the_one_workforce_team(app, world, repo, admin_b):
     repo.directory.store.update_user("102", {"teams": ["Team A", "Team C"]})
     repo.create_leave_request({"employee_id": 102, "leave_type": "annual", "date_from": "2026-10-20", "date_to": "2026-10-21",
                                "days": 2, "status": "approved", "reason": "trip-102", "created_by": "admin"})
-    page = admin_b.get("/attendance/leave?team=Team%20C&tab=requests&year=2026&month=10").get_data(as_text=True)
-    assert "trip-102" in page
+    assert "trip-102" in admin_b.get("/attendance/leave?team=Team%20A&tab=requests&year=2026&month=10").get_data(as_text=True)
+    assert "trip-102" not in admin_b.get("/attendance/leave?team=Team%20C&tab=requests&year=2026&month=10").get_data(as_text=True)
 
 
-# ---------------------------------------------------------------- allowance confirmation: somebody on two teams is paid once in the total
+# ---------------------------------------------------------------- allowance confirmation: somebody with two teams is in one, paid once
 def test_the_sector_total_counts_a_person_of_two_teams_once(app, world, repo):
     repo.save_settings({"allowance_rules": {"morning": {"rate": 150}}})
     repo.directory.store.update_user("201", {"teams": ["Team B", "Team A"]})
     st = ac.status(repo, "2026-10")
-    assert {t["team"]: t["amount"] for t in st["teams"]} == {"Team A": 150, "Team B": 150}      # listed under both teams
+    assert {t["team"]: t["amount"] for t in st["teams"]} == {"Team A": 0, "Team B": 150}        # in their one Workforce team (v5.17)
     assert st["total_amount"] == 150                                                            # paid once
 
 

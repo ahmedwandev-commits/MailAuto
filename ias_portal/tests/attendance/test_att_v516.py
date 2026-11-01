@@ -34,15 +34,24 @@ def test_the_attendance_admin_is_a_role_on_the_users_page(app, world, repo, admi
     h = {"X-CSRF-Token": admin_b.csrf}
     r = admin_b.client.post("/api/admin/users", json={"user_id": "240999", "name": "HR Two", "role": "attendance",
                                                        "password": "Passw0rd!x"}, headers=h)
+    assert r.status_code == 400 and "team" in r.get_json()["error"]               # v5.17: administrative affairs is under a team too
+    r = admin_b.client.post("/api/admin/users", json={"user_id": "240999", "name": "HR Two", "role": "attendance",
+                                                       "password": "Passw0rd!x", "teams": ["Flex Cube"]}, headers=h)
     assert r.status_code == 201 and r.get_json()["user"]["role"] == "attendance"
     u = repo.directory.store.get_user("240999")
     assert u["role"] == "attendance" and repo.directory.is_att_admin(u)          # its own role ...
-    assert not any(e["id"] == 240999 for e in repo.list_employees())             # ... and never an employee (a numeric ID too)
+    emp = next(e for e in repo.list_employees() if e["id"] == 240999)            # ... and on the roster of its one team (v5.17)
+    assert emp["teams"] == ["Flex Cube"]
     rows = {u["user_id"]: u for u in admin_b.client.get("/api/admin/users").get_json()["users"]}
     assert rows["240999"]["role"] == "attendance"
     repo.directory.store.update_user("240999", {"must_change_password": False})          # (a new account picks its password first)
     b = login(app, "240999")
     assert b.get("/admin/settings").status_code == 200 and b.client.get("/hub").status_code == 302    # attendance only
+    for page in ("/email", "/sla", "/itsm", "/calls", "/my/email", "/dashboard"):                       # no e-mail, no tickets, nothing else
+        assert b.client.get(page).status_code == 302, page
+    for api in ("/api/ops/overview", "/api/ops/email/rows", "/api/ops/sla/rows", "/api/records"):
+        assert b.client.get(api).status_code in (403, 404), api
+    assert b.get("/attendance/my/attendance").status_code == 200                                      # but their own attendance
     r = admin_b.client.put("/api/admin/users/240999", json={"role": "user"}, headers=h)                     # back to an employee
     assert r.status_code == 200 and r.get_json()["user"]["role"] == "user"
     assert not repo.directory.is_att_admin(repo.directory.store.get_user("240999"))

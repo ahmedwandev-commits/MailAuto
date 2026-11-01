@@ -423,6 +423,22 @@ def _clean_teams(value, role, current_teams=()):
     return out
 
 
+TEAM_ROLES = ("user", "manager", "attendance")
+
+
+def _require_team(user):
+    """Owner (v5.17): nobody - employee, manager or administrative affairs - is without a team. "Unclassified" is an e-mail inbox,
+    not a team; a manager may follow every team instead. An inactive account is not checked (it can be disabled as it is)."""
+    if user.get("role") not in TEAM_ROLES or not user.get("active", True):
+        return
+    teams = user_teams(user)
+    if user["role"] == "manager" and teams == [ALL_TEAMS_MARK]:
+        return
+    if not any(t != ALL_TEAMS_MARK and t.casefold() != UNCLASSIFIED.casefold() for t in teams):
+        raise ApiError("Choose the person's team: every employee, manager and administrative-affairs account belongs to a team "
+                       f"('{UNCLASSIFIED}' is an e-mail inbox, not a team).")
+
+
 def _email_in_use(email, users, own_uid=None):
     return any(u.get("email") == email and uid != own_uid for uid, u in users.items())
 
@@ -494,6 +510,7 @@ def create_user():
             raise ApiError(problem)
     else:
         password = generate_password()
+    _require_team({"role": "user", "active": True, **profile})
     try:
         user = auth.store().create_user(_new_user(uid, {"role": "user", **profile}, password))
     except StorageError as exc:
@@ -521,6 +538,8 @@ def update_user(uid):
         changes["active"] = bool(body["active"])
 
     def guard(users, after):
+        if any(k in changes for k in ("teams", "team", "role", "active")):
+            _require_team(after)                           # only when the edit touches the team, the role or re-enables the account
         if after.get("email") and _email_in_use(after["email"], users, uid):
             raise ApiError("Another account already uses that e-mail address.", 409)
         if uid == g.user["user_id"] and (not after.get("active", True) or after["role"] != "admin"):

@@ -117,12 +117,15 @@ def test_today_is_the_day_view_with_the_counters_and_the_teams(app, world, admin
         assert "Staffing" not in page and "Stand-by" in page and "Shifts" in page
 
 
-def test_manager_with_two_teams_can_switch_between_them(app, world, repo):
+def test_a_manager_with_two_teams_on_the_account_manages_one_workforce_team(app, world, repo):
+    """v5.17 (owner): in Workforce everybody is in ONE team - the first on the account unless the administrator chose another."""
     add_user(repo, "both", "manager", ["Team A", "Team B"])
     page = login(app, "both").get("/team?date=2026-10-12").get_data(as_text=True)
-    assert "Team A" in page and "Team B" in page and 'name="team"' in page
-    one = login(app, "both").get("/team?date=2026-10-12&team=Team%20B").get_data(as_text=True)
-    assert "Team B" in one and "Team A</b>" not in one
+    assert "Ali A1" in page and "Omar B1" not in page
+    assert login(app, "both").get("/team?date=2026-10-12&team=Team%20B").status_code == 403
+    repo.save_settings({"attendance_team_of": {"both": "Team B"}})
+    page = login(app, "both").get("/team?date=2026-10-12").get_data(as_text=True)
+    assert "Omar B1" in page and "Ali A1" not in page
 
 
 # ---------------------------------------------------------------- the removed screens

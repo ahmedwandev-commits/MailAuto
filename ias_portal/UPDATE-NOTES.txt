@@ -23,6 +23,13 @@ A. WORKFORCE IS ORGANISED BY TASK
    - Monthly shifts: click a name to see that person's days; long "not counted" lists are folded.
    - Team schedule: laid out week by week (every Sunday under the Sunday before).
    - Tables with buttons no longer break their row lines; buttons that looked like plain text are now buttons.
+   - ONE TEAM PER PERSON in Workforce: an account with several teams (for the E-mail module) counts once, in its first team,
+     or the one chosen in Settings > Staff & teams. "Unclassified" is an e-mail inbox, never a Workforce team. A manager
+     manages that one team (a manager set to "every team" still sees all).
+   - Nobody is without a team: Admin > Users refuses to save an employee, manager or administrative-affairs account without
+     a real team, and Staff & teams lists any account that has none.
+   - Administrative affairs: an account with this role and an HR number is on its team's roster (its own attendance and
+     allowance) and still sees Workforce only - no e-mail, tickets or anything else.
 
 B. MY ATTENDANCE (new) - every employee and supervisor sees their own month; managers also get a Team tab
    - Attendance: check-in, check-out, hours and overtime of every day.

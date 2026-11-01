@@ -187,3 +187,22 @@ def test_a_day_off_worked_eats_like_its_check_in_time():
     assert otd.meal_shift("09:30", start) == "morning" and otd.meal_shift("15:00", start) == "evening"
     assert otd.meal_shift("23:00", start) == "night" and otd.meal_shift("02:00", start) == "night"
     assert otd.meal_shift("07:05", lambda t: "morning") == "morning"
+
+
+# ---------------------------------------------------------------- one Workforce team per person (owner, v5.17)
+def test_one_workforce_team_unclassified_never_and_the_admin_chooses(app, world, repo, admin_b):
+    repo.directory.store.update_user("102", {"teams": ["Unclassified", "Team B", "Team A"]})
+    assert repo.get_employee(102)["teams"] == ["Team B"]                                   # the first real team; never "Unclassified"
+    page = admin_b.get("/admin/employees").get_data(as_text=True)
+    assert 'aria-label="Workforce team of Sara A2"' in page
+    assert admin_b.post("/admin/employees", {"user_id": "102", "team": "Team A"}).status_code == 302
+    assert repo.get_employee(102)["teams"] == ["Team A"]
+    assert admin_b.post("/admin/employees", {"user_id": "102", "team": "Unclassified"}).status_code == 400
+    assert admin_b.post("/admin/employees", {"user_id": "102", "team": "Team C"}).status_code == 400   # not on the account
+    assert sum(1 for e in repo.list_employees() if e["id"] == 102) == 1                    # listed once, never twice
+
+
+def test_an_account_without_a_team_is_flagged(app, world, repo, admin_b):
+    repo.directory.store.update_user("202", {"teams": ["Unclassified"]})
+    page = admin_b.get("/admin/employees").get_data(as_text=True)
+    assert "have no team" in page and "Nour B2" in page.split("have no team")[1]

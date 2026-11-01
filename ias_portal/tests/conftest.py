@@ -91,9 +91,9 @@ def admin(app):
 @pytest.fixture
 def make_employee(app, admin):
     """Create an employee through the API and return a signed-in Browser for them."""
-    def factory(uid, name="Employee", dept="Identity Management"):
-        r = admin.post("/api/admin/users", {"user_id": uid, "name": name, "department": dept,
-                                            "password": "TempPass123"})
+    def factory(uid, name="Employee", dept="Identity Management", teams=("Flex Cube",)):
+        r = admin.post("/api/admin/users", {"user_id": uid, "name": name, "department": dept,     # nobody is without a team (v5.17)
+                                            "password": "TempPass123", "teams": list(teams)})
         assert r.status_code == 201, r.get_json()
         b = Browser(app)
         b.login(uid, "TempPass123")

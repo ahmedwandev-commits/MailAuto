@@ -5,6 +5,7 @@ import re
 from flask import Blueprint, flash, g, jsonify, redirect, render_template, request, url_for
 
 from .. import auth
+from ...ops import overlay
 from ..services import scoring_service as sc, settings as settings_svc
 from ..services.schedule_service import ImportError_
 from ..domain import allowance as al, scoring
@@ -50,11 +51,9 @@ def _hhmm(text, label):
 
 def _team_names(repo):
     """Every team that has at least one active portal account (employees and managers), without the 'every team' marker."""
-    from ...ops import overlay
-    from ...ops.schemas import ALL_TEAMS_MARK
-    teams = {t.strip() for u in repo.directory.store.users().values() if u.get("active", True) and u.get("role") != "admin"
-             for t in overlay.user_teams(u) if t.strip() and t != ALL_TEAMS_MARK}
-    return sorted(teams, key=str.lower)
+    d = repo.directory
+    teams = {d.att_team(u).strip() for u in d.store.users().values() if u.get("active", True) and u.get("role") != "admin"}
+    return sorted((t for t in teams if t), key=str.lower)
 
 
 @bp.route("/admin/roles", methods=["GET", "POST"])
@@ -112,16 +111,39 @@ def roles():
                            att_admins=[u for u in candidates if u["att_admin"]], portal_admin=g.att_user.get("hub_role") == "admin")
 
 
-@bp.get("/admin/employees")
+@bp.route("/admin/employees", methods=["GET", "POST"])
 @auth.admin_required
 def employees():
-    """The roster is the portal's accounts: this page shows who the module sees and which team each person is in (read-only)."""
+    """The roster is the portal's accounts. In Workforce every person is in ONE team (owner, v5.17): the first team on the account,
+    or the one chosen here when the account has several (for the E-mail module); "Unclassified" is never a Workforce team."""
+    repo = auth.repo()
+    d = repo.directory
+    if request.method == "POST":
+        uid = (request.form.get("user_id") or "").strip()
+        u = d.store.get_user(uid)
+        team = (request.form.get("team") or "").strip()
+        if not u or team not in d.team_choices(u):
+            raise ImportError_("Choose one of the teams on that person's account.")
+        chosen = dict(settings_svc.load(repo).get("attendance_team_of") or {})
+        before = d.att_team(u)
+        chosen[uid] = team
+        repo.save_settings({"attendance_team_of": chosen})
+        auth.audit("attendance_team_set", "user", uid, {"previous": before, "new": team})
+        flash(f"{u.get('name') or uid} is now in {team} in Workforce.", "ok")
+        return redirect(url_for("att_admin.employees", q=request.form.get("q") or None))
     q = request.args.get("q", "").strip().lower()
-    emps = auth.repo().list_employees(False)
+    emps = repo.list_employees(False)
+    users = d.store.users()
+    for e in emps:
+        u = users.get(str(e["id"])) or {}
+        e["choices"] = d.team_choices(u)
+        e["account_teams"] = overlay.user_teams(u)
     if q:
-        emps = [e for e in emps if q in f"{e['id']} {e['name']} {' '.join(e['teams'])}".lower()]
+        emps = [e for e in emps if q in f"{e['id']} {e['name']} {' '.join(e['account_teams'])}".lower()]
+    no_team = sorted((u for u in users.values() if u.get("active", True) and u.get("role") in ("user", "manager", "attendance")
+                      and not d.att_teams(u)), key=lambda u: u.get("name") or u["user_id"])
     return render_template("attendance/admin_employees.html", emps=emps, q=q, teams=sorted({t for e in emps for t in e["teams"]}),
-                           include_managers=bool(auth.repo().get_settings().get("roster_include_managers", True)))
+                           no_team=no_team, include_managers=bool(repo.get_settings().get("roster_include_managers", True)))
 
 
 @bp.route("/admin/settings", methods=["GET", "POST"])

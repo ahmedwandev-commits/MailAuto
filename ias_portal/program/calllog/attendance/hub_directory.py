@@ -2,7 +2,8 @@
 
 * employee  = an active portal account with a numeric User ID (the HR employee number) and the role "user"
               (managers too when the administrator ticks "Include managers" in the attendance settings);
-* teams     = the teams on that account (``calllog.ops.overlay.user_teams``), exactly what the Calls / E-mail modules use;
+* teams     = the ONE Workforce team of that account (``att_team``: the administrator's choice, else the first team on the account;
+              never "Unclassified", which is an e-mail inbox) - the Calls / E-mail modules keep every team of the account;
 * access    = administrator -> admin; a portal account the administrator made General Manager -> gm; manager -> manager
               (own teams only); every other account has no attendance access.
 
@@ -108,8 +109,31 @@ class HubDirectory:
         return [self._view(u) for u in self.store.users().values() if u.get("active", True) and u.get("role") != "admin"]
 
     # ---------------------------------------------------------------- users (portal accounts seen through attendance roles)
+    # ---------------------------------------------------------------- the ONE Workforce team of a person (owner, v5.17)
+    # An account may carry several teams and "Unclassified" for the E-mail module; in Workforce every person - employee or manager -
+    # belongs to exactly one team: the one the administrator chose (Settings › Staff & teams), else the first team on the account.
+    # "Unclassified" is an e-mail inbox, never a Workforce team. The all-teams marker stays (a manager who must see every team).
+    def team_choices(self, u):
+        """The teams on the account that can be a Workforce team (no all-teams marker, no "Unclassified")."""
+        return [t for t in overlay.user_teams(u) if t != ALL_TEAMS_MARK and t.strip().casefold() != overlay.UNCLASSIFIED.casefold()]
+
+    def att_team(self, u):
+        """The person's single Workforce team ('' = none)."""
+        choices = self.team_choices(u)
+        chosen = (self.repo._get("settings.json", {}).get("attendance_team_of") or {}).get(str(u.get("user_id")))
+        if chosen and any(chosen.strip().casefold() == c.strip().casefold() for c in choices):
+            return next(c for c in choices if chosen.strip().casefold() == c.strip().casefold())
+        return choices[0] if choices else ""
+
+    def att_teams(self, u):
+        """The Workforce scope of an account: [ALL] for the all-teams marker, else its one team (or none)."""
+        if overlay.user_teams(u) == [ALL_TEAMS_MARK]:
+            return [ALL_TEAMS_MARK]
+        t = self.att_team(u)
+        return [t] if t else []
+
     def _view(self, u):
-        teams = overlay.user_teams(u)
+        teams = self.att_teams(u)
         return {"user_id": u["user_id"], "name": u.get("name") or u["user_id"], "role": self.role_of(u), "hub_role": u.get("role"),
                 "teams": teams, "active": u.get("active", True), "must_change_password": bool(u.get("must_change_password")),
                 "department": u.get("department", ""), "can_allowance": self.can_allowance(u),
@@ -129,7 +153,7 @@ class HubDirectory:
         """Every active portal account on ``team`` (any role): the people the administrator picks the team manager(s) from."""
         t = (team or "").strip().lower()
         rows = [u for u in self.store.users().values() if u.get("active", True) and u.get("role") != "admin"
-                and any(x.strip().lower() == t for x in overlay.user_teams(u))]
+                and self.att_team(u).strip().lower() == t]
         return sorted((self._view(u) for u in rows), key=lambda v: (v["hub_role"] != "manager", v["name"]))
 
     def get_user(self, user_id):
@@ -155,10 +179,12 @@ class HubDirectory:
         uid = u.get("user_id", "")
         if not uid.isdigit():
             return False
-        return u.get("role") == "user" or (u.get("role") == "manager" and self._include_managers())
+        # an administrative-affairs account is under a team too (owner, v5.17): on the roster like an employee, still seeing only Workforce
+        return u.get("role") in ("user", ATT_ROLE) or (u.get("role") == "manager" and self._include_managers())
 
     def _emp(self, u):
-        teams = [t for t in overlay.user_teams(u) if t != ALL_TEAMS_MARK]
+        t1 = self.att_team(u)
+        teams = [t1] if t1 else []                              # one Workforce team per person (owner, v5.17)
         return {"id": int(u["user_id"]), "name": u.get("name") or u["user_id"], "department": u.get("department", ""), "sector": "",
                 "team": teams[0] if teams else "", "teams": teams, "active": bool(u.get("active", True)),
                 "created_at": u.get("created_at")}

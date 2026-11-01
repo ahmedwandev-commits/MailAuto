@@ -11,9 +11,8 @@ from conftest import Browser
 
 # ----------------------------------------------------------------------------------------------------------- helpers
 def make_user(app, admin, uid, role="user", teams=None, email=None):
-    body = {"user_id": uid, "name": uid.title(), "department": "X", "password": "TempPass123", "role": role}
-    if teams is not None:
-        body["teams"] = teams
+    body = {"user_id": uid, "name": uid.title(), "department": "X", "password": "TempPass123", "role": role,
+            "teams": ["Flex Cube"] if teams is None else teams}                         # nobody is without a team (v5.17)
     if email:
         body["email"] = email
     r = admin.post("/api/admin/users", body)
@@ -188,7 +187,7 @@ def test_collector_failures_on_the_timeline_are_for_administrators_only(app, adm
     ops.add_events([events.job_event("email", "2026-10-11T08:00:00", False, True, "C:\\share\\secret path: access denied"),
                     {"ts": "2026-10-11T08:05:00", "module": "itsm", "level": "info", "kind": "itsm_new", "text": "1 new X",
                      "items": [{"number": "CO1", "summary": "s", "role": "IMP Card Management"}], "count": 1}])
-    allteams = make_user(app, admin, "mgrall", role="manager", teams=[], email="all@x.test")
+    allteams = make_user(app, admin, "mgrall", role="manager", teams=["__all__"], email="all@x.test")   # every team (v5.17: no team is refused)
     kinds = [e["kind"] for e in allteams.get("/api/ops/events?day=2026-10-11").get_json()["events"]]
     assert kinds == ["itsm_new"]
     kinds = [e["kind"] for e in admin.get("/api/ops/events?day=2026-10-11").get_json()["events"]]

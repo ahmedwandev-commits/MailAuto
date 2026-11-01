@@ -78,7 +78,9 @@ def test_manager_scope_comes_from_the_teams_on_the_portal_account(app, world, re
     ids = lambda who: {x["employee_id"] for x in login(app, who).get("/api/overview?date=2026-10-12").get_json()["rows"]}      # noqa: E731
     assert ids("none") == set()                                                               # never "everything" by accident
     assert ids("all") == {101, 102, 201, 202}
-    assert ids("both") == {101, 102, 201, 202}
+    assert ids("both") == {101, 102}                                                          # one Workforce team: the first (v5.17)
+    add_user(repo, "uncl", "manager", ["Unclassified", "Team B"])                             # "Unclassified" is e-mail only
+    assert ids("uncl") == {201, 202}
     assert ids("mgr1") == {101, 102} and ids("mgr2") == {201, 202}
     assert login(app, "none").get("/employee/101").status_code == 403
 
