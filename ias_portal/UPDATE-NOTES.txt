@@ -1,3 +1,59 @@
+IAS PORTAL v5.17 - WHAT IS NEW
+==============================
+
+HOW TO UPDATE (your data is kept)
+  1. Stop run.py and collector.py.
+  2. Copy everything inside "program" over the old program folder. This package has NO data folder, NO .secret_key
+     and NO collector_config.json, so your users, history, settings and collector passwords are never touched.
+  3. Start run.py, then collector.py.
+  4. Settings > Rules & allowance: check "Amount per day" (100 / 150 / 200 / 300 are the new defaults - an amount you
+     saved before is kept) and the new "Overtime & meals" section.
+
+A. WORKFORCE IS ORGANISED BY TASK
+   - Side menu: Today · My attendance · Schedule · Leave · Allowance (+ Imports for administrators).
+     Schedule = Monthly calendar · Weekly plan · Team schedule · Shift changes. Leave = Leave · Compensatory days.
+     Allowance = Monthly shifts (the manager approves) · Confirmation · Allowance sheet (the export).
+   - The imports have their own tab bar (Monthly schedule · HR attendance · Name mapping · HR numbers · Import history),
+     separate from Settings.
+   - "Modification" is now called "Shift changes" everywhere.
+   - Today: the status bar no longer repeats the numbers of the counters under it.
+   - My schedule: the 14-day table (a copy of the month table) is now 7 small day tiles.
+   - Leave: "Entitlement & opening balance" opens from the Balances card (it was a loose form at the end of the page).
+   - Settings: a bar of links at the top jumps to each part of the long page.
+   - Monthly shifts: click a name to see that person's days; long "not counted" lists are folded.
+   - Team schedule: laid out week by week (every Sunday under the Sunday before).
+   - Tables with buttons no longer break their row lines; buttons that looked like plain text are now buttons.
+
+B. MY ATTENDANCE (new) - every employee and supervisor sees their own month; managers also get a Team tab
+   - Attendance: check-in, check-out, hours and overtime of every day.
+   - Shift allowance (expected, in EGP): the transport allowance of every counted shift (morning 100, evening 150,
+     night 200, rest day / holiday 300) + meals (morning = breakfast, evening = evening meal, night = dinner; a day of
+     10 hours or more = lunch, 100 each). A supervisor is paid the morning shift only, with its breakfast (+ the lunch
+     of a 10-hour day). "So far" from the HR attendance + "still expected" from the schedule.
+   - Overtime: starts after 8 hours of work. Before 18:00 x1, 18:00-22:00 x1.5, after 22:00 x1.75. A rest day or
+     holiday worked: every hour x2 when no comp day is taken within 7 days after it; with a comp day: no overtime,
+     only the 300. 2 hours come off every week; the month is capped at 40 % of 22 days x 8 h = 70.4 h, shown as a %.
+   - Every number above is editable: Settings > Rules & allowance > Overtime & meals.
+
+C. BUGS FIXED (whole application, 41 fixes - each has an automatic test)
+   - Schedule import: a name matching several employees gave the shifts to the first of them (now: skipped and listed).
+   - E-mail outbox: a mail queued while the collector was sending could be lost.
+   - Settings: two people saving rules at the same moment could overwrite each other.
+   - An employee could mark a teammate's assigned mail "Done".
+   - Records filter/export: the user filter could read other files of the data folder (path traversal).
+   - Files saved by Notepad (BOM) or briefly locked by antivirus no longer break the portal.
+   - "Current password" guesses are now limited like sign-in.
+   - Shift change in a month without a schedule, impossible dates (e.g. 30 Feb), shift types without times,
+     ?month=13 and other odd inputs no longer give an error page.
+   - The sector's allowance total counted a person in two teams twice; team comparisons now use judged days.
+   - Managers set to "all teams" can confirm the allowance and plan teams.
+   - The blank schedule template is no longer read as stand-by rows.
+   - Unattended start (--service) no longer waits for Enter after an error.
+   - The "Edit call" dialog's Save button is reachable on laptop screens; no dead "Reopen" on mails answered in Outlook.
+   - SLA engine paging, SLA analysis median and more (see the commit history).
+
+--------------------------------------------------------------------------------
+
 IAS PORTAL - WHAT IS NEW IN THIS UPDATE
 =======================================
 
