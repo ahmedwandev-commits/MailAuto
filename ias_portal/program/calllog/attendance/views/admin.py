@@ -211,6 +211,26 @@ def settings():
             auth.audit("settings_changed", "settings", "allowance", {"previous": {"allowance_rules": settings_svc.allowance_rules(old),
                                                                                   "allowance_use_schedule": old["allowance_use_schedule"],
                                                                                   "allowance_evening_after": old["allowance_evening_after"]}, "new": vals})
+        elif a == "overtime":                                  # v5.17: overtime and meals (My attendance)
+            vals, limits = {}, {"base_hours": (1, 24), "day_rate": (0, 5), "evening_rate": (0, 5), "night_rate": (0, 5), "holiday_rate": (0, 5),
+                                "comp_window_days": (0, 31), "weekly_deduction_hours": (0, 40), "cap_pct": (0, 200), "base_days": (1, 31),
+                                "long_day_hours": (1, 24), "meal_breakfast": (0, 100000), "meal_evening_meal": (0, 100000),
+                                "meal_dinner": (0, 100000), "meal_lunch": (0, 100000)}
+            for k, (lo, hi) in limits.items():
+                try:
+                    v = float(request.form.get("ot_" + k, settings_svc.OVERTIME_DEFAULTS[k]))
+                except ValueError as exc:
+                    raise ImportError_("Overtime & meals: enter numbers in the numeric fields.") from exc
+                if not lo <= v <= hi:
+                    raise ImportError_(f"Overtime & meals: {k.replace('_', ' ')} must be between {lo:g} and {hi:g}.")
+                vals[k] = int(v) if k in ("comp_window_days", "base_days") else v
+            for k in settings_svc.OVERTIME_TIMES:
+                vals[k] = _hhmm(request.form.get("ot_" + k) or settings_svc.OVERTIME_DEFAULTS[k], k.replace("_", " ").capitalize())
+            if not vals["evening_from"] < vals["night_from"]:
+                raise ImportError_("Overtime & meals: the evening rate must start before the night rate.")
+            old = settings_svc.load(repo)
+            repo.save_settings({"overtime_rules": vals})
+            auth.audit("settings_changed", "settings", "overtime", {"previous": settings_svc.overtime_rules(old), "new": vals})
         elif a == "team_plan":
             def addresses(field):
                 found = [x.strip() for x in re.split(r"[;,\s]+", request.form.get(field) or "") if x.strip()]
@@ -254,6 +274,7 @@ def settings():
                            leave_types=repo.list_leave_types(),
                            team_members={t: repo.directory.team_members(t) for t in _team_names(repo)},
                            allowance_rules=settings_svc.allowance_rules(st),
+                           ot=settings_svc.overtime_rules(st),
                            allowance_kinds=[(k, al.ENGLISH[k], k in al.SHIFT_KINDS) for k in al.KINDS],
                            team_pct_text="; ".join(f"{k}={v:g}" for k, v in st["min_staffing_pct_team"].items()),
                            shift_pct_text="; ".join(f"{k}={v:g}" for k, v in st["min_staffing_pct_shift"].items()),

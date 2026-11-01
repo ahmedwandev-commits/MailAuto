@@ -32,6 +32,18 @@ def month_bounds(ym):
     return f"{y}-{m:02d}-01", f"{y}-{m:02d}-{calendar.monthrange(y, m)[1]:02d}"
 
 
+def day_kind_fn(rule):
+    """row -> "official_holiday" | "rest_day" | None (a working day), from the HR day type or, when the row has none, the calendar."""
+    def day_kind(r):
+        dt = norm(r["day_type"]) if r.get("day_type") else ""
+        if rule.holiday(r["work_date"], dt):
+            return "official_holiday"
+        if dt in rule.rest_l or (not dt and date.fromisoformat(r["work_date"]).weekday() in rule.rest_days):
+            return "rest_day"
+        return None
+    return day_kind
+
+
 def compute(repo, d1, d2, employees):
     """The counted days and the not-counted days of ``employees`` (dicts with id / name) between two dates."""
     st = settings_svc.load(repo)
@@ -41,15 +53,7 @@ def compute(repo, d1, d2, employees):
     after = (date.fromisoformat(d2) + timedelta(days=1)).isoformat()            # a night shift ends on the next day's row
     att = apply_corrections(repo.attendance_records(d1, after, ids), repo.corrections(d1, after, ids))
 
-    def day_kind(r):
-        """From the HR day type (or, when the row has none, the calendar): an official holiday, a weekly rest day or a working day."""
-        dt = norm(r["day_type"]) if r.get("day_type") else ""
-        if rule.holiday(r["work_date"], dt):
-            return "official_holiday"
-        if dt in rule.rest_l or (not dt and date.fromisoformat(r["work_date"]).weekday() in rule.rest_days):
-            return "rest_day"
-        return None
-
+    day_kind = day_kind_fn(rule)
     plan = {}
     for e in repo.schedule_entries(d1, d2, ids):                                  # the shifts of the portal's schedule (imported or changed by a manager)
         kind = al.KIND_OF_CODE.get(e["shift_code"]) or ("normal" if e["shift_code"] == al.NORMAL_CODE else None)

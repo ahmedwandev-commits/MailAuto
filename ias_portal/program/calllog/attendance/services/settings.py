@@ -60,13 +60,38 @@ def load(repo):
 # start of the shift: from ``early`` minutes before ``start`` to ``grace`` minutes after it. A day worked on a weekly rest day or on an
 # official holiday (``rest_day`` / ``official_holiday``) is counted whatever the time, with the hours as a condition only when
 # ``needs_hours`` is on. ``allowance_evening_after`` and ``allowance_use_schedule`` are single settings (see domain/allowance.py).
-ALLOWANCE_DEFAULTS = {          # ``rate``: the amount paid for one such day (EGP), set by the administrator; 0 = not set
-    "morning": {"enabled": True, "start": "07:00", "early": 60, "grace": 15, "hours": 8, "rate": 0},
-    "evening": {"enabled": True, "start": "14:00", "early": 60, "grace": 15, "hours": 8, "rate": 0},
-    "night": {"enabled": True, "start": "22:00", "early": 60, "grace": 15, "hours": 8, "rate": 0},
-    "rest_day": {"enabled": True, "needs_hours": True, "hours": 8, "rate": 0},
-    "official_holiday": {"enabled": True, "needs_hours": True, "hours": 8, "rate": 0},
+ALLOWANCE_DEFAULTS = {          # ``rate``: the amount paid for one such day (EGP) - the transport allowance (owner, v5.17: 100 / 150 / 200 / 300)
+    "morning": {"enabled": True, "start": "07:00", "early": 60, "grace": 15, "hours": 8, "rate": 100},
+    "evening": {"enabled": True, "start": "14:00", "early": 60, "grace": 15, "hours": 8, "rate": 150},
+    "night": {"enabled": True, "start": "22:00", "early": 60, "grace": 15, "hours": 8, "rate": 200},
+    "rest_day": {"enabled": True, "needs_hours": True, "hours": 8, "rate": 300},
+    "official_holiday": {"enabled": True, "needs_hours": True, "hours": 8, "rate": 300},
 }
+
+
+# Overtime and meals (v5.17, owner's rules - see domain/overtime.py). Saved by the administrator under "overtime_rules".
+OVERTIME_DEFAULTS = {
+    "base_hours": 8,                # a working day's hours: overtime starts after them
+    "day_rate": 1.0,                # an overtime hour before evening_from
+    "evening_from": "18:00", "evening_rate": 1.5,
+    "night_from": "22:00", "night_rate": 1.75, "night_until": "06:00",
+    "holiday_rate": 2.0,            # every hour of a rest day / holiday worked with no comp day taken within comp_window_days
+    "comp_window_days": 7,
+    "weekly_deduction_hours": 2,    # taken off every week's overtime
+    "cap_pct": 40, "base_days": 22, # the month's overtime is at most cap_pct % of base_days x base_hours (40 % of 176 h = 70.4 h)
+    "long_day_hours": 10,           # a stay of this many hours earns a meal (lunch)
+    "meal_breakfast": 100, "meal_evening_meal": 100, "meal_dinner": 100, "meal_lunch": 100,   # EGP per meal
+}
+OVERTIME_TIMES = ("evening_from", "night_from", "night_until")
+
+
+def overtime_rules(st):
+    """The defaults with what the administrator saved on top (unknown keys are ignored)."""
+    out = dict(OVERTIME_DEFAULTS)
+    saved = st.get("overtime_rules") or {}
+    if isinstance(saved, dict):
+        out.update({k: v for k, v in saved.items() if k in OVERTIME_DEFAULTS})
+    return out
 
 
 def allowance_rules(st):

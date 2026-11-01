@@ -5,7 +5,7 @@
 {% call head('Settings', 'Attendance rules, shift types, holidays and leave types. Every change is audited.', 'sliders') %}{% endcall %}
 {# one long page of separate forms: a bar of links to jump to the part you need (each form still saves only its own part) #}
 <nav class="jumpbar" aria-label="Sections of this page">
-  <a href="#managers">{{ icon('users') }}Team managers</a><a href="#allowance">{{ icon('download') }}Shift allowance</a><a href="#team-plan">{{ icon('calendar') }}Team schedule e-mail</a>
+  <a href="#managers">{{ icon('users') }}Team managers</a><a href="#allowance">{{ icon('download') }}Shift allowance</a><a href="#overtime">{{ icon('bars') }}Overtime &amp; meals</a><a href="#team-plan">{{ icon('calendar') }}Team schedule e-mail</a>
   <a href="#rules">{{ icon('clock') }}Attendance rules</a><a href="#shift-types">{{ icon('layers') }}Shift types</a><a href="#holidays">{{ icon('calendar') }}Holidays</a><a href="#leave-types">{{ icon('plane') }}Leave types</a>
 </nav>
 {% call banner('t-warn', 'alert-triangle') %}<b>HR policy decisions needed.</b> None of these values comes from an HR document. The defaults assume the least (no grace, nothing penalised, no minimum staffing). Management should confirm each one.{% endcall %}
@@ -65,6 +65,40 @@
     <label class="field">Currency<input name="currency" value="{{ st.allowance_currency }}" size="6"></label>
   </div>
   <div><button class="btn btn-primary" type="submit">{{ icon('check') }}Save allowance settings</button></div>
+</form>
+
+{# v5.17: overtime and meals - the numbers of My attendance (the transport allowance per day is the "Amount per day" above) #}
+<form method="post" class="card stack" id="overtime">{{ csrf() }}<input type="hidden" name="action" value="overtime">
+  <div class="card-head"><h2>{{ icon('bars') }}Overtime &amp; meals</h2><span class="hint">Used by My attendance. The transport allowance of each day is the “Amount per day” of the Shift allowance above.</span></div>
+  <h3>Overtime of a working day</h3>
+  <div class="form-grid">
+    <label class="field">Overtime starts after (hours of work)<input name="ot_base_hours" value="{{ ot.base_hours|num(2) }}" inputmode="decimal" size="5"></label>
+    <label class="field">Rate before the evening<input name="ot_day_rate" value="{{ ot.day_rate|num(2) }}" inputmode="decimal" size="5"></label>
+    <label class="field">Evening rate from (HH:MM)<input name="ot_evening_from" value="{{ ot.evening_from }}" size="6"></label>
+    <label class="field">Evening rate<input name="ot_evening_rate" value="{{ ot.evening_rate|num(2) }}" inputmode="decimal" size="5"></label>
+    <label class="field">Night rate from (HH:MM)<input name="ot_night_from" value="{{ ot.night_from }}" size="6"></label>
+    <label class="field">Night rate<input name="ot_night_rate" value="{{ ot.night_rate|num(2) }}" inputmode="decimal" size="5"></label>
+    <label class="field">Night rate until (HH:MM)<input name="ot_night_until" value="{{ ot.night_until }}" size="6"></label>
+  </div>
+  <h3>Rest days and holidays, the week and the month</h3>
+  <div class="form-grid">
+    <label class="field">Rest day / holiday worked, no comp day: rate<input name="ot_holiday_rate" value="{{ ot.holiday_rate|num(2) }}" inputmode="decimal" size="5"></label>
+    <label class="field">Comp day counts within (days after)<input name="ot_comp_window_days" value="{{ ot.comp_window_days }}" inputmode="numeric" size="5"></label>
+    <label class="field">Hours taken off every week<input name="ot_weekly_deduction_hours" value="{{ ot.weekly_deduction_hours|num(2) }}" inputmode="decimal" size="5"></label>
+    <label class="field">Monthly cap (% of a normal month)<input name="ot_cap_pct" value="{{ ot.cap_pct|num(2) }}" inputmode="decimal" size="5"></label>
+    <label class="field">Working days of a normal month<input name="ot_base_days" value="{{ ot.base_days }}" inputmode="numeric" size="5"></label>
+  </div>
+  <p class="small muted">With these values a normal month is {{ (ot.base_days * ot.base_hours)|num }} h and the overtime is capped at {{ (ot.base_days * ot.base_hours * ot.cap_pct / 100)|num }} h.</p>
+  <h3>Meals ({{ st.allowance_currency }})</h3>
+  <div class="form-grid">
+    <label class="field">Breakfast (morning shift)<input name="ot_meal_breakfast" value="{{ ot.meal_breakfast|num(2) }}" inputmode="decimal" size="6"></label>
+    <label class="field">Evening meal (evening shift)<input name="ot_meal_evening_meal" value="{{ ot.meal_evening_meal|num(2) }}" inputmode="decimal" size="6"></label>
+    <label class="field">Dinner (night shift)<input name="ot_meal_dinner" value="{{ ot.meal_dinner|num(2) }}" inputmode="decimal" size="6"></label>
+    <label class="field">Lunch (a long day)<input name="ot_meal_lunch" value="{{ ot.meal_lunch|num(2) }}" inputmode="decimal" size="6"></label>
+    <label class="field">A long day is (hours of work)<input name="ot_long_day_hours" value="{{ ot.long_day_hours|num(2) }}" inputmode="decimal" size="5"></label>
+  </div>
+  <p class="small muted">A supervisor (manager) gets the breakfast of a morning shift only; anybody who works a long day gets the lunch too.</p>
+  <div><button class="btn btn-primary" type="submit">{{ icon('check') }}Save overtime &amp; meals</button></div>
 </form>
 
 <form method="post" class="card stack" id="team-plan">{{ csrf() }}<input type="hidden" name="action" value="team_plan">

@@ -1,0 +1,140 @@
+"""My attendance (v5.17): overtime (clock bands, holidays and comp days, the weekly deduction, the 40 % cap), the expected shift
+allowance (transport + meals, supervisors morning only) and who may see what."""
+from datetime import datetime
+
+import pytest
+
+from calllog.attendance.domain import overtime as otd
+from calllog.attendance.services import overtime_service as ots
+from calllog.attendance.services import settings as settings_svc
+
+from .support import add_employees, add_user, login
+
+OT = dict(settings_svc.OVERTIME_DEFAULTS)
+
+
+def dt(s):
+    return datetime.fromisoformat(s)
+
+
+# ---------------------------------------------------------------- the rules (pure)
+def test_overtime_starts_after_8_hours_and_is_weighted_by_the_clock():
+    w = otd.working_day_overtime(dt("2026-10-13T07:00"), dt("2026-10-13T21:00"), OT)     # 15-18 x1, 18-21 x1.5
+    assert w["minutes"] == {"day": 180, "evening": 180, "night": 0}
+    assert w["raw"] == 6 and w["weighted"] == pytest.approx(3 + 4.5)
+    w = otd.working_day_overtime(dt("2026-10-13T14:00"), dt("2026-10-13T23:30"), OT)     # 22:00-23:30 x1.75
+    assert w["minutes"]["night"] == 90 and w["weighted"] == pytest.approx(1.5 * 1.75)
+    w = otd.working_day_overtime(dt("2026-10-13T16:00"), dt("2026-10-14T02:00"), OT)     # over midnight: 00-02 night
+    assert w["minutes"] == {"day": 0, "evening": 0, "night": 120}
+    assert otd.working_day_overtime(dt("2026-10-13T08:00"), dt("2026-10-13T16:00"), OT)["raw"] == 0     # exactly 8 h: none
+
+
+def test_a_night_shift_runs_into_the_day_rate_after_night_until():
+    w = otd.working_day_overtime(dt("2026-10-13T22:00"), dt("2026-10-14T09:00"), OT)     # OT from 06:00: day rate
+    assert w["minutes"] == {"day": 180, "evening": 0, "night": 0}
+
+
+def test_a_holiday_worked_counts_double_unless_a_comp_day_is_taken():
+    assert otd.holiday_overtime(8, False, OT) == {"raw": 8, "weighted": 16}
+    assert otd.holiday_overtime(8, True, OT) == {"raw": 0, "weighted": 0}
+
+
+def test_two_hours_come_off_every_week_and_the_month_is_capped_at_40_percent():
+    days = [{"date": f"2026-10-{d:02d}", "raw": 1, "weighted": 1} for d in (11, 12)]            # one week: 2 h -> 0 after the deduction
+    t = otd.month_totals(days, OT, 6)
+    assert [w["net"] for w in t["weeks"]] == [0] and t["deducted"] == 2
+    days = [{"date": f"2026-10-{d:02d}", "raw": 5, "weighted": 5} for d in range(1, 32)]        # 155 h in 5 weeks
+    t = otd.month_totals(days, OT, 6)
+    assert len(t["weeks"]) == 5 and t["deducted"] == 10 and t["net"] == 145
+    assert t["cap"] == pytest.approx(70.4) and t["capped"] == pytest.approx(70.4) and t["over_cap"] == pytest.approx(74.6)
+    assert t["pct"] == pytest.approx(40.0) and t["base_hours_month"] == 176
+
+
+def test_meals_by_shift_supervisors_breakfast_only_and_a_lunch_for_a_long_day():
+    assert otd.meals_of("morning", False, 8, OT) == ["breakfast"]
+    assert otd.meals_of("evening", False, 8, OT) == ["evening_meal"]
+    assert otd.meals_of("night", False, 9, OT) == ["dinner"]
+    assert otd.meals_of("evening", True, 8, OT) == []                                             # a supervisor: morning only
+    assert otd.meals_of("morning", True, 10, OT) == ["breakfast", "lunch"]
+    assert otd.meals_of(None, False, 11, OT) == ["lunch"]                                         # any long day
+    assert otd.meals_of("rest_day", False, 8, OT) == []
+
+
+# ---------------------------------------------------------------- the month of a person
+def _long_day(repo):
+    a = repo.create_attendance_import({"filename": "b", "file_sha256": "b", "parsed": {}})
+    repo.commit_attendance_rows_atomic(a, [{"employee_id": 101, "work_date": "2026-10-13", "in_time": "07:00:00", "out_time": "21:00:00"}])
+
+
+def test_the_month_of_an_employee(app, world, repo):
+    _long_day(repo)
+    rep = ots.build(repo, [repo.get_employee(101)], "2026-10", "2026-10-14")[101]
+    d13 = next(d for d in rep["days"] if d["date"] == "2026-10-13")
+    assert d13["kind"] == "morning" and d13["transport"] == 100 and d13["meals"] == ["breakfast", "lunch"] and d13["meal_amount"] == 200
+    assert d13["weighted"] == pytest.approx(7.5) and not d13["expected"]
+    assert rep["so_far"]["transport"] == 100 and rep["so_far"]["meals"] == 200
+    assert all(d["expected"] for d in rep["days"] if d["date"] >= "2026-10-14")                 # the rest comes from the schedule
+    assert rep["rest"]["transport"] == 18 * 100 and rep["rest"]["meal_counts"]["breakfast"] == 18
+    assert rep["expected_total"] == rep["so_far"]["total"] + rep["rest"]["total"]
+    assert rep["overtime"]["net"] == pytest.approx(5.5)                                           # 7.5 h that week - 2 h
+
+
+def test_a_rest_day_worked_and_its_comp_day(app, world, repo):
+    a = repo.create_attendance_import({"filename": "c", "file_sha256": "c", "parsed": {}})
+    repo.commit_attendance_rows_atomic(a, [{"employee_id": 102, "work_date": "2026-10-09", "in_time": "08:00:00", "out_time": "16:00:00"}])   # a Friday
+    rep = ots.build(repo, [repo.get_employee(102)], "2026-10", "2026-10-14")[102]
+    d = next(x for x in rep["days"] if x["date"] == "2026-10-09")
+    assert d["day_kind"] == "rest_day" and d["transport"] == 300 and d["weighted"] == 16
+    c = repo.add_comp_day({"employee_id": 102, "earned_date": "2026-10-09", "reason": "t"})
+    repo.update_comp_day(c["id"] if isinstance(c, dict) else c, {"taken_date": "2026-10-12"})
+    rep = ots.build(repo, [repo.get_employee(102)], "2026-10", "2026-10-14")[102]
+    d = next(x for x in rep["days"] if x["date"] == "2026-10-09")
+    assert d["weighted"] == 0 and d["transport"] == 300 and "comp day" in d["note"]
+
+
+# ---------------------------------------------------------------- the page and who sees what
+def test_an_employee_sees_only_their_own_month(app, world, repo):
+    _long_day(repo)
+    b = login(app, "101")
+    for tab in ("attendance", "allowance", "overtime"):
+        page = b.get(f"/attendance/my/attendance?month=2026-10&tab={tab}").get_data(as_text=True)
+        assert "My attendance" in page and "Ali A1" in page and "Sara A2" not in page, tab
+    page = b.get("/attendance/my/attendance?month=2026-10&tab=team").get_data(as_text=True)               # no Team tab: back to their own
+    assert 'id="team-overtime"' not in page and 'id="my-attendance"' in page
+    nav = page.split('aria-label="Main"')[1].split("</nav>")[0]
+    assert ">My attendance<" in nav and ">My schedule<" in nav
+
+
+def test_a_manager_sees_their_own_month_and_their_team_only(app, world, repo):
+    add_user(repo, "301", "manager", ["Team A"], name="Mona Boss")                             # a manager with an HR number
+    b = login(app, "301")
+    page = b.get("/attendance/my/attendance?month=2026-10").get_data(as_text=True)
+    assert 'id="my-attendance"' in page and "Mona Boss" in page
+    team = b.get("/attendance/my/attendance?month=2026-10&tab=team").get_data(as_text=True)
+    assert "Ali A1" in team and "Sara A2" in team and "Omar B1" not in team and "Supervisor" in team
+    nav = page.split('aria-label="Main"')[1].split("</nav>")[0]
+    assert ">My attendance<" in nav
+
+
+def test_a_manager_without_an_hr_number_gets_the_team_tab(app, world, repo, mgr1_b):
+    page = mgr1_b.get("/attendance/my/attendance?month=2026-10").get_data(as_text=True)
+    assert 'id="team-overtime"' in page and "Ali A1" in page and "Omar B1" not in page
+
+
+def test_the_administrator_sets_the_overtime_rules(app, world, repo, admin_b):
+    form = {"action": "overtime", **{f"ot_{k}": v for k, v in settings_svc.OVERTIME_DEFAULTS.items()}}
+    form["ot_evening_rate"], form["ot_meal_lunch"] = "1.6", "120"
+    assert admin_b.post("/admin/settings", form).status_code == 302
+    ot = settings_svc.overtime_rules(settings_svc.load(repo))
+    assert ot["evening_rate"] == 1.6 and ot["meal_lunch"] == 120 and ot["night_from"] == "22:00"
+    bad = {**form, "ot_cap_pct": "abc"}
+    assert admin_b.post("/admin/settings", bad).status_code == 400
+    bad = {**form, "ot_evening_from": "23:00"}                                                  # after the night rate
+    assert admin_b.post("/admin/settings", bad).status_code == 400
+    page = admin_b.get("/admin/settings").get_data(as_text=True)
+    assert 'id="overtime"' in page and "70.4" in page
+
+
+def test_month_parameter_is_safe():
+    assert ots.month_of("2026-13", "2026-10-14") == "2026-10" and ots.month_of("x", "2026-10-14") == "2026-10"
+    assert ots.month_of("2026-02", "2026-10-14") == "2026-02"

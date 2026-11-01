@@ -15,6 +15,7 @@
 {% set att_settings = ap is not none and ap.startswith(('/admin/settings', '/admin/scoring', '/admin/employees', '/admin/roles')) %}
 {% set att_imports = ap is not none and ap.startswith(('/schedule/import', '/schedule/names', '/schedule/history', '/hr/import', '/hr/history', '/hr/links', '/imports/history')) %}
 {% set att_audit = ap is not none and ap.startswith('/admin/audit') %}
+{% set att_myatt = ap is not none and ap.startswith('/my/attendance') %}
 {% set att_analysis = ap is not none and (ap == '/employees' or ap.startswith(('/reports', '/analytics'))) %}
 {% macro alink(href, label, on, path) -%}
 <a class="op-nav-link" href="{{ href }}"{% if on %} aria-current="page"{% endif %}><svg class="op-nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="{{ path }}"/></svg><span class="op-nav-tx">{{ label }}</span></a>
@@ -33,9 +34,11 @@
 {%- endmacro %}
 {% set IC_LEAVE = 'M3 13l7-1 4-8 2 1-2 8 6 1 1 2-7 1-3 5-2-1 1-5-6 0z' %}
 {% set IC_UPLOAD = 'M12 15V3M7 8l5-5 5 5M5 21h14' %}
+{% set IC_CLOCK = 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2' %}
 {% macro workforce(analysis_here=False) -%}
 <div class="op-nav-sec">Workforce</div>
 {{ alink('/attendance/planning/day', 'Today', att_today, IC_TODAY) }}
+{{ alink('/attendance/my/attendance', 'My attendance', att_myatt, IC_CLOCK) }}
 {{ alink('/attendance/schedule', 'Schedule', att_sched, IC_GRID) }}
 {{ alink('/attendance/leave', 'Leave', att_leave, IC_LEAVE) }}
 {% if att_role in ('admin', 'gm', 'manager') %}{{ alink('/attendance/monthly-shifts', 'Allowance', att_allow, IC_CHECK) }}{% elif att_can_allowance %}{{ alink('/attendance/allowance', 'Allowance', att_allow, IC_ALLOW) }}{% endif %}
@@ -78,7 +81,8 @@
     <a class="op-nav-link" href="/my/email"{% if here == '/my/email' %} aria-current="page"{% endif %}><svg class="op-nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg><span class="op-nav-tx">E-mail</span></a>
     {% if att_role == 'gm' %}{{ workforce(True) }}
     {% elif att_can_open %}<div class="op-nav-sec">Workforce</div>
-    {% if att_role == 'employee' or (att_role == 'allowance' and att_is_employee) %}{{ alink('/attendance/my', 'My schedule', ap is not none and ap.startswith('/my'), IC_TODAY) }}{% endif %}
+    {% if att_role == 'employee' or (att_role == 'allowance' and att_is_employee) %}{{ alink('/attendance/my', 'My schedule', ap is not none and ap.startswith('/my') and not att_myatt, IC_TODAY) }}
+    {{ alink('/attendance/my/attendance', 'My attendance', att_myatt, IC_CLOCK) }}{% endif %}
     {% if att_can_allowance %}{{ alink('/attendance/allowance', 'Shift allowance', att_allow, IC_ALLOW) }}{% endif %}
     {{ guide_link() }}{% endif %}
     {% endif %}

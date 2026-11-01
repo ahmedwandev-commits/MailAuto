@@ -68,14 +68,15 @@ def approve(b, month="2026-09", team="Team A"):
 # ---------------------------------------------------------------- the rules of the settings
 def test_the_rules_have_an_amount_per_day_set_in_the_settings():
     assert [(k, RULES[k]["start"], RULES[k]["hours"]) for k in ("morning", "evening", "night")] == [("morning", "07:00", 8), ("evening", "14:00", 8), ("night", "22:00", 8)]
-    assert all(r["rate"] == 0 and "basis" not in r for r in RULES.values()) and "normal" not in RULES    # v5.16: owner's amount, 0 until set
+    assert [RULES[k]["rate"] for k in ("morning", "evening", "night", "rest_day", "official_holiday")] == [100, 150, 200, 300, 300]   # v5.17: owner's amounts
+    assert all("basis" not in r for r in RULES.values()) and "normal" not in RULES
 
 
 def test_the_first_version_of_the_settings_is_kept_and_old_money_is_ignored():
     old = {"allowance_grace_minutes": 30, "allowance_hours": 7, "allowance_rates": {"morning": 5}, "allowance_holiday_needs_hours": False,
            "allowance_rules": {"morning": {"rate": 9, "basis": "hour", "start": "06:30"}}}
     r = settings_svc.allowance_rules(old)
-    assert (r["morning"]["grace"], r["night"]["hours"], r["morning"]["start"]) == (30, 7, "06:30") and r["morning"]["rate"] == 0 and "basis" not in r["morning"]
+    assert (r["morning"]["grace"], r["night"]["hours"], r["morning"]["start"]) == (30, 7, "06:30") and r["morning"]["rate"] == settings_svc.ALLOWANCE_DEFAULTS["morning"]["rate"] and "basis" not in r["morning"]
     assert settings_svc.allowance_rules({"allowance_rules": {"night": {"rate": 120}}})["night"]["rate"] == 120     # today's amount per day
     assert r["rest_day"]["needs_hours"] is False and r["rest_day"]["hours"] == 7
 

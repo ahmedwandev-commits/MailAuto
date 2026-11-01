@@ -17,7 +17,7 @@ def init_app(app):
     from . import auth
     from .services.access import Forbidden
     from .services.schedule_service import ImportError_
-    from .views import (admin, allowance, attendance, confirm, gm, mine, people, planning, register_filters, schedule, shifts,
+    from .views import (admin, allowance, attendance, confirm, gm, mine, myatt, people, planning, register_filters, schedule, shifts,
                         team_plan)
 
     store = app.extensions["store"]
@@ -28,7 +28,7 @@ def init_app(app):
     app.extensions["att_repo"] = repo
 
     register_filters(app)
-    for mod in (gm, planning, schedule, attendance, people, admin, allowance, mine, shifts, confirm, team_plan):
+    for mod in (gm, planning, schedule, attendance, people, admin, allowance, mine, myatt, shifts, confirm, team_plan):
         app.register_blueprint(mod.bp, url_prefix=PREFIX)
 
     @app.before_request
@@ -50,7 +50,7 @@ def init_app(app):
         if view["role"] in ("allowance", "employee"):
             # an employee opens only their own schedule; an account with the allowance export also that page. Nothing else.
             bp_name = request.blueprint or ""
-            allowed = (bp_name == "att_mine" and view["is_employee"]) or (bp_name == "att_allowance" and view["can_allowance"])
+            allowed = (bp_name in ("att_mine", "att_myatt") and view["is_employee"]) or (bp_name == "att_allowance" and view["can_allowance"])
             if not allowed:
                 if request.path.rstrip("/") == PREFIX:                           # the portal's Attendance link
                     return redirect(url_for("att_mine.index" if view["is_employee"] else "att_allowance.index"))
