@@ -34,8 +34,25 @@ def requirements_hash():
     return hashlib.sha256(REQUIREMENTS.read_bytes()).hexdigest()
 
 
+PACKAGES = ("flask", "waitress", "openpyxl")
+
+
+def libs_work():
+    """Do the packages really import with THIS Python? A 'libs' folder filled by a newer Python may not (for example click 8.2+
+    needs Python 3.10): then they are installed again for this Python instead of the server crashing at start."""
+    try:
+        for name in PACKAGES:
+            importlib.import_module(name)
+        return True
+    except Exception:                        # SyntaxError / ImportError of a version made for another Python
+        for mod in [m for m in sys.modules if m.split(".")[0] in (*PACKAGES, "click", "werkzeug", "jinja2", "markupsafe",
+                                                                     "itsdangerous", "blinker", "et_xmlfile")]:
+            del sys.modules[mod]             # the half-imported modules must not stay behind for the fresh install
+        return False
+
+
 def needs_install():
-    if not all(importlib.util.find_spec(name) for name in ("flask", "waitress", "openpyxl")):
+    if not all(importlib.util.find_spec(name) for name in PACKAGES) or not libs_work():
         return True
     try:  # packages were installed into 'libs' for an older requirements.txt
         return STAMP.read_text().strip() != requirements_hash()
