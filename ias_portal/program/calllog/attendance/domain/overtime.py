@@ -17,7 +17,7 @@ The **week and the month**
   week's weighted overtime, never below 0. The month is capped at ``cap_pct`` (40 %) of a normal month: ``base_days`` (22) days ×
   ``base_hours`` (8) = 176 h -> 70.4 h. The percentage shown is the month's (capped) overtime of those 176 h.
 **Meals** of a day the shift allowance counts
-  An employee: morning -> breakfast, evening -> evening meal, night -> dinner. A supervisor (a manager) is paid the morning shift only,
+  An employee: morning -> breakfast, evening -> lunch, night -> dinner (a counted shift of 8 hours is enough). A supervisor (a manager) is paid the morning shift only,
   so: morning -> breakfast. A rest day / holiday worked eats like the shift of its check-in time. Anybody who stays ``long_day_hours``
   (10) hours or more gets one more meal (lunch), on any day.
 """
@@ -26,7 +26,7 @@ from datetime import date, datetime, timedelta
 BANDS = ("day", "evening", "night")
 SHIFT_MEAL = {"morning": "breakfast", "evening": "evening_meal", "night": "dinner"}
 MEALS = ("breakfast", "evening_meal", "dinner", "lunch")
-MEAL_NAMES = {"breakfast": "Breakfast", "evening_meal": "Evening meal", "dinner": "Dinner", "lunch": "Lunch (10 h day)"}
+MEAL_NAMES = {"breakfast": "Breakfast", "evening_meal": "Lunch", "dinner": "Dinner", "lunch": "Extra meal (10 h day)"}   # keys kept for the saved prices
 
 
 def _min(hhmm):

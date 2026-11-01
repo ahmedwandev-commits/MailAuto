@@ -93,12 +93,12 @@
   <h3>Meals ({{ st.allowance_currency }})</h3>
   <div class="form-grid">
     <label class="field">Breakfast (morning shift)<input name="ot_meal_breakfast" value="{{ ot.meal_breakfast|num(2) }}" inputmode="decimal" size="6"></label>
-    <label class="field">Evening meal (evening shift)<input name="ot_meal_evening_meal" value="{{ ot.meal_evening_meal|num(2) }}" inputmode="decimal" size="6"></label>
+    <label class="field">Lunch (evening shift)<input name="ot_meal_evening_meal" value="{{ ot.meal_evening_meal|num(2) }}" inputmode="decimal" size="6"></label>
     <label class="field">Dinner (night shift)<input name="ot_meal_dinner" value="{{ ot.meal_dinner|num(2) }}" inputmode="decimal" size="6"></label>
-    <label class="field">Lunch (a long day)<input name="ot_meal_lunch" value="{{ ot.meal_lunch|num(2) }}" inputmode="decimal" size="6"></label>
+    <label class="field">Extra meal (a long day)<input name="ot_meal_lunch" value="{{ ot.meal_lunch|num(2) }}" inputmode="decimal" size="6"></label>
     <label class="field">A long day is (hours of work)<input name="ot_long_day_hours" value="{{ ot.long_day_hours|num(2) }}" inputmode="decimal" size="5"></label>
   </div>
-  <p class="small muted">A supervisor (manager) gets the breakfast of a morning shift only; anybody who works a long day gets the lunch too.</p>
+  <p class="small muted">A supervisor (manager) gets the breakfast of a morning shift only; anybody who works a long day gets the extra meal too.</p>
   <div><button class="btn btn-primary" type="submit">{{ icon('check') }}Save overtime &amp; meals</button></div>
 </form>
 
