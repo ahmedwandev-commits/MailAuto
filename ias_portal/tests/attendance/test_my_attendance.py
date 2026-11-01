@@ -78,7 +78,10 @@ def test_the_month_of_an_employee(app, world, repo):
     assert d13["weighted"] == pytest.approx(7.5) and not d13["expected"]
     assert rep["so_far"]["transport"] == 100 and rep["so_far"]["meals"] == 200
     assert all(d["expected"] for d in rep["days"] if d["date"] >= "2026-10-14")                 # the rest comes from the schedule
-    assert rep["rest"]["transport"] == 18 * 100 and rep["rest"]["meal_counts"]["breakfast"] == 18
+    # the rest: 14..31 from the schedule + 1..11, whose HR sheet is not uploaded yet (only the 12th and the 13th are)
+    assert rep["rest"]["transport"] == 29 * 100 and rep["rest"]["meal_counts"]["breakfast"] == 29
+    assert next(d for d in rep["days"] if d["date"] == "2026-10-05")["note"] == "waiting for the HR sheet"
+    assert next(d for d in rep["days"] if d["date"] == "2026-10-12")["expected"] is False                  # uploaded: real (short day)
     assert rep["expected_total"] == rep["so_far"]["total"] + rep["rest"]["total"]
     assert rep["overtime"]["net"] == pytest.approx(5.5)                                           # 7.5 h that week - 2 h
 
@@ -96,11 +99,14 @@ def test_a_rest_day_worked_and_its_comp_day(app, world, repo):
     assert d["weighted"] == 0 and d["transport"] == 300 and "comp day" in d["note"]
 
 
-def test_the_comp_day_must_be_a_working_day_of_the_next_week():
+def test_the_comp_day_must_be_a_working_day_of_the_same_or_the_next_week():
     """Owner: worked Saturday 10 Oct -> a comp day counts on Sun 11 .. Thu 15 only; the next Friday / Saturday are rest days anyway."""
     assert otd.comp_window("2026-10-10", 6, {4, 5}, set()) == ["2026-10-11", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15"]
     assert otd.comp_window("2026-10-09", 6, {4, 5}, set()) == ["2026-10-11", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15"]
     assert otd.comp_window("2026-10-10", 6, {4, 5}, {"2026-10-13"}) == ["2026-10-11", "2026-10-12", "2026-10-14", "2026-10-15"]
+    # an official holiday on Tuesday 13 worked: Wed 14, Thu 15 of the same week and Sun 18 .. Thu 22 of the next one
+    assert otd.comp_window("2026-10-13", 6, {4, 5}, {"2026-10-13"}) == ["2026-10-14", "2026-10-15", "2026-10-18", "2026-10-19",
+                                                                      "2026-10-20", "2026-10-21", "2026-10-22"]
 
 
 @pytest.mark.parametrize("taken,counts", [("2026-10-16", False), ("2026-10-17", False), ("2026-10-15", True), ("2026-10-25", False)])
@@ -160,3 +166,16 @@ def test_the_administrator_sets_the_overtime_rules(app, world, repo, admin_b):
 def test_month_parameter_is_safe():
     assert ots.month_of("2026-13", "2026-10-14") == "2026-10" and ots.month_of("x", "2026-10-14") == "2026-10"
     assert ots.month_of("2026-02", "2026-10-14") == "2026-02"
+
+
+def test_a_day_uploaded_later_becomes_real(app, world, repo):
+    """The administrator may upload yesterday's sheet today: until then the day is expected, then it is counted from the sheet."""
+    emp = repo.get_employee(101)
+    before = ots.build(repo, [emp], "2026-10", "2026-10-14")[101]
+    d11 = next(d for d in before["days"] if d["date"] == "2026-10-11")
+    assert d11["expected"] and d11["note"] == "waiting for the HR sheet" and before["overtime"]["raw"] == 0
+    a = repo.create_attendance_import({"filename": "late", "file_sha256": "late", "parsed": {}})
+    repo.commit_attendance_rows_atomic(a, [{"employee_id": 101, "work_date": "2026-10-11", "in_time": "07:00:00", "out_time": "19:00:00"}])
+    after = ots.build(repo, [emp], "2026-10", "2026-10-14")[101]
+    d11 = next(d for d in after["days"] if d["date"] == "2026-10-11")
+    assert not d11["expected"] and d11["kind"] == "morning" and d11["raw"] == 4 and d11["meals"] == ["breakfast", "lunch"]

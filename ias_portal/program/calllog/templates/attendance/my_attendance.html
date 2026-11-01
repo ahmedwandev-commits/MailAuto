@@ -30,6 +30,8 @@
   {% call banner('t-warn', 'alert-triangle') %}<b>Your account is not linked to an HR employee number.</b> Your User ID must be your HR number for your own attendance to show. Ask an administrator.{% endcall %}
 {% else %}
 {% set o = rep.overtime %}
+{% set pending = rep.days|selectattr('note', 'equalto', 'waiting for the HR sheet')|list %}
+{% if pending and rep.data_loaded %}{% call banner('t-info', 'info') %}<b>{{ pending|length }} day(s) wait for the HR sheet</b> - until the administrator uploads them they are counted as expected from your schedule.{% endcall %}{% endif %}
 {% if not rep.data_loaded and rep.month <= today[:7] %}{% call banner('t-info', 'info') %}No HR attendance is loaded for this month yet: the days so far are empty, and the expected amounts come from your schedule.{% endcall %}{% endif %}
 
 {# ------------------------------------------------------------------------------------------------ Attendance #}
@@ -124,7 +126,7 @@
   {% else %}<tr><td colspan="7">{% call empty('check-circle', 'No overtime', 'No day of this month went beyond ' ~ rep.rules.base_hours|num ~ ' hours.') %}{% endcall %}</td></tr>{% endfor %}
   </tbody></table></div>
 </details>
-<p class="small muted">A rest day or an official holiday worked: with a comp day taken on a working day (Sunday to Thursday, not an official holiday) of the following week there is no overtime (only its shift allowance); without one - a day off on the next Friday or Saturday does not count - every hour counts ×{{ rep.rules.holiday_rate|num(2) }}.</p>
+<p class="small muted">A rest day or an official holiday worked: with a comp day taken on a working day (Sunday to Thursday, not an official holiday) after it in the same week or in the following week there is no overtime (only its shift allowance); without one - a day off on the next Friday or Saturday does not count - every hour counts ×{{ rep.rules.holiday_rate|num(2) }}.</p>
 {% endif %}
 {% endif %}
 

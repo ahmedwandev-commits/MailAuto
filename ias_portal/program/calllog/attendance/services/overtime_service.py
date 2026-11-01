@@ -81,6 +81,10 @@ def build(repo, employees, month, today):
     meal_price = {k: float(ot["meal_" + k]) for k in otd.MEALS}
     currency = st.get("allowance_currency") or "EGP"
     out = {}
+    # every number comes from the administrator's HR sheet (never from the portal sign-in, which only shows that somebody started
+    # working). A day whose sheet is not uploaded yet (the administrator may upload a day, two, or a week at once) is still expected
+    # from the schedule, and becomes real as soon as its sheet is uploaded.
+    loaded = repo.dates_with_attendance(d1, far)
     for emp in employees:
         eid, is_mgr = emp["id"], emp["id"] in managers
         rows = []
@@ -107,12 +111,14 @@ def build(repo, employees, month, today):
                         h = otd.holiday_overtime(row["stay"], bool(taken), ot)
                         row.update(raw=h["raw"], weighted=h["weighted"])
                         row["note"] = (f"comp day {taken[0]} - no overtime" if taken else
-                                       f"no comp day in the next working week - hours x{float(ot['holiday_rate']):g}")
+                                       f"no comp day in the same or the next working week - hours x{float(ot['holiday_rate']):g}")
                     else:
                         w = otd.working_day_overtime(tin, tout, ot, rule.rest_days)
                         row.update(raw=w["raw"], weighted=w["weighted"], bands=w["minutes"])
                 elif r.get("in_time"):
-                    row["note"] = "no check-out" if d < today else "at work"
+                    nd = (date.fromisoformat(d) + timedelta(days=1)).isoformat()
+                    row["note"] = ("waiting for the next day's HR sheet" if (planned == "N" or _night_checkin(r["in_time"])) and nd not in loaded
+                                   else "no check-out" if d < today else "at work")
                 if c:
                     row["kind"] = c["kind"]
                     row["transport"] = rate[c["kind"]]
@@ -121,6 +127,9 @@ def build(repo, employees, month, today):
                     row["expected"] = True                                    # today, still at work: the planned shift is expected
             elif d >= today:
                 row["expected"] = True
+            elif d not in loaded:                                              # a past day whose HR sheet is not uploaded yet
+                row["expected"] = True
+                row["note"] = "waiting for the HR sheet"
             if row["expected"] and not row["kind"] and planned:
                 kind = al.KIND_OF_CODE[planned]
                 if not is_mgr or kind == "morning":

@@ -32,9 +32,13 @@ B. MY ATTENDANCE (new) - every employee and supervisor sees their own month; man
      of a 10-hour day). "So far" from the HR attendance + "still expected" from the schedule.
    - Overtime: starts after 8 hours of work. Before 18:00 x1, 18:00-22:00 x1.5, after 22:00 x1.75. A rest day or
      holiday worked: every hour x2 when no comp day is taken on a working day (Sunday-Thursday, not an official
-     holiday) of the following week - a day off on the next Friday or Saturday does not count; with a comp day: no
+     holiday) after it in the same week or the following week - a day off on the next Friday or Saturday does not
+     count; with a comp day: no
      overtime, only the 300. The night rate ends at 07:00, at 08:00 on a Friday or Saturday morning.
      2 hours come off every week; the month is capped at 40 % of 22 days x 8 h = 70.4 h, shown as a %.
+   - Every number comes from the administrator's HR sheet only (signing in to the portal is not the arrival time). A past
+     day whose sheet is not uploaded yet shows "waiting for the HR sheet" and is counted as expected from the schedule;
+     it is recalculated as soon as the sheet is uploaded (a day, two days or a week at once).
    - Every number above is editable: Settings > Rules & allowance > Overtime & meals.
 
 C. BUGS FIXED (whole application, 41 fixes - each has an automatic test)
