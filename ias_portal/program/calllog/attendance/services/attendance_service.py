@@ -269,12 +269,22 @@ def cancel_import(repo, user, import_id):
 
 
 # ---------------------------------------------------------------- corrections, reports, reviews
+def _day(work_date):
+    """A real calendar date (YYYY-MM-DD) or a message to the user: a stored "2026-02-30" would break every page that reads the period."""
+    from datetime import date
+    try:
+        return date.fromisoformat(str(work_date or "").strip()).isoformat()
+    except ValueError as exc:
+        raise ImportError_("Choose a valid date.") from exc
+
+
 def correct_punch(repo, user, employee_id, work_date, field, new_value, reason, allow_clear=False):
     """Set one check-in / check-out time of a day (audited, with its reason). ``allow_clear``: an empty value removes it -
     with both removed the person has no attendance that day (an administrator's / manager's decision)."""
     access.require_employee(repo, user, employee_id)
     if not access.can_write(user):
         raise access.Forbidden("Read-only role.")
+    work_date = _day(work_date)
     if field not in ("in_time", "out_time"):
         raise ImportError_("Unknown field.")
     reason = (reason or "").strip()
@@ -298,6 +308,7 @@ def correct_punch(repo, user, employee_id, work_date, field, new_value, reason, 
 
 def report_forgotten_punch(repo, user, employee_id, work_date, kind, reason):
     access.require_employee(repo, user, employee_id)
+    work_date = _day(work_date)
     if kind not in ("in", "out", "both"):
         raise ImportError_("Choose in, out or both.")
     rid = repo.add_punch_report({"employee_id": employee_id, "work_date": work_date, "kind": kind,
@@ -321,6 +332,7 @@ def review_absence(repo, user, employee_id, work_date, decision, reason):
     access.require_employee(repo, user, employee_id)
     if not access.can_write(user):
         raise access.Forbidden("Read-only role.")
+    work_date = _day(work_date)
     if decision not in ("excused", "unexcused"):
         raise ImportError_("Decision must be excused or unexcused.")
     if not (reason or "").strip():
@@ -337,6 +349,7 @@ def review_permit(repo, user, employee_id, work_date, kind, decision, reason):
     emp = access.require_employee(repo, user, employee_id)
     if not access.can_write(user):
         raise access.Forbidden("Read-only role.")
+    work_date = _day(work_date)
     if kind not in ("late", "early") or decision not in ("provided", "excused", "rejected"):
         raise ImportError_("Choose the permit type and a decision.")
     if not (reason or "").strip():

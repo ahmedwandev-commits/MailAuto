@@ -51,6 +51,8 @@ def render(report, d1, d2, subtitle="", configured_font=None):
     keep = [i for i, c in enumerate(report["columns"]) if c not in PDF_SKIP_COLUMNS]
     columns = [report["columns"][i] for i in keep]
     rows = [[row[i] for i in keep] for row in report["rows"]]
+    if report.get("totals"):                     # the same totals line as the page and the Excel file
+        rows.append([report["totals"][i] for i in keep])
     ncol = len(columns)
     page = landscape(A3 if ncol > 14 else A4)
     buf = io.BytesIO()

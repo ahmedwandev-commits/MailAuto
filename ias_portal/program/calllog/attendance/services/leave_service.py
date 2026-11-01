@@ -21,20 +21,28 @@ def request_leave(repo, user, employee_id, leave_type, date_from, date_to, reaso
         raise ImportError_("Unknown leave type.")
     try:
         n = _days(date_from, date_to)
-    except ValueError as exc:
+        # stored as YYYY-MM-DD: the overlap check and every period filter compare the dates as text
+        date_from, date_to = date.fromisoformat(date_from).isoformat(), date.fromisoformat(date_to).isoformat()
+    except (TypeError, ValueError) as exc:
         raise ImportError_("Enter valid dates.") from exc
     if n < 1:
         raise ImportError_("The end date is before the start date.")
     try:
+        days = float(days) if days else float(n)
+    except (TypeError, ValueError) as exc:
+        raise ImportError_("Enter the number of days as a number.") from exc
+    if not 0 < days <= n:                  # a balance must never be charged more (or less than nothing) for the dates recorded
+        raise ImportError_(f"The number of days must be more than 0 and at most {n:g} for these dates.")
+    try:
         rid = repo.create_leave_request({"employee_id": employee_id, "leave_type": leave_type, "date_from": date_from,
-                                         "date_to": date_to, "days": float(days) if days else float(n), "status": "approved",
+                                         "date_to": date_to, "days": days, "status": "approved",
                                          "reason": (reason or "").strip(), "created_by": user["user_id"]})
     except ConflictError as exc:
         raise ImportError_(str(exc)) from exc
     repo.decide_leave_request(rid, "approved", user["user_id"])
     audit(repo, user, "leave_recorded", "leave_request", rid,
           {"employee_id": employee_id, "employee": emp["name"], "previous": None,
-           "new": {"type": leave_type, "from": date_from, "to": date_to, "days": float(days) if days else float(n), "status": "approved"},
+           "new": {"type": leave_type, "from": date_from, "to": date_to, "days": days, "status": "approved"},
            "reason": (reason or "").strip()})
     return rid
 

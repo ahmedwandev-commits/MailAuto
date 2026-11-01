@@ -46,7 +46,7 @@ def is_affairs(user):
 
 def _manages(user, team):
     return is_affairs(user) or user["role"] == "gm" or (
-        user["role"] == "manager" and team.strip().lower() in [t.strip().lower() for t in user.get("teams") or []])
+        user["role"] == "manager" and access.in_scope(user, team))       # a manager of «__all__» plans every team, as everywhere
 
 
 def work_days(repo, month):

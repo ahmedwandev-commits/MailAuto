@@ -124,7 +124,12 @@ def attendance_template():
 @auth.login_required
 def schedule_template():
     t = auth.now()
-    y, m = int(request.args.get("year", t.year)), int(request.args.get("month", t.month))
+    try:
+        y, m = int(request.args.get("year", t.year)), int(request.args.get("month", t.month))
+    except ValueError:
+        y, m = t.year, t.month
+    if not (2000 <= y <= 2100 and 1 <= m <= 12):
+        y, m = t.year, t.month
     return Response(templates.schedule_template(y, m), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="schedule-template-{y}-{m:02d}.xlsx"'})
 

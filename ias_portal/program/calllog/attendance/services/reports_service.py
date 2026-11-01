@@ -345,8 +345,9 @@ def _build(repo, user, kind, d1, d2, now, team=None):
         unavailable = defaultdict(int)
         for emp, days in ev.items():
             for d in days:
-                if d["planned_primary"] in ("M", "E", "N") and d["status"] in ("on_leave", "absent", "excused_absence"):
-                    unavailable[(d["date"], d["planned_primary"])] += 1
+                if d["status"] in ("on_leave", "absent", "excused_absence"):
+                    for c in set(d["planned_codes"]) & {"M", "E", "N"}:      # a double shift is away from both of its shifts
+                        unavailable[(d["date"], c)] += 1
         counts = defaultdict(int)
         for e in entries:
             if e["shift_code"] in ("M", "E", "N"):
@@ -370,8 +371,9 @@ def _build(repo, user, kind, d1, d2, now, team=None):
         for m1, m2 in _months(d1, d2):
             rows, _, _ = an.team_rows(repo, user, m1, m2, now, team)
             sch = sum(r["summary"]["scheduled_days"] for r in rows)
+            judged = sum(r["summary"]["judged_days"] for r in rows)        # attendance % of the evaluated days, as everywhere else
             pres = sum(r["summary"]["present_days"] for r in rows)
-            out.append([m1[:7], len(rows), sch, pres, round(100 * pres / sch, 1) if sch else None,
+            out.append([m1[:7], len(rows), sch, pres, round(100 * pres / judged, 1) if judged else None,
                         sum(r["summary"]["late_count"] for r in rows), sum(r["summary"]["late_minutes"] for r in rows),
                         sum(r["summary"]["absent_days"] for r in rows), sum(r["summary"]["leave_days"] for r in rows),
                         round(sum(r["score"]["score"] for r in rows) / len(rows), 1) if rows else None])

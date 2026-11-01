@@ -181,10 +181,13 @@ def compare_groups(rows, key):
         for f in ("scheduled_days", "present_days", "absent_days", "late_count", "late_minutes", "early_count",
                   "missing_in", "missing_out", "missing_both", "leave_days", "scheduled_hours", "actual_hours"):
             a[f] += s[f]
+        a["judged_days"] += s.get("judged_days", s["scheduled_days"])
         a["score_sum"] += r["score"]["score"]
     out = []
     for k, a in sorted(g.items()):
-        judged = a["scheduled_days"]
+        # the same base as an employee's own attendance % (daily.summarize): the evaluated days - leave, holidays, future days and
+        # days without attendance data are not "not attended"
+        judged = a["judged_days"]
         out.append({"group": k, **{f: (round(v, 1) if isinstance(v, float) else v) for f, v in a.items()},
                     "attendance_pct": round(100 * a["present_days"] / judged, 1) if judged else None,
                     "avg_score": round(a["score_sum"] / a["employees"], 1)})

@@ -4,7 +4,7 @@ team(s); the General Manager sees every team and confirms the sector."""
 from flask import Blueprint, flash, g, redirect, render_template, request, url_for
 
 from .. import auth
-from ..services import allowance_confirm as ac
+from ..services import access, allowance_confirm as ac
 
 bp = Blueprint("att_confirm", __name__)
 
@@ -20,9 +20,8 @@ def index():
     month = _month()
     st = ac.status(repo, month)
     me = g.att_user
-    if me["role"] == "manager":
-        mine = {t.strip().lower() for t in me.get("teams") or []}
-        st["teams"] = [t for t in st["teams"] if t["team"].strip().lower() in mine]
+    if me["role"] == "manager":                       # own teams only («__all__» = every team, as everywhere in Attendance)
+        st["teams"] = [t for t in st["teams"] if t["team"] != ac.NO_TEAM and access.in_scope(me, t["team"])]
     team = request.args.get("team", "")
     months = sorted(ac.rounds(repo), reverse=True)
     return render_template("attendance/allowance_confirm.html", st=st, month=month, months=months, team=team, me=me)

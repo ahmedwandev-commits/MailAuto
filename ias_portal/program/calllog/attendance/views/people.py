@@ -101,7 +101,7 @@ def leave():
     reqs = repo.leave_requests(ids, status=status or None)
     emps = {e["id"]: e for e in access.visible_employees(repo, g.att_user)}
     if team:
-        reqs = [r for r in reqs if (emps.get(r["employee_id"]) or {}).get("team") == team]
+        reqs = [r for r in reqs if access.has_team(emps.get(r["employee_id"]) or {}, team)]     # every team of the person
     cal = ps.leave_calendar(repo, g.att_user, year, month, team or None)
     return render_template("attendance/leave.html", reqs=reqs, emps=emps, types=repo.list_leave_types(), year=year, month=month, status=status,
                            team=team, teams=sorted({t for e in emps.values() for t in e["teams"]}), cal=cal,

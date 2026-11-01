@@ -227,9 +227,15 @@ def settings():
             kind = request.form.get("kind")
             if not code or kind not in ("work", "off", "standby"):
                 raise ImportError_("Code and kind are required.")
+            start, end = request.form.get("start") or None, request.form.get("end") or None
+            if kind == "work":              # a working shift without readable times would break every page that evaluates a day
+                start, end = _hhmm(start, "Shift start"), _hhmm(end, "Shift end")
+            try:
+                order = int(request.form.get("order") or 5)
+            except ValueError as exc:
+                raise ImportError_("The order must be a whole number.") from exc
             repo.save_shift_type({"code": code, "name": request.form.get("name") or code, "kind": kind,
-                                  "start_time": request.form.get("start") or None, "end_time": request.form.get("end") or None,
-                                  "sort_order": int(request.form.get("order") or 5)})
+                                  "start_time": start, "end_time": end, "sort_order": order})
             auth.audit("shift_type_saved", "shift_type", code, dict(request.form))
         elif a == "holiday_add":
             repo.add_holiday(request.form.get("date", ""), request.form.get("name", "Holiday"))

@@ -46,10 +46,12 @@ def schedule_template(year, month):
         ws.cell(r, 1, _AR_DAYS[dd.weekday()])
         ws.cell(r, 2, dd)
         r += 1
-    ws.append([])
-    ws.append(["Type the employee names under each shift (several names in one cell: separate with a new line or ' - '). "
-               "Write ( MFA ) after a name for the MFA role. For on-call staff add a row below the date: "
-               "'name (VPN/ Stand By Site - CM) - name (...)'."])
+    # the instructions go on a sheet of their own: below the dates the parser would read their example text as a stand-by row
+    # ("Stand By" in it) and invent names for the last day of the month
+    notes = wb.create_sheet("Instructions")
+    notes.append(["Type the employee names under each shift (several names in one cell: separate with a new line or ' - '). "
+                  "Write ( MFA ) after a name for the MFA role. For on-call staff add a row below the date: "
+                  "'name (VPN/ Stand By Site - CM) - name (...)'."])
     for row in ws.iter_rows(min_row=2, max_row=3):
         for c in row:
             c.alignment = Alignment(wrap_text=True, horizontal="center")

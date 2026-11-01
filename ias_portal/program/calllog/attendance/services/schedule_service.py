@@ -144,7 +144,7 @@ def import_directly(repo, user, import_id):
     for n, m in pv["matches"].items():
         if m["status"] in ("alias", "auto"):
             continue
-        if m["status"] == "suggested" and len(m["candidates"]) >= 1:
+        if m["status"] == "suggested" and len(m["candidates"]) == 1:     # a single confident suggestion; several = a human decides
             resolutions[n] = str(m["candidates"][0]["id"])
             accepted.append({"name": m["display"], "employee": m["candidates"][0]["name"], "id": m["candidates"][0]["id"]})
         else:
@@ -434,7 +434,11 @@ def edit_day(repo, user, employee_id, work_date, codes, reason):
         raise ImportError_("Choose at least one shift or Rest day.")
     if "OFF" in codes and len(codes) > 1:
         raise ImportError_("A rest day cannot be combined with a shift.")
-    d = date.fromisoformat(work_date)
+    codes = list(dict.fromkeys(codes))                       # the same shift twice is one entry
+    try:
+        d = date.fromisoformat(str(work_date))
+    except ValueError as exc:
+        raise ImportError_("Choose a valid date.") from exc
     # conflicts against the neighbouring days
     around = repo.schedule_entries((d - timedelta(days=1)).isoformat(), (d + timedelta(days=1)).isoformat(), [employee_id])
     keep = [e for e in around if e["work_date"] != work_date]
@@ -442,8 +446,12 @@ def edit_day(repo, user, employee_id, work_date, codes, reason):
     st = settings_svc.load(repo)
     problems = schedule_rules.detect_conflicts(probe, shifts, st["min_rest_hours"])
     problems = [p for p in problems if p["work_date"] == work_date or p["work_date"] == (d + timedelta(days=1)).isoformat()]
-    res = repo.replace_day_entries_atomic(d.year, d.month, employee_id, work_date,
-                                          [{"shift_code": c} for c in codes], reason, user["user_id"])
+    with repo.transaction():
+        if not repo.active_version(d.year, d.month):        # a month nobody imported yet: start an empty schedule (as the weekly plan does)
+            repo.commit_schedule_version_atomic(d.year, d.month, None, [], user["user_id"], replace=False)
+            audit(repo, user, "schedule_created_manually", "schedule", f"{d.year}-{d.month:02d}", {})
+        res = repo.replace_day_entries_atomic(d.year, d.month, employee_id, work_date,
+                                              [{"shift_code": c} for c in codes], reason, user["user_id"])
     audit(repo, user, "schedule_changed", "employee", employee_id,
           {"date": work_date, "previous": res["old"], "new": res["new"], "reason": reason, "warnings": [p["message"] for p in problems]})
     from . import notify                                   # the employee is told their shift changed

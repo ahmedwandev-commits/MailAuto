@@ -19,7 +19,10 @@ def _int(v, default):
 
 def _ym():
     t = auth.now()
-    return _int(request.args.get("year"), t.year), _int(request.args.get("month"), t.month)
+    year, month = _int(request.args.get("year"), t.year), _int(request.args.get("month"), t.month)
+    if not (2000 <= year <= 2100 and 1 <= month <= 12):           # ?month=13 is this month, not an error page
+        year, month = t.year, t.month
+    return year, month
 
 
 @bp.route("/schedule/import", methods=["GET", "POST"])
@@ -102,7 +105,7 @@ def names():
                 raise ImportError_("Choose a month.") from exc
             n = ss.add_missing_names(repo, g.att_user, year, mo)
             flash(f"{n} shift day(s) were added to the {year}-{mo:02d} schedule. Nothing that was already planned was changed.", "ok")
-            return redirect(request.form.get("next") or url_for("att_schedule.names"))
+            return redirect(auth.safe_next(url_for("att_schedule.names")))
         if request.form.get("action") == "reapply":
             ym = request.form.get("month", "")
             try:

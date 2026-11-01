@@ -89,7 +89,7 @@ def parse_workbook(wb):
         try:
             return _parse_sheet(ws)
         except TemplateError as exc:
-            last_err = exc
+            last_err = last_err or exc                  # the first sheet's reason (not "too short" of a notes sheet after it)
     raise last_err or TemplateError("The workbook has no sheets.")
 
 

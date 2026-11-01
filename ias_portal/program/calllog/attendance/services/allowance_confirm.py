@@ -149,7 +149,8 @@ def status(repo, month, user=None):
     all_teams = bool(team_list) and all(t["status"] == "confirmed" for t in team_list)
     return {"month": month, "label": label(month), "round": rnd, "teams": team_list, "all_teams_confirmed": all_teams,
             "gm": (rnd or {}).get("gm") or {"status": "pending"}, "rates": rates, "currency": currency,
-            "total_amount": sum(t["amount"] for t in team_list),
+            # every person once: somebody on two teams is listed under both, but is paid once
+            "total_amount": sum((nums.get(e["id"]) or {}).get("amount", 0) for e in emps),
             "kinds": [(k, al.ENGLISH[k]) for k in al.KINDS]}
 
 
@@ -362,7 +363,9 @@ def _all_teams(repo):
 
 
 def _manages(user, team):
-    return user["role"] == "admin" or team.strip().lower() in [t.strip().lower() for t in user.get("teams") or []]
+    """An administrator, or a manager of ``team`` (a manager with every team, «__all__», manages every team - as everywhere in Attendance)."""
+    from .access import in_scope
+    return user["role"] == "admin" or (team != NO_TEAM and in_scope({**user, "role": "manager"}, team))
 
 
 def confirm_member(repo, user, month, employee_id):
