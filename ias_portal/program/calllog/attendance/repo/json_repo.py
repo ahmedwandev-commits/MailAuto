@@ -168,7 +168,7 @@ class JsonRepository(Repository):
         st = self._staged()
         if st is not None and name in st:
             return st[name]
-        return self._cache.read(self._path(name), default)
+        return self._cache.read(self._path(name), default, fresh=st is not None)     # inside a transaction: the disk, always
 
     def _mut(self, name, default):
         """A mutable copy that is written when the outermost transaction commits."""
@@ -176,7 +176,7 @@ class JsonRepository(Repository):
         if st is None:
             raise RuntimeError("write outside a transaction")
         if name not in st:
-            st[name] = copy.deepcopy(self._cache.read(self._path(name), default))
+            st[name] = copy.deepcopy(self._cache.read(self._path(name), default, fresh=True))
         return st[name]
 
     @contextmanager

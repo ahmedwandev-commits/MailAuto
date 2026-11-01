@@ -95,23 +95,42 @@ def write_json_atomic(path, data):
 
 
 class JsonCache:
-    """Parsed JSON files, validated against the file signature on every read. Treat what ``read`` returns as read-only."""
+    """Parsed JSON files, validated against the file signature (mtime, size). Treat what ``read`` returns as read-only.
 
-    def __init__(self, limit=400):
+    v5.17 (performance): a page used to check the same file on the disk hundreds of times - one network round trip each when the
+    program runs from the shared folder (~2 s for the Today page). A file is now checked at most once every ``recheck`` seconds;
+    a change written by this program is seen at once (``drop``), one made by another PC within ``recheck`` seconds, and a read
+    with ``fresh=True`` (inside a write transaction, under the file lock) always checks the disk."""
+
+    def __init__(self, limit=400, recheck=1.0):
         self._data = {}
+        self._checked = {}                                   # path -> (monotonic time of the last disk check, signature or None)
         self._lock = threading.Lock()
         self.limit = limit
+        self.recheck = recheck
 
-    def read(self, path, default):
+    def read(self, path, default, fresh=False):
         key = str(path)
+        now = time.monotonic()
+        if not fresh:
+            with self._lock:
+                seen = self._checked.get(key)
+                if seen and now - seen[0] < self.recheck:
+                    if seen[1] is None:                      # missing a moment ago
+                        return default
+                    hit = self._data.get(key)
+                    if hit and hit[0] == seen[1]:
+                        return hit[1]
         try:
             st = os.stat(path)
         except FileNotFoundError:
             with self._lock:
                 self._data.pop(key, None)
+                self._checked[key] = (now, None)
             return default
         sig = (st.st_mtime_ns, st.st_size)
         with self._lock:
+            self._checked[key] = (now, sig)
             hit = self._data.get(key)
             if hit and hit[0] == sig:
                 return hit[1]
@@ -124,8 +143,11 @@ class JsonCache:
             if len(self._data) >= self.limit:
                 self._data.pop(next(iter(self._data)))
             self._data[key] = (sig, data)
+            if len(self._checked) > 4 * self.limit:
+                self._checked.clear()
         return data
 
     def drop(self, path):
         with self._lock:
             self._data.pop(str(path), None)
+            self._checked.pop(str(path), None)
