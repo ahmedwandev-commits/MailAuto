@@ -34,6 +34,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import bootstrap  # noqa: E402,F401  (like run.py: Flask etc. may live only in the 'libs' folder next to run.py)
 
 # (name, p95 target in ms)
 TARGETS = {"email unchanged": 5.0, "email full": 150.0, "my": 100.0, "shared": 20.0}

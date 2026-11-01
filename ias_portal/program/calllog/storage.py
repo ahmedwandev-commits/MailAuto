@@ -188,6 +188,20 @@ def _atomic_write_json(path, data, compact=False):
         raise StorageError(f"Could not save {path.name} - the data folder is busy, try again in a moment ({exc}).") from exc
 
 
+def _load_json_file(path):
+    """Parse a JSON file. ``utf-8-sig``: a file saved by Notepad may start with a BOM (reasons.json and branches.json are
+    meant to be editable by hand). On Windows a file can be briefly unopenable (PermissionError) while another PC swaps
+    in a new version or an antivirus scans it - retried like the writes in ``_swap_in`` before giving up."""
+    for attempt in range(8):
+        try:
+            with open(path, encoding="utf-8-sig") as f:
+                return json.load(f)
+        except PermissionError:
+            if attempt == 7:
+                raise StorageError(f"{Path(path).name} is busy (locked by another program) - try again in a moment.")
+            time.sleep(min(0.3, 0.03 * (attempt + 1)))
+
+
 def _atomic_copy(src, dst):
     """Copy a file so that ``dst`` is always either the old or the new complete file."""
     tmp = dst.with_name(f".{dst.name}.{uuid.uuid4().hex[:8]}.tmp")
@@ -290,9 +304,12 @@ class Store:
                     return hit[1]
             return self._read_json(path, default, fresh=True)
         try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-        except json.JSONDecodeError as exc:
+            data = _load_json_file(path)
+        except FileNotFoundError:          # removed between the stat() above and the open()
+            with self._cache_lock:
+                self._cache.pop(key, None)
+            return default
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise StorageError(f"{path} is damaged and cannot be read: {exc}") from exc
         if not fresh and keep:
             with self._cache_lock:
@@ -528,6 +545,8 @@ class Store:
         """Every record with d_from <= date <= d_to (ISO strings), optionally one employee.
 
         The returned list is shared between requests for ~2 s - never modify it."""
+        if uid and not valid_uid(uid):                 # never a path: "../../users" must not reach the file system
+            return []
         key = (d_from, d_to, uid)
         with self._cache_lock:
             hit = self._range.get(key)
@@ -616,7 +635,8 @@ class Store:
             hit = cache.get(day)
             if hit is None or hit[0] != sig:
                 items = []
-                with open(path, encoding="utf-8") as f:
+                # errors="replace": a line another PC is appending this very moment may end inside a character
+                with open(path, encoding="utf-8", errors="replace") as f:
                     for line in f:
                         line = line.strip()
                         if line:

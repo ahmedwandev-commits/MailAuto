@@ -38,14 +38,18 @@ def _secret_key():
     """A random key kept next to the app (not in the shared folder); created on first run."""
     path = APP_DIR / ".secret_key"
     try:
-        return path.read_text().strip()
+        key = path.read_text().strip()
     except FileNotFoundError:
-        key = secrets.token_hex(32)
-        try:
-            path.write_text(key)
-        except OSError:
-            pass  # read-only install: sessions then reset on every restart
+        key = ""
+    if key:
         return key
+    # missing, or empty (a first start that was cut off): an empty key would make every sign-in fail
+    key = secrets.token_hex(32)
+    try:
+        path.write_text(key)
+    except OSError:
+        pass  # read-only install: sessions then reset on every restart
+    return key
 
 
 def bootstrap_admin(store, clock):

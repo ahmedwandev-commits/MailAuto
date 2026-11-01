@@ -26,7 +26,7 @@ def load_config():
     cfg = dict(DEFAULTS)
     path = Path(os.environ.get("CALLLOG_CONFIG", APP_DIR / "config.json"))
     if path.is_file():
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:      # Notepad may save it with a BOM
             cfg.update(json.load(f))
     if os.environ.get("CALLLOG_DATA_DIR"):
         cfg["data_dir"] = os.environ["CALLLOG_DATA_DIR"]

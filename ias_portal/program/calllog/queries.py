@@ -6,7 +6,7 @@ from flask import current_app, jsonify, request
 
 from . import auth
 from .ip_phones import fold
-from .storage import STATUS_LABELS, norm_uid, valid_date
+from .storage import STATUS_LABELS, norm_uid, valid_date, valid_uid
 
 ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
 MAX_RANGE_DAYS = 366
@@ -48,7 +48,7 @@ def clean_ip_phone(value):
 
 
 def clean_reason(value):
-    if value not in reasons_by_key():
+    if not isinstance(value, str) or value not in reasons_by_key():      # a list / object would crash the lookup
         raise ApiError("Choose a reason for the call.")
     return value
 
@@ -118,6 +118,8 @@ def filtered_raw(d_from, d_to, args):
     q_folded = fold(q) if q and not q.isascii() else ""      # Arabic search: ignore taa marbuta / alef spelling
 
     def compute():
+        if uid and not valid_uid(uid):    # no such account can exist (and the text must never reach a file path)
+            return []
         users = auth.store().users()
         out = []
         for rec in auth.store().records_between(d_from, d_to, uid):

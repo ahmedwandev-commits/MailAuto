@@ -552,7 +552,8 @@ def update_user(uid):
 @auth.admin_required
 def reset_password(uid):
     uid = norm_uid(uid)
-    body = request.get_json(silent=True) or {}
+    body = request.get_json(silent=True)
+    body = body if isinstance(body, dict) else {}           # no body (or not an object): a generated password
     password = str(body.get("password") or "")
     if password:
         problem = password_problem(password)
@@ -586,9 +587,21 @@ _HEADER_ALIASES = {
 
 
 def _read_rows(upload, prefer_sheets=()):
-    """Rows of a .csv or .xlsx upload as lists of strings (for .xlsx: the preferred sheet, else the first)."""
+    """Rows of a .csv or .xlsx upload as lists of strings (for .xlsx: the preferred sheet, else the first). A file that
+    cannot be read (not really a workbook, damaged, a CSV cell too long) is a 400 with a message, never a crash."""
     filename = (upload.filename or "").lower()
-    raw = upload.read()
+    if not filename.endswith((".xlsx", ".csv")):
+        raise ApiError("Upload a .csv or .xlsx file.")
+    try:
+        return _parse_rows(filename, upload.read(), prefer_sheets)
+    except ApiError:
+        raise
+    except Exception:                                       # noqa: BLE001 - any unreadable file is the same message
+        current_app.logger.warning("import: %s could not be read", filename, exc_info=True)
+        raise ApiError("That file could not be read. Save it again as .xlsx (or .csv) and retry.")
+
+
+def _parse_rows(filename, raw, prefer_sheets):
     if filename.endswith(".xlsx"):
         from openpyxl import load_workbook
         wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)

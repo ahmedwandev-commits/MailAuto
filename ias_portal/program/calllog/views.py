@@ -23,7 +23,7 @@ def login():
             return redirect(url_for("pages.index"))
         return render_template("login.html", error=None, user_id="")
 
-    uid = norm_uid(request.form.get("user_id"))
+    uid = norm_uid(request.form.get("user_id"))[:64]       # a User ID is at most 32 characters; keeps logs / counters small
     password = request.form.get("password", "")
     ip = request.remote_addr
     limits = auth.throttles()
@@ -84,7 +84,8 @@ def set_lang():
     """The عربي / English switch (top bar and sign-in page): kept on the account, and in a cookie for the sign-in page."""
     lang = request.form.get("lang", "")
     nxt = request.form.get("next", "")
-    if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt:
+    if (not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in nxt)):     # "/\t/evil" is "//evil" to a browser
         nxt = url_for("pages.index")
     resp = redirect(nxt)
     if lang in i18n.LANGS:
@@ -163,7 +164,17 @@ def password():
     current = request.form.get("current_password", "")
     new = request.form.get("new_password", "")
     error = None
+    # The current password is guessed against the same counters as the sign-in (per account + address), so a session left
+    # open on a shared PC cannot be used to try passwords at full speed.
+    key, ip, limits = (g.user["user_id"], request.remote_addr), request.remote_addr, auth.throttles()
+    wait = limits["user"].retry_after(key)
+    if wait:
+        auth.audit("password_change_blocked")
+        return render_template("password.html", forced=forced, error=(
+            f"Too many failed attempts. Try again in {-(-wait // 60)} minute(s).")), 429
     if not verify_password(g.user["password_hash"], current):
+        limits["user"].fail(key)
+        limits["ip"].fail(ip)
         error = "Your current password is not correct."
     elif new != request.form.get("confirm_password", ""):
         error = "The new passwords do not match."
@@ -174,6 +185,7 @@ def password():
     if error:
         return render_template("password.html", error=error, forced=forced), 400
 
+    limits["user"].clear(key)
     new_hash = hash_password(new)
     auth.store().update_user(g.user["user_id"], {
         "password_hash": new_hash, "must_change_password": False,

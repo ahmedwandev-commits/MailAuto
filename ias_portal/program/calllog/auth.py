@@ -84,6 +84,8 @@ class Throttle:
     def retry_after(self, key):
         with self._lock:
             q = self._trim(key)
+            if not q:                      # nothing recorded: keep no entry (every guessed user id would stay in memory)
+                self._hits.pop(key, None)
             if len(q) < self.limit:
                 return 0
             return int(q[0] + self.window - time.monotonic()) + 1

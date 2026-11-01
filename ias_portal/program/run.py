@@ -67,8 +67,14 @@ def ensure_dependencies():
         sys.path.insert(0, str(bootstrap.LIBS))
 
 
+UNATTENDED_FLAGS = ("--service", "--hide-password")        # Task Scheduler / the server started by --service
+
+
 def pause():
-    """Keep a double-clicked console window open so the message can be read."""
+    """Keep a double-clicked console window open so the message can be read. Never when nobody is there to press Enter:
+    a service waiting here would never exit, so Task Scheduler (or the --service loop) could never start it again."""
+    if any(flag in sys.argv[1:] for flag in UNATTENDED_FLAGS):
+        return
     if os.name == "nt":
         try:
             input("\nPress Enter to close this window...")
@@ -183,7 +189,10 @@ def supervise(args):
     say("Service started: keeps the server running and restarts it when the program files change.")
     while True:
         seen = program_fingerprint()
-        child = subprocess.Popen(child_cmd, stdout=log, stderr=subprocess.STDOUT if log else None)
+        # no keyboard for the server (it never waits for input) and UTF-8 output, the encoding server.log is opened with
+        child = subprocess.Popen(child_cmd, stdin=subprocess.DEVNULL, stdout=log,
+                                 stderr=subprocess.STDOUT if log else None,
+                                 env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         say(f"Server started (process {child.pid}).")
         reason = None
         try:
