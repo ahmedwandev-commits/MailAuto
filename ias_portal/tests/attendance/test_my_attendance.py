@@ -92,6 +92,24 @@ def test_a_rest_day_worked_and_its_comp_day(app, world, repo):
     assert d["weighted"] == 0 and d["transport"] == 300 and "comp day" in d["note"]
 
 
+def test_the_comp_day_must_be_a_working_day_of_the_next_week():
+    """Owner: worked Saturday 10 Oct -> a comp day counts on Sun 11 .. Thu 15 only; the next Friday / Saturday are rest days anyway."""
+    assert otd.comp_window("2026-10-10", 6, {4, 5}, set()) == ["2026-10-11", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15"]
+    assert otd.comp_window("2026-10-09", 6, {4, 5}, set()) == ["2026-10-11", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15"]
+    assert otd.comp_window("2026-10-10", 6, {4, 5}, {"2026-10-13"}) == ["2026-10-11", "2026-10-12", "2026-10-14", "2026-10-15"]
+
+
+@pytest.mark.parametrize("taken,counts", [("2026-10-16", False), ("2026-10-17", False), ("2026-10-15", True), ("2026-10-25", False)])
+def test_a_day_off_on_the_next_friday_or_saturday_is_not_a_comp_day(app, world, repo, taken, counts):
+    a = repo.create_attendance_import({"filename": "s", "file_sha256": "s", "parsed": {}})
+    repo.commit_attendance_rows_atomic(a, [{"employee_id": 102, "work_date": "2026-10-10", "in_time": "08:00:00", "out_time": "16:00:00"}])   # a Saturday
+    c = repo.add_comp_day({"employee_id": 102, "earned_date": "2026-10-10", "reason": "t"})
+    repo.update_comp_day(c["id"] if isinstance(c, dict) else c, {"taken_date": taken})
+    rep = ots.build(repo, [repo.get_employee(102)], "2026-10", "2026-10-31")[102]
+    d = next(x for x in rep["days"] if x["date"] == "2026-10-10")
+    assert d["transport"] == 300 and d["weighted"] == (0 if counts else 16), taken
+
+
 # ---------------------------------------------------------------- the page and who sees what
 def test_an_employee_sees_only_their_own_month(app, world, repo):
     _long_day(repo)

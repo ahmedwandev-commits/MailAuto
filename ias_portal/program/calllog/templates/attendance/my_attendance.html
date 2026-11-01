@@ -124,7 +124,7 @@
   {% else %}<tr><td colspan="7">{% call empty('check-circle', 'No overtime', 'No day of this month went beyond ' ~ rep.rules.base_hours|num ~ ' hours.') %}{% endcall %}</td></tr>{% endfor %}
   </tbody></table></div>
 </details>
-<p class="small muted">A rest day or an official holiday worked: with a comp day within {{ rep.rules.comp_window_days|num }} days after it there is no overtime (only its shift allowance); without one, every hour counts ×{{ rep.rules.holiday_rate|num(2) }}.</p>
+<p class="small muted">A rest day or an official holiday worked: with a comp day taken on a working day (Sunday to Thursday, not an official holiday) of the following week there is no overtime (only its shift allowance); without one - a day off on the next Friday or Saturday does not count - every hour counts ×{{ rep.rules.holiday_rate|num(2) }}.</p>
 {% endif %}
 {% endif %}
 

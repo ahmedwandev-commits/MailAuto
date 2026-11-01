@@ -75,8 +75,7 @@ OVERTIME_DEFAULTS = {
     "day_rate": 1.0,                # an overtime hour before evening_from
     "evening_from": "18:00", "evening_rate": 1.5,
     "night_from": "22:00", "night_rate": 1.75, "night_until": "06:00",
-    "holiday_rate": 2.0,            # every hour of a rest day / holiday worked with no comp day taken within comp_window_days
-    "comp_window_days": 7,
+    "holiday_rate": 2.0,            # every hour of a rest day / holiday worked with no comp day on a working day of the following week
     "weekly_deduction_hours": 2,    # taken off every week's overtime
     "cap_pct": 40, "base_days": 22, # the month's overtime is at most cap_pct % of base_days x base_hours (40 % of 176 h = 70.4 h)
     "long_day_hours": 10,           # a stay of this many hours earns a meal (lunch)

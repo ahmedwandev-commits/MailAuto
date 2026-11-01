@@ -49,8 +49,7 @@ def build(repo, employees, month, today):
     rules = settings_svc.allowance_rules(st)
     ids = [e["id"] for e in employees]
     managers = {e["id"] for e in employees if (repo.directory.get_user(str(e["id"])) or {}).get("hub_role") == "manager"}
-    window = int(ot["comp_window_days"])
-    far = (date.fromisoformat(d2) + timedelta(days=window + 1)).isoformat()   # comp days after a holiday at the month's end
+    far = (date.fromisoformat(d2) + timedelta(days=15)).isoformat()            # comp days of the week after a holiday at the month's end
 
     upto = min(d2, today)
     counted = {}
@@ -58,7 +57,8 @@ def build(repo, employees, month, today):
         days, _skipped, rules, st = allowance_compute(repo, d1, upto, employees)
         counted = {(d["employee_id"], d["date"]): d for d in days}
     att = apply_corrections(repo.attendance_records(d1, far, ids), repo.corrections(d1, far, ids))
-    day_kind = day_kind_fn(DefaultShift(repo, st, shifts_by_code(repo)))
+    rule = DefaultShift(repo, st, shifts_by_code(repo))
+    day_kind = day_kind_fn(rule)
 
     plan, comp = {}, {i: set() for i in ids}
     for e in repo.schedule_entries(d1, far, ids):
@@ -76,9 +76,9 @@ def build(repo, employees, month, today):
         if p and any(c in p for c in comp_labels):
             comp.setdefault(emp, set()).add(d)
 
+    first_weekday = int(st.get("work_week_start", 6))
     rate = {k: float(rules[k].get("rate") or 0) if rules[k].get("enabled") else 0.0 for k in al.KINDS}
     meal_price = {k: float(ot["meal_" + k]) for k in otd.MEALS}
-    first_weekday = int(st.get("work_week_start", 6))
     currency = st.get("allowance_currency") or "EGP"
     out = {}
     for emp in employees:
@@ -102,11 +102,12 @@ def build(repo, employees, month, today):
                     tout = tin + timedelta(seconds=secs)
                     row["out"], row["stay"] = tout.strftime("%H:%M"), secs / 3600.0
                     if row["day_kind"]:
-                        taken = sorted(x for x in comp.get(eid, ()) if d < x <= (date.fromisoformat(d) + timedelta(days=window)).isoformat())
+                        window = otd.comp_window(d, first_weekday, rule.rest_days, rule.hol)
+                        taken = sorted(x for x in comp.get(eid, ()) if x in window)
                         h = otd.holiday_overtime(row["stay"], bool(taken), ot)
                         row.update(raw=h["raw"], weighted=h["weighted"])
                         row["note"] = (f"comp day {taken[0]} - no overtime" if taken else
-                                       f"no comp day within {window} days - hours x{float(ot['holiday_rate']):g}")
+                                       f"no comp day in the next working week - hours x{float(ot['holiday_rate']):g}")
                     else:
                         w = otd.working_day_overtime(tin, tout, ot)
                         row.update(raw=w["raw"], weighted=w["weighted"], bands=w["minutes"])

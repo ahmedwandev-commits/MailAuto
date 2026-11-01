@@ -83,11 +83,11 @@
   <h3>Rest days and holidays, the week and the month</h3>
   <div class="form-grid">
     <label class="field">Rest day / holiday worked, no comp day: rate<input name="ot_holiday_rate" value="{{ ot.holiday_rate|num(2) }}" inputmode="decimal" size="5"></label>
-    <label class="field">Comp day counts within (days after)<input name="ot_comp_window_days" value="{{ ot.comp_window_days }}" inputmode="numeric" size="5"></label>
     <label class="field">Hours taken off every week<input name="ot_weekly_deduction_hours" value="{{ ot.weekly_deduction_hours|num(2) }}" inputmode="decimal" size="5"></label>
     <label class="field">Monthly cap (% of a normal month)<input name="ot_cap_pct" value="{{ ot.cap_pct|num(2) }}" inputmode="decimal" size="5"></label>
     <label class="field">Working days of a normal month<input name="ot_base_days" value="{{ ot.base_days }}" inputmode="numeric" size="5"></label>
   </div>
+  <p class="small muted">A comp day counts only on a working day of the week after the rest day or holiday worked (the weekly rest days and the official holidays are not working days).</p>
   <p class="small muted">With these values a normal month is {{ (ot.base_days * ot.base_hours)|num }} h and the overtime is capped at {{ (ot.base_days * ot.base_hours * ot.cap_pct / 100)|num }} h.</p>
   <h3>Meals ({{ st.allowance_currency }})</h3>
   <div class="form-grid">

@@ -7,8 +7,10 @@ Overtime of a **working day**
   clock: before ``evening_from`` (18:00) × ``day_rate`` (1), from 18:00 to ``night_from`` (22:00) × ``evening_rate`` (1.5), from 22:00
   to ``night_until`` (06:00) × ``night_rate`` (1.75).
 Overtime of a **weekly rest day / official holiday** worked
-  No compensatory rest day within ``comp_window_days`` (7) days after it: every hour of that day × ``holiday_rate`` (2). With a comp day:
-  no overtime at all - only the holiday's shift allowance.
+  No compensatory rest day taken on a *working day of the following week* (the week starts on ``work_week_start``, Sunday; its working
+  days are the weekdays that are not weekly rest days - Sunday to Thursday - and not official holidays): every hour of that day ×
+  ``holiday_rate`` (2). With such a comp day: no overtime at all - only the holiday's shift allowance. A day off taken on the next Friday
+  or Saturday is a rest day anyway, so it is not a comp day (owner, v5.17).
 The **week and the month**
   Every week (it starts on the ``work_week_start`` weekday, cut at the month's edges) ``weekly_deduction_hours`` (2) come off that
   week's weighted overtime, never below 0. The month is capped at ``cap_pct`` (40 %) of a normal month: ``base_days`` (22) days ×
@@ -89,6 +91,13 @@ def meals_of(kind, is_manager, stay_hours, ot):
     if stay_hours is not None and stay_hours >= float(ot["long_day_hours"]):
         out.append("lunch")
     return out
+
+
+def comp_window(day, first_weekday, rest_weekdays, holidays):
+    """The dates on which a comp day for working ``day`` (a rest day / holiday) counts: the working days of the following week."""
+    nxt = week_start(day, first_weekday) + timedelta(days=7)
+    days = (nxt + timedelta(days=i) for i in range(7))
+    return [d.isoformat() for d in days if d.weekday() not in rest_weekdays and d.isoformat() not in holidays]
 
 
 def week_start(day, first_weekday):

@@ -213,7 +213,7 @@ def settings():
                                                                                   "allowance_evening_after": old["allowance_evening_after"]}, "new": vals})
         elif a == "overtime":                                  # v5.17: overtime and meals (My attendance)
             vals, limits = {}, {"base_hours": (1, 24), "day_rate": (0, 5), "evening_rate": (0, 5), "night_rate": (0, 5), "holiday_rate": (0, 5),
-                                "comp_window_days": (0, 31), "weekly_deduction_hours": (0, 40), "cap_pct": (0, 200), "base_days": (1, 31),
+                                "weekly_deduction_hours": (0, 40), "cap_pct": (0, 200), "base_days": (1, 31),
                                 "long_day_hours": (1, 24), "meal_breakfast": (0, 100000), "meal_evening_meal": (0, 100000),
                                 "meal_dinner": (0, 100000), "meal_lunch": (0, 100000)}
             for k, (lo, hi) in limits.items():
@@ -223,7 +223,7 @@ def settings():
                     raise ImportError_("Overtime & meals: enter numbers in the numeric fields.") from exc
                 if not lo <= v <= hi:
                     raise ImportError_(f"Overtime & meals: {k.replace('_', ' ')} must be between {lo:g} and {hi:g}.")
-                vals[k] = int(v) if k in ("comp_window_days", "base_days") else v
+                vals[k] = int(v) if k == "base_days" else v
             for k in settings_svc.OVERTIME_TIMES:
                 vals[k] = _hhmm(request.form.get("ot_" + k) or settings_svc.OVERTIME_DEFAULTS[k], k.replace("_", " ").capitalize())
             if not vals["evening_from"] < vals["night_from"]:
