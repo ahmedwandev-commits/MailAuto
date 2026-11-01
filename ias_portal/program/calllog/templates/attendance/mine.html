@@ -41,12 +41,12 @@
   {% else %}<span class="muted small">Not scheduled</span>{% endif %}
 {%- endmacro %}
 
-<section class="card flush" aria-labelledby="up-h">
-  <div class="card-head"><h2 id="up-h">{{ icon('clock') }}Next 14 days</h2><span class="hint">from today, {{ today|dmy }}</span></div>
-  <div class="tbl-wrap"><table class="tbl" id="my-upcoming">
-    <thead><tr><th>Date</th><th>Day</th><th>My shift</th></tr></thead><tbody>
-    {% for d in upcoming %}<tr class="{{ 'today' if d.date == today }}"><td>{{ d.date|dmy }}</td><td>{{ d.date|dayname }}{{ ' · today' if d.date == today }}</td><td>{{ plan(d) }}</td></tr>{% endfor %}
-    </tbody></table></div>
+{# the next 7 days as small tiles (the month table below has every day; a second table of the same days was repeating it) #}
+<section class="card" aria-labelledby="up-h">
+  <div class="card-head"><h2 id="up-h">{{ icon('clock') }}Coming up</h2><span class="hint">the next 7 days, from today {{ today|dmy }}</span></div>
+  <ol class="day-tiles" id="my-upcoming">
+    {% for d in upcoming[:7] %}<li class="day-tile{{ ' today' if d.date == today }}"><span class="dt-day">{{ 'Today' if d.date == today else d.date|dayname }}</span><span class="dt-date">{{ d.date|dm }}</span><span class="dt-plan">{{ plan(d) }}</span></li>{% endfor %}
+  </ol>
 </section>
 
 <section class="card flush" aria-labelledby="mo-h">
@@ -55,6 +55,7 @@
     <a class="btn btn-ghost btn-sm" href="{{ url_for('att_mine.index', year=prev_m.year, month=prev_m.month) }}" aria-label="Previous month">{{ icon('chevron-left') }}</a>
     <a class="btn btn-ghost btn-sm" href="{{ url_for('att_mine.index') }}">This month</a>
     <a class="btn btn-ghost btn-sm" href="{{ url_for('att_mine.index', year=next_m.year, month=next_m.month) }}" aria-label="Next month">{{ icon('chevron-right') }}</a></div>
+  <p class="small muted pad">The numbers count the days up to today.</p>
   <section class="kpis" aria-label="This month so far">
     {{ kpi('Scheduled days', summary.scheduled_days, 'shifts planned for me', 's0', 'calendar-check') }}
     {{ kpi('Attended', summary.present_days, 'checked in on my shift days', 't-ok', 'user-check') }}

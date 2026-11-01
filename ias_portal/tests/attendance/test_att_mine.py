@@ -5,7 +5,7 @@ from .support import add_user, login
 def test_an_employee_sees_only_their_own_schedule(app, world, repo):
     b = login(app, "101")
     page = b.get("/attendance/my").get_data(as_text=True)
-    assert "My schedule" in page and "Next 14 days" in page and "my-upcoming" in page and "my-month" in page and "Ali A1" in page
+    assert "My schedule" in page and "Coming up" in page and "my-upcoming" in page and "my-month" in page and "Ali A1" in page
     assert "Morning" in page.split("my-upcoming")[1]                                    # 101 is on Morning in October
     assert "Sara A2" not in page and "Omar" not in page and "Nour" not in page
     month = page.split('id="my-month"')[1]
@@ -27,7 +27,7 @@ def test_the_month_can_be_changed_and_a_bad_month_falls_back(app, world, repo):
 def test_an_employee_cannot_open_any_other_attendance_page(app, world, repo):
     b = login(app, "101")
     nav = b.get("/attendance/my").get_data(as_text=True).split('aria-label="Main"')[1].split("</nav>")[0]   # the portal's menu
-    assert "My schedule" in nav and ">Today<" not in nav and ">Planning<" not in nav and "Attendance settings" not in nav
+    assert "My schedule" in nav and ">Today<" not in nav and ">Schedule<" not in nav and "Attendance settings" not in nav
     assert b.get("/").headers["Location"].endswith("/attendance/my")
     for url in ("/planning/day", "/team", "/employees", "/reports", "/schedule", "/admin/settings", "/admin/roles", "/hr/import", "/modify",
                 "/allowance", "/api/overview", "/employee/101"):

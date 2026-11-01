@@ -277,7 +277,7 @@ def test_the_manager_sees_the_people_and_approves_the_month(app, world, repo, mg
     attendance(repo)
     page = mgr1_b.get("/monthly-shifts?month=2026-09").get_data(as_text=True)
     assert "Monthly shifts" in page and "Ali A1" in page and "Sara A2" in page and "Omar" not in page and "Not approved yet" in page and "Approve 2026-09" in page
-    assert "Modification" in page and "monthly-shifts" in page
+    assert "Shift changes" in page and "monthly-shifts" in page
     r = approve(mgr1_b)
     assert r.status_code == 302
     page = mgr1_b.get("/monthly-shifts?month=2026-09").get_data(as_text=True)
@@ -369,7 +369,7 @@ def test_only_an_assigned_account_can_use_it_and_sees_nothing_else(app, world, r
     p = login(app, "payroll")
     assert p.get(f"/allowance?{Q}").status_code == 200 and p.get(f"/allowance/export/xlsx?{Q}").status_code == 200
     nav = p.get(f"/allowance?{Q}").get_data(as_text=True).split('aria-label="Main"')[1].split("</nav>")[0]   # the portal's menu
-    assert "Shift allowance" in nav and ">Today<" not in nav and "Attendance settings" not in nav and ">Planning<" not in nav
+    assert "Shift allowance" in nav and ">Today<" not in nav and "Attendance settings" not in nav and ">Schedule<" not in nav
     assert p.get("/attendance/").headers["Location"].endswith("/attendance/allowance")
     for url in ("/planning/day", "/team", "/employees", "/admin/settings", "/admin/roles", "/schedule", "/reports", "/hr/import", "/modify", "/monthly-shifts", "/api/overview"):
         assert p.get(url).status_code == 403, url
@@ -384,7 +384,9 @@ def test_a_manager_keeps_the_role_and_gets_the_export_on_top(app, world, repo, a
     admin_b.post("/admin/roles", {"action": "assign_allowance", "user_id": "mgr1"})
     page = mgr1_b.get(f"/allowance?{Q}").get_data(as_text=True)
     nav = page.split('aria-label="Main"')[1].split("</nav>")[0]
-    assert "Shift allowance" in nav and ">Today<" in nav and ">Planning<" in nav
+    assert ">Allowance<" in nav and ">Today<" in nav and ">Schedule<" in nav
+    tabs = page.split('class="subtabs"')[1].split("</nav>")[0]                 # v5.17: the sheet is a tab of the Allowance group
+    assert "Monthly shifts" in tabs and "Confirmation" in tabs and "Allowance sheet" in tabs
     assert mgr1_b.get("/planning/day").status_code == 200
     assert admin_b.post("/admin/roles", {"action": "assign_allowance", "user_id": "admin"}).status_code == 400
 

@@ -4,18 +4,18 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='ops.css') }}">
 {% set here = request.path %}
 {% set role = current_user.role %}
-{# Attendance lives in the portal's own menu (no second menu inside it): Today / Planning under Workforce, its analysis under
-   Analysis, its settings and imports under Settings, its audit under Logs. The three dashboards Today › Team › Person all
-   light "Today". #}
+{# Workforce lives in the portal's own menu (no second menu inside it), grouped by task: Today, Schedule, Leave, Allowance (+ its
+   analysis under Analysis, its settings under Settings, its imports under Imports, its audit under Logs). Each group's pages
+   share one tab bar (attendance/views/ui.py build_nav). The three dashboards Today › Team › Person all light "Today". #}
 {% set ap = here[11:] if here.startswith('/attendance') else none %}
 {% set att_today = ap is not none and (ap in ('', '/', '/today', '/planning/day', '/team') or ap.startswith('/employee/')) %}
-{% set att_plan = ap is not none and (ap.startswith(('/planning/week', '/leave', '/comp', '/modify', '/schedule/edit', '/monthly-shifts')) or ap == '/schedule') %}
-{% set att_settings = ap is not none and ap.startswith(('/admin/settings', '/admin/scoring', '/admin/employees', '/admin/roles', '/schedule/import', '/schedule/names', '/schedule/history', '/hr/import', '/hr/history', '/hr/links', '/imports/history')) %}
+{% set att_sched = ap is not none and (ap in ('/schedule', '/schedule/edit', '/modify') or ap.startswith(('/planning/week', '/team-plan'))) %}
+{% set att_leave = ap is not none and ap.startswith(('/leave', '/comp')) %}
+{% set att_allow = ap is not none and ap.startswith(('/allowance', '/monthly-shifts')) %}
+{% set att_settings = ap is not none and ap.startswith(('/admin/settings', '/admin/scoring', '/admin/employees', '/admin/roles')) %}
+{% set att_imports = ap is not none and ap.startswith(('/schedule/import', '/schedule/names', '/schedule/history', '/hr/import', '/hr/history', '/hr/links', '/imports/history')) %}
 {% set att_audit = ap is not none and ap.startswith('/admin/audit') %}
 {% set att_analysis = ap is not none and (ap == '/employees' or ap.startswith(('/reports', '/analytics'))) %}
-{% set att_allow = ap is not none and ap.startswith('/allowance') %}
-{% set att_confirm = ap is not none and ap.startswith('/allowance/confirm') %}
-{% set att_tplan = ap is not none and ap.startswith('/team-plan') %}
 {% macro alink(href, label, on, path) -%}
 <a class="op-nav-link" href="{{ href }}"{% if on %} aria-current="page"{% endif %}><svg class="op-nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="{{ path }}"/></svg><span class="op-nav-tx">{{ label }}</span></a>
 {%- endmacro %}
@@ -31,14 +31,16 @@
 {% macro guide_link() -%}
 <a class="op-nav-link" href="{{ url_for('static', filename='attendance/guide/index.html') }}" target="_blank" rel="noopener"><svg class="op-nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="{{ IC_BOOK }}"/></svg><span class="op-nav-tx">User guide</span></a>
 {%- endmacro %}
+{% set IC_LEAVE = 'M3 13l7-1 4-8 2 1-2 8 6 1 1 2-7 1-3 5-2-1 1-5-6 0z' %}
+{% set IC_UPLOAD = 'M12 15V3M7 8l5-5 5 5M5 21h14' %}
 {% macro workforce(analysis_here=False) -%}
 <div class="op-nav-sec">Workforce</div>
 {{ alink('/attendance/planning/day', 'Today', att_today, IC_TODAY) }}
-{{ alink('/attendance/planning/week', 'Planning', att_plan, IC_PLAN) }}
-{% if att_role in ('admin', 'gm', 'manager') %}{{ alink('/attendance/team-plan', 'Team schedule', att_tplan, IC_GRID) }}{% endif %}
-{% if att_can_allowance %}{{ alink('/attendance/allowance', 'Shift allowance', att_allow and not att_confirm, IC_ALLOW) }}{% endif %}
-{% if att_role in ('admin', 'gm', 'manager') %}{{ alink('/attendance/allowance/confirm', 'Allowance confirmation', att_confirm, IC_CHECK) }}{% endif %}
+{{ alink('/attendance/schedule', 'Schedule', att_sched, IC_GRID) }}
+{{ alink('/attendance/leave', 'Leave', att_leave, IC_LEAVE) }}
+{% if att_role in ('admin', 'gm', 'manager') %}{{ alink('/attendance/monthly-shifts', 'Allowance', att_allow, IC_CHECK) }}{% elif att_can_allowance %}{{ alink('/attendance/allowance', 'Allowance', att_allow, IC_ALLOW) }}{% endif %}
 {% if analysis_here %}{{ alink('/attendance/analytics', 'Attendance analysis', att_analysis, IC_CHART) }}{% endif %}
+{% if att_role == 'admin' %}{{ alink('/attendance/schedule/import', 'Imports', att_imports, IC_UPLOAD) }}{% endif %}
 {{ guide_link() }}
 {%- endmacro %}
 <header class="topbar">

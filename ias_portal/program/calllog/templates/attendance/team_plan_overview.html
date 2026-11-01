@@ -3,7 +3,7 @@
 {% block att_title %}Team schedule{% endblock %}
 {% block content %}
 {% call head('Team schedule', 'Build the ' ~ ov.label[0] ~ ' schedule of a team by drag and drop. The manager sends it to the General Manager; once approved it is the official schedule at once. The administrative affairs add nights, days off and official holidays, then send the e-mail. Uploading the Excel schedule still works too.', 'calendar') %}
-  <form method="get" class="inline-form"><label class="field">Month<input type="month" name="month" value="{{ ov.month }}"></label><button class="btn btn-sm" type="submit">Show</button></form>
+  <form method="get" class="inline-form"><input type="month" name="month" value="{{ ov.month }}" data-autosubmit aria-label="Month"><button class="btn btn-ghost btn-sm" type="submit">Show</button></form>
 {% endcall %}
 
 <ol class="ac-steps" aria-label="Steps">

@@ -6,49 +6,59 @@ PREFIX = "/attendance"
 
 
 def build_nav(user, path, args):
-    """Primary sections (top bar) and the tabs of the active section (second bar). Which entries exist depends on the role."""
+    """The tabs of the group the page belongs to (the groups themselves are the portal's side menu, see _topbar.html).
+
+    Workforce is organised by task, the same for every role (an entry a role may not open is simply left out):
+      Schedule  - Monthly calendar · Weekly plan · Team schedule · Shift changes
+      Leave     - Leave · Compensatory days
+      Allowance - Monthly shifts (step 1, the manager approves) · Confirmation (step 2) · Allowance sheet (the export)
+      Analysis  - Overview · Employees · Reports
+      Settings  - Rules & allowance · Scoring rules · Staff & teams · Roles & permissions   (administrators)
+      Imports   - Monthly schedule · HR attendance · Name mapping · HR numbers · Import history
+    """
     role = user["role"]
     if path.startswith(PREFIX):
         path = path[len(PREFIX):] or "/"
-    kind = args.get("kind", "summary") if path == "/reports" else ""
 
     def tab(label, icon, href, on):
         return {"label": label, "icon": icon, "href": PREFIX + href, "active": bool(on)}
 
-    # Dashboard: the Day view and Team availability (every role sees them, scoped to its teams)
-    dash = [tab("Day view", "layers", "/planning/day", path == "/planning/day"), tab("Team availability", "users", "/team", path == "/team")]
-    plan = [tab("Weekly plan", "calendar-check", "/planning/week", path == "/planning/week"),
-            tab("Monthly calendar", "calendar", "/schedule", path == "/schedule" or path == "/schedule/edit"),
-            tab("Leave", "plane", "/leave", path.startswith("/leave")),
-            tab("Compensatory days", "coffee", "/comp", path.startswith("/comp"))]
-    imports = []
-    if role == "admin":                        # uploading is administrator-only (managers have no import screens)
-        imports.append(tab("Monthly schedule", "upload", "/schedule/import", path.startswith("/schedule/import")))
-        imports.append(tab("HR attendance", "file", "/hr/import", path.startswith("/hr/import")))
-        imports.append(tab("Name mapping", "link", "/schedule/names", path == "/schedule/names"))
-        imports.append(tab("HR numbers", "users", "/hr/links", path == "/hr/links"))
-    if role in ("admin", "gm"):
-        imports.append(tab("Import history", "history", "/imports/history", path in ("/imports/history", "/schedule/history", "/hr/history")))
-    # the analysis pages: the overview, the employees, the reports (/employee/<id> is the Person dashboard)
-    analytics = [tab("Overview", "bars", "/analytics", path == "/analytics"), tab("Employees", "users", "/employees", path == "/employees"),
-                 tab("Reports", "file", "/reports", path == "/reports")]
-    admin = [tab("Rules & allowance", "sliders", "/admin/settings", path == "/admin/settings"),
-             tab("Scoring rules", "award", "/admin/scoring", path == "/admin/scoring"),
-             tab("Staff & teams", "users", "/admin/employees", path == "/admin/employees"),
-             tab("Roles & permissions", "shield", "/admin/roles", path == "/admin/roles"),
-             tab("Audit log", "history", "/admin/audit", path == "/admin/audit")]
     if role in ("allowance", "employee"):      # an employee: their own schedule (+ the shift-allowance export when assigned)
         return {"sections": [], "tabs": [], "group": ""}
-    # the sections themselves are in the portal's side menu (Today, Planning, Analysis, Settings, Logs); here only the tabs of
-    # the group the page belongs to
-    if role in ("admin", "manager"):
-        plan.append(tab("Changes", "pencil", "/modify", path == "/modify"))
-    plan.append(tab("Monthly shifts", "calendar-check", "/monthly-shifts", path.startswith("/monthly-shifts")))   # managers approve the month
-    settings = admin[:4] + imports if role == "admin" else []
-    groups = (("Planning", plan), ("Attendance analysis", analytics), ("Attendance settings", settings))
+    writer = role in ("admin", "manager")
+    schedule = [tab("Monthly calendar", "calendar", "/schedule", path in ("/schedule", "/schedule/edit")),
+                tab("Weekly plan", "calendar-check", "/planning/week", path == "/planning/week")]
+    if role in ("admin", "gm", "manager"):
+        schedule.append(tab("Team schedule", "layers", "/team-plan", path.startswith("/team-plan")))
+    if writer:
+        schedule.append(tab("Shift changes", "pencil", "/modify", path == "/modify"))
+    leave = [tab("Leave", "plane", "/leave", path.startswith("/leave")),
+             tab("Compensatory days", "coffee", "/comp", path.startswith("/comp"))]
+    allowance = [tab("Monthly shifts", "calendar-check", "/monthly-shifts", path.startswith("/monthly-shifts"))]
+    if role in ("admin", "gm", "manager"):
+        allowance.append(tab("Confirmation", "check-circle", "/allowance/confirm", path.startswith("/allowance/confirm")))
+    if user.get("can_allowance"):
+        allowance.append(tab("Allowance sheet", "download", "/allowance",
+                             path.startswith("/allowance") and not path.startswith("/allowance/confirm")))
+    analytics = [tab("Overview", "bars", "/analytics", path == "/analytics"), tab("Employees", "users", "/employees", path == "/employees"),
+                 tab("Reports", "file", "/reports", path == "/reports")]
+    settings, imports = [], []
+    if role == "admin":
+        settings = [tab("Rules & allowance", "sliders", "/admin/settings", path == "/admin/settings"),
+                    tab("Scoring rules", "award", "/admin/scoring", path == "/admin/scoring"),
+                    tab("Staff & teams", "users", "/admin/employees", path == "/admin/employees"),
+                    tab("Roles & permissions", "shield", "/admin/roles", path == "/admin/roles")]
+        imports = [tab("Monthly schedule", "upload", "/schedule/import", path.startswith("/schedule/import")),
+                   tab("HR attendance", "file", "/hr/import", path.startswith("/hr/import")),
+                   tab("Name mapping", "link", "/schedule/names", path == "/schedule/names"),
+                   tab("HR numbers", "users", "/hr/links", path == "/hr/links")]
+    if role in ("admin", "gm"):
+        imports.append(tab("Import history", "history", "/imports/history", path in ("/imports/history", "/schedule/history", "/hr/history")))
+    groups = (("Schedule", schedule), ("Leave", leave), ("Allowance", allowance), ("Attendance analysis", analytics),
+              ("Attendance settings", settings), ("Imports", imports))
     for name, tabs in groups:
         if any(t["active"] for t in tabs):
-            return {"sections": [], "tabs": tabs, "group": name}
+            return {"sections": [], "tabs": tabs if len(tabs) > 1 else [], "group": name}
     return {"sections": [], "tabs": [], "group": ""}
 
 
@@ -75,8 +85,9 @@ def donut(segments, size=150, center="", label="", stroke=18):
     return f'<div class="dviz">{svg}<div class="legend col">{legend}</div></div>'
 
 
-def strip(segments, label="status of the day"):
-    """segments: [(label, count, tone_class, hint)] -> one coloured bar (widths by count) with a legend of plain numbers: no percentage, no ring."""
+def strip(segments, label="status of the day", legend=True):
+    """segments: [(label, count, tone_class, hint)] -> one coloured bar (widths by count) with a legend of plain numbers: no percentage, no ring.
+    ``legend=False``: the bar only (each part still names itself on hover) - for a page that shows the same numbers next to it."""
     total = sum(c for _, c, _, _ in segments)
     if not total:
         return ""
@@ -88,6 +99,8 @@ def strip(segments, label="status of the day"):
         rects.append(f'<rect class="seg {tone}" x="{x:.2f}" width="{w:.2f}" height="12"><title>{escape(lab)}: {c}</title></rect>')
         x += w
     bar = f'<svg class="strip-bar" viewBox="0 0 100 12" preserveAspectRatio="none" role="img" aria-label="{escape(label)}">{"".join(rects)}</svg>'
+    if not legend:
+        return f'<div class="strip">{bar}</div>'
     items = "".join(f'<li class="{tone}"><i class="sw"></i><b>{c}</b> {escape(lab)}<small>{escape(hint)}</small></li>' for lab, c, tone, hint in segments)
     return f'<div class="strip">{bar}<ul class="strip-key">{items}</ul></div>'
 

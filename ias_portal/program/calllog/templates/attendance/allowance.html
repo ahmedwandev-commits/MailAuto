@@ -12,7 +12,7 @@
   {% if rep.use_schedule %}The shift is the one in the <b>portal schedule</b> for that day (imported, or changed by the manager), whatever time the person checked in.{% endif %}
   Without a planned shift: a check-in at the start of a shift ({% for k in ['morning', 'evening', 'night'] if R[k].enabled %}{{ EN[k] }} {{ R[k].start }}{% if R[k].grace %} +{{ R[k].grace }} min{% endif %}{{ ', ' if not loop.last }}{% endfor %}), or - for somebody who has shifts that month - leaving at or after {{ rep.evening_after }} = Evening.
   The person must stay the hours (Morning / Evening / Night: {{ '%g'|format(R.morning.hours) }} h). A weekly rest day or an official holiday worked = Holiday{% if R.rest_day.needs_hours and R.rest_day.hours %}, with {{ '%g'|format(R.rest_day.hours) }} h{% endif %}.
-  Anything else is listed below as “Not counted”. Rules: Administration → Settings → Shift allowance.</p></section>
+  Anything else is listed below as “Not counted”. Rules: Settings → Rules &amp; allowance.</p></section>
 
 <form method="get" class="card row" aria-label="Period">
   <label class="field">From<input type="date" name="from" value="{{ d1 }}" required></label>
@@ -36,7 +36,7 @@
 
 {% if rep.hidden_days %}{% call banner('t-info', 'info') %}<b>{{ rep.hidden_days }} counted day(s) are not shown</b> because the manager of their team has not approved that month yet (Monthly shifts).{% endcall %}{% endif %}
 {% if not rep.data_loaded %}{% call banner('t-warn', 'alert-triangle') %}<b>No HR attendance is stored for this period.</b> Ask the administrator to import the HR attendance file.{% endcall %}{% endif %}
-{% if rep.skipped %}{% call banner('t-warn', 'alert-triangle') %}<b>{{ rep.skipped|length }} day(s) with punches were not counted</b> - see “Not counted” below (also the last sheet of the Excel file).{% endcall %}{% endif %}
+{% if rep.skipped %}{% call banner('t-warn', 'alert-triangle') %}<b>{{ rep.skipped|length }} day(s) with punches were not counted</b> - open “Not counted” below (also the last sheet of the Excel file).{% endcall %}{% endif %}
 
 <section class="kpis" aria-label="Totals">
   {% for k in rep.kinds %}{{ kpi(EN[k], rep.totals[k].count, 'days', 's0', IC[k]) }}{% endfor %}
@@ -58,21 +58,21 @@
 </section>
 
 {% if rep.skipped %}
-<section class="card flush" aria-labelledby="skip-h">
-  <div class="card-head"><h2 id="skip-h">{{ icon('alert-triangle') }}Not counted</h2><span class="hint">{{ rep.skipped|length }} day(s) with a punch that did not qualify{% if rep.skipped|length > 300 %} (the first 300 are shown){% endif %}</span></div>
+<details class="card flush fold" aria-labelledby="skip-h">
+  <summary class="card-head"><h2 id="skip-h">{{ icon('alert-triangle') }}Not counted</h2><span class="hint">{{ rep.skipped|length }} day(s) with a punch that did not qualify{% if rep.skipped|length > 300 %} (the first 300 are shown){% endif %}</span></summary>
   <div class="tbl-wrap"><table class="tbl" id="allowance-skipped">
     <thead><tr><th>ID</th><th>Employee</th><th>Date</th><th>Check-in</th><th>Check-out</th><th>Reason</th></tr></thead><tbody>
     {% for s in rep.skipped[:300] %}<tr><td>{{ s.employee_id }}</td><td dir="auto" class="bidi">{{ rep.names.get(s.employee_id, '') }}</td><td>{{ s.date|dmy }}</td><td>{{ (s.in_time or '—')[:5] }}</td><td>{{ (s.out_time or '—')[:5] }}</td><td>{{ s.reason }}</td></tr>{% endfor %}
     </tbody></table></div>
-</section>
+</details>
 {% endif %}
 
-<section class="card flush" aria-labelledby="days-h">
-  <div class="card-head"><h2 id="days-h">{{ icon('calendar') }}Days</h2><span class="hint">{{ rep.days|length }} rows (the first 300 are shown here; the Excel file has all of them)</span></div>
+<details class="card flush fold" aria-labelledby="days-h">
+  <summary class="card-head"><h2 id="days-h">{{ icon('calendar') }}Days</h2><span class="hint">{{ rep.days|length }} rows (the first 300 are shown here; the Excel file has all of them)</span></summary>
   <div class="tbl-wrap"><table class="tbl" id="allowance-days">
     <thead><tr><th>ID</th><th>Employee</th><th>Date</th><th>Check-in</th><th>Check-out</th><th>Counted as</th><th>Because</th>{% if can_pending %}<th>Manager</th>{% endif %}</tr></thead><tbody>
     {% for d in rep.days[:300] %}<tr><td>{{ d.employee_id }}</td><td dir="auto" class="bidi">{{ rep.names[d.employee_id] }}</td><td>{{ d.date|dmy }}</td><td>{{ (d.in_time or '—')[:5] }}</td><td>{{ (d.out_time or '—')[:5] }}</td>
       <td>{{ AR[d.kind] }} <span class="small muted">{{ EN[d.kind] }}</span></td><td class="small muted">{{ SRC[d.source] }}</td>{% if can_pending %}<td>{% if d.approved %}<span class="chip t-ok">Approved</span>{% else %}<span class="chip t-na">Not approved yet</span>{% endif %}</td>{% endif %}</tr>{% endfor %}
     </tbody></table></div>
-</section>
+</details>
 {% endblock %}

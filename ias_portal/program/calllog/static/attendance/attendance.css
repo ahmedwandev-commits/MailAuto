@@ -631,3 +631,47 @@
 
 .att .roles-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 @media (max-width: 1100px) { .att .roles-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ---- v5.17 tidy-up -------------------------------------------------------------------------------------------- */
+/* My schedule: the next 7 days as tiles */
+.day-tiles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .5rem; }
+.day-tile { display: flex; flex-direction: column; gap: .2rem; padding: .6rem .7rem; border: 1px solid var(--axis); background: var(--surface); border-radius: 10px; min-width: 0; }
+.day-tile.today { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.day-tile .dt-day { font-weight: 600; font-size: .85rem; }
+.day-tile .dt-date { font-size: .78rem; opacity: .7; }
+.day-tile .dt-plan { font-size: .82rem; overflow-wrap: anywhere; }
+@media (max-width: 900px) { .day-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .day-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* a button without a variant looked like plain text (e.g. "Show", "Object"): give it the outline of a ghost button */
+.att .btn:not(.btn-primary):not(.btn-danger):not(.btn-link):not(.btn-ghost) { border-color: var(--axis); background: var(--surface); }
+.att .btn:not(.btn-primary):not(.btn-danger):not(.btn-link):not(.btn-ghost):hover { background: var(--wash); }
+/* a form whose fields carry a label above them: line the button up with the inputs, not with the label */
+.att .inline-form:has(> .field) { align-items: flex-end; }
+/* Settings: a sticky bar of links to the parts of the page */
+.att .jumpbar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; margin-bottom: 4px; background: var(--page, transparent); backdrop-filter: blur(6px); }
+.att .jumpbar a { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--axis); border-radius: 99px; background: var(--surface); color: var(--ink); text-decoration: none; font-size: .85rem; }
+.att .jumpbar a:hover { background: var(--wash); }
+.att [id] { scroll-margin-top: 64px; }
+/* a card that folds: its header is the <summary> (long lists stay closed until asked for) */
+.att details.fold > summary.card-head { cursor: pointer; list-style: none; }
+.att details.fold > summary.card-head::-webkit-details-marker { display: none; }
+.att details.fold > summary.card-head::after { content: "▸"; margin-inline-start: auto; opacity: .6; transition: transform .15s; }
+.att details.fold[open] > summary.card-head::after { transform: rotate(90deg); }
+/* a table row that opens the row under it (Monthly shifts: a person's days) */
+.att .row-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: var(--link); font: inherit; cursor: pointer; }
+.att .row-toggle .ic { transition: transform .15s; }
+.att .row-toggle[aria-expanded="true"] .ic { transform: rotate(90deg); }
+/* Team schedule: a calendar - one row per week, one column per working weekday */
+.att .tp-weeks.tp-cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.att .tp-weeks.tp-cols-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.att .tp-weeks.tp-cols-7 { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.att .tp-pad { min-height: 1px; }
+@media (max-width: 1100px) { .att .tp-weeks[class*="tp-cols-"] { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); } .att .tp-pad { display: none; } }
+/* Today: the rows without a bar (Stand-by, Annual Leaves & Rest days) give the bar's room to the name - it was cut to "Annual Leaves &..." */
+.att .shift-row.sh-OFF > summary .sr-bar, .att .shift-row.sh-SB > summary .sr-bar { display: none; }
+.att .shift-row.sh-OFF > summary .sr-name, .att .shift-row.sh-SB > summary .sr-name { grid-column: span 2; }
+.att .strip-only .strip { margin: 0; }
+/* a table cell of buttons must stay a table cell (".actions" is a flex row elsewhere; on a <td> it broke the row's borders) */
+.att .tbl td.actions { display: table-cell; vertical-align: middle; }
+.att .tbl td.actions > * { vertical-align: middle; }
+.att .tbl td.actions > * + * { margin-inline-start: 8px; }

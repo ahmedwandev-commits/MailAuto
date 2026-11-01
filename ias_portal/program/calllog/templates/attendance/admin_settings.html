@@ -3,9 +3,14 @@
 {% block att_title %}Settings{% endblock %}
 {% block content %}
 {% call head('Settings', 'Attendance rules, shift types, holidays and leave types. Every change is audited.', 'sliders') %}{% endcall %}
+{# one long page of separate forms: a bar of links to jump to the part you need (each form still saves only its own part) #}
+<nav class="jumpbar" aria-label="Sections of this page">
+  <a href="#managers">{{ icon('users') }}Team managers</a><a href="#allowance">{{ icon('download') }}Shift allowance</a><a href="#team-plan">{{ icon('calendar') }}Team schedule e-mail</a>
+  <a href="#rules">{{ icon('clock') }}Attendance rules</a><a href="#shift-types">{{ icon('layers') }}Shift types</a><a href="#holidays">{{ icon('calendar') }}Holidays</a><a href="#leave-types">{{ icon('plane') }}Leave types</a>
+</nav>
 {% call banner('t-warn', 'alert-triangle') %}<b>HR policy decisions needed.</b> None of these values comes from an HR document. The defaults assume the least (no grace, nothing penalised, no minimum staffing). Management should confirm each one.{% endcall %}
 
-<form method="post" class="card stack">{{ csrf() }}<input type="hidden" name="action" value="team_managers">
+<form method="post" class="card stack" id="managers">{{ csrf() }}<input type="hidden" name="action" value="team_managers">
   <div class="card-head"><h2>{{ icon('users') }}Team managers</h2><span class="hint">The names shown as “Team manager” on Team availability. Each team lists its own people (every portal account on that team); tick the manager(s). A team with none ticked shows “no manager assigned”.</span></div>
   {% if not team_members %}<p class="small muted">No team has people yet.</p>{% endif %}
   <div class="stack">
@@ -18,12 +23,12 @@
   <div><button class="btn btn-primary" type="submit">{{ icon('check') }}Save team managers</button></div>
 </form>
 
-<form method="post" class="card stack">{{ csrf() }}<input type="hidden" name="action" value="allowance">
+<form method="post" class="card stack" id="allowance">{{ csrf() }}<input type="hidden" name="action" value="allowance">
   <div class="card-head"><h2>{{ icon('download') }}Shift allowance (بدل ورديات)</h2><span class="hint">How the Shift allowance sheet counts days - counts only, no money. It reads the HR attendance file and the portal's schedule.</span></div>
   <div class="grid g2">
     <div class="stack">
       <h3>Which shift is it?</h3>
-      <label class="check"><input type="checkbox" name="use_schedule" value="1" {{ 'checked' if st.allowance_use_schedule }}> <b>Use the portal's schedule first</b> <span class="hint">the shift planned for the person that day (imported, or changed by the manager in Modification) is the shift, whatever time they checked in; they must stay the hours below</span></label>
+      <label class="check"><input type="checkbox" name="use_schedule" value="1" {{ 'checked' if st.allowance_use_schedule }}> <b>Use the portal's schedule first</b> <span class="hint">the shift planned for the person that day (imported, or changed by the manager in Shift changes) is the shift, whatever time they checked in; they must stay the hours below</span></label>
       <label class="field">Shift worker with no shift planned that day: <b>Evening</b> if they leave at or after (HH:MM)<input name="evening_after" value="{{ st.allowance_evening_after }}" size="6"></label>
       <p class="small muted">A “shift worker” is somebody who has shifts in the schedule of that month. Without a planned shift, a check-in at the start of a shift counts as that shift (the times in the table); otherwise leaving at or after the time above is Evening, a check-in in the night window is Night, anything else Morning. A person with no shifts in the schedule (normal day) is not counted. <b>Managers are counted for the morning shift and holidays only</b> (no evening or night).</p>
     </div>
@@ -63,8 +68,8 @@
 </form>
 
 <form method="post" class="card stack" id="team-plan">{{ csrf() }}<input type="hidden" name="action" value="team_plan">
-  <div class="card-head"><h2>{{ icon('calendar') }}Team schedule</h2>
-    <span class="hint">When the administrative affairs publish a month built on Workforce › Team schedule, one e-mail with the whole schedule goes to these addresses.</span></div>
+  <div class="card-head"><h2>{{ icon('calendar') }}Team schedule e-mail</h2>
+    <span class="hint">When the administrative affairs publish a month built on Workforce › Schedule › Team schedule, one e-mail with the whole schedule goes to these addresses.</span></div>
   <div class="form-grid">
     <label class="field">To <span class="hint">addresses, separated by ; or ,</span><input name="team_plan_to" value="{{ (st.team_plan_to or [])|join('; ') }}" dir="ltr"></label>
     <label class="field">Cc<input name="team_plan_cc" value="{{ (st.team_plan_cc or [])|join('; ') }}" dir="ltr"></label>
@@ -72,7 +77,7 @@
   <div><button class="btn btn-primary" type="submit">{{ icon('check') }}Save team schedule e-mail</button></div>
 </form>
 
-<form method="post" class="card stack">{{ csrf() }}<input type="hidden" name="action" value="rules">
+<form method="post" class="card stack" id="rules">{{ csrf() }}<input type="hidden" name="action" value="rules">
   <div class="card-head"><h2>{{ icon('clock') }}Attendance &amp; scheduling rules</h2></div>
   <div class="form-grid">
     <label class="field">Lateness grace (minutes)<input name="grace_minutes" value="{{ st.grace_minutes }}"></label>
@@ -109,7 +114,7 @@
 </form>
 
 <div class="grid g2">
-<section class="card stack"><div class="card-head"><h2>{{ icon('layers') }}Shift types</h2></div>
+<section class="card stack" id="shift-types"><div class="card-head"><h2>{{ icon('layers') }}Shift types</h2></div>
   <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Code</th><th>Name</th><th>Kind</th><th>Start</th><th>End</th><th></th></tr></thead><tbody>
   {% for s in shifts %}<tr><td>{{ shift(s.code) }}<form method="post" id="s-{{ s.code }}">{{ csrf() }}<input type="hidden" name="action" value="shift"><input type="hidden" name="code" value="{{ s.code }}"><input type="hidden" name="order" value="{{ s.sort_order }}"></form></td>
     <td><input form="s-{{ s.code }}" name="name" value="{{ s.name }}"></td>
@@ -123,11 +128,11 @@
   <p class="small muted">A shift whose end is at or before its start runs into the next day (night shift).</p></section>
 
 <div class="stack">
-<section class="card stack"><div class="card-head"><h2>{{ icon('calendar') }}Official holidays</h2></div>
+<section class="card stack" id="holidays"><div class="card-head"><h2>{{ icon('calendar') }}Official holidays</h2></div>
   <p class="small muted">Dates here are never treated as absence. Holidays marked in the HR file's “day type” column are recognised automatically.</p>
   <table class="tbl"><tbody>{% for h in holidays %}<tr><td>{{ h.date|dmy }}</td><td dir="auto" class="bidi">{{ h.name }}</td><td class="actions"><form method="post" class="inline-form">{{ csrf() }}<input type="hidden" name="action" value="holiday_remove"><input type="hidden" name="date" value="{{ h.date }}"><button class="btn btn-ghost btn-sm">Remove</button></form></td></tr>{% else %}<tr><td class="muted">None added.</td></tr>{% endfor %}</tbody></table>
   <form method="post" class="form-grid">{{ csrf() }}<input type="hidden" name="action" value="holiday_add"><label class="field">Date<input type="date" name="date" required></label><label class="field">Name<input name="name" required></label><div><button class="btn btn-ghost">Add holiday</button></div></form></section>
-<section class="card stack"><div class="card-head"><h2>{{ icon('plane') }}Leave types</h2></div>
+<section class="card stack" id="leave-types"><div class="card-head"><h2>{{ icon('plane') }}Leave types</h2></div>
   <table class="tbl"><thead><tr><th>Code</th><th>Name</th><th>Counts against a balance</th></tr></thead><tbody>{% for t in leave_types %}<tr><td>{{ t.code }}</td><td>{{ t.name }}</td><td>{{ 'yes' if t.counts_against_balance else 'no' }}</td></tr>{% endfor %}</tbody></table>
   <form method="post" class="form-grid">{{ csrf() }}<input type="hidden" name="action" value="leave_type"><label class="field">Code<input name="code" required></label><label class="field">Name<input name="name" required></label>
     <label class="check"><input type="checkbox" name="counts" value="1" checked> counts against a balance</label><div><button class="btn btn-ghost">Add / update</button></div></form>

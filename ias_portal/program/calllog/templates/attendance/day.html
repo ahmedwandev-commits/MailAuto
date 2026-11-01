@@ -14,7 +14,7 @@
     <a class="btn btn-ghost btn-sm" href="{{ url_for('att_planning.day', date=nxt, team=team) }}" aria-label="Next day">{{ icon('chevron-right') }}</a>
   </span>
   {% if not is_today %}<a class="btn btn-ghost btn-sm" href="{{ url_for('att_planning.day', team=team) }}">{{ icon('refresh') }}Today</a>{% endif %}
-  {% if can_edit %}<a class="btn btn-primary btn-sm" href="{{ url_for('att_planning.modify', date=day, team=team) }}">{{ icon('pencil') }}Change a shift / leave</a>{% endif %}
+  {% if can_edit %}<a class="btn btn-primary btn-sm" href="{{ url_for('att_planning.modify', date=day, team=team) }}">{{ icon('pencil') }}Shift changes</a>{% endif %}
 {% endcall %}
 
 {% for s in stale %}{% if s.missing %}{% call banner('t-warn', 'alert-triangle') %}<b>{{ s.people }} people of the {{ s.year }}-{{ '%02d' % s.month }} schedule are missing</b> ({{ s.missing }} person-days): their names were skipped when the file was imported, but they match an employee now{% if s.names %} - <span dir="auto" class="bidi">{{ s.names|join('، ') }}</span>{% endif %}.
@@ -26,11 +26,12 @@
   {% for s in dv.ov.short_staffed if not team or s.team|lower == team|lower %}<span dir="auto" class="bidi">{{ s.team }}</span> · {{ dv.ov.shifts[s.shift].name }} {{ s.available }}/{{ s.planned }}{{ '; ' if not loop.last }}{% endfor %}{% endcall %}{% endif %}
 {% if is_today and not td.data_loaded and c.expected %}{% call banner('t-info', 'info') %}The HR file of today is not loaded yet: people who signed in to the portal count as arrived, everyone else expected shows as <b>not arrived</b> once their shift has started.{% endcall %}{% endif %}
 
-{# the day at a glance: one status strip of everyone planned (no ring - the newer version's decision), then the numbers #}
+{# the day at a glance: one status strip of everyone planned (no ring - the owner's decision) as a bar only - its numbers are the
+   counters right below it, so they are not written twice #}
 {% set k = dv.ov.kpi %}
-<section class="card tight" aria-label="Everyone today">
+<section class="card tight strip-only" aria-label="Everyone today">
   {{ strip([('came to work', k.present_today, 't-ok', 'checked in'), ('not here yet', k.not_arrived, 't-warn', 'planned, no check-in'), ('absent', k.absent, 't-danger', 'no check-in, shift is over'),
-            ('on leave', k.annual_leave + k.other_leave, 't-info', 'annual or other'), ('rest day', k.rest_day, 't-na', 'day off')], 'everyone planned today') }}
+            ('on leave', k.annual_leave + k.other_leave, 't-info', 'annual or other'), ('rest day', k.rest_day, 't-na', 'day off')], 'everyone planned today', False) }}
 </section>
 <section class="dash-kpis" aria-label="The day in numbers">
   <div class="kpis">
@@ -39,7 +40,7 @@
     {{ kpi('Not arrived', c.not_arrived, 'shift started, no check-in', 't-danger' if c.not_arrived else 't-na', 'user-x') }}
     {{ kpi('On leave', c.leave, 'never counted as absent', 't-info', 'plane') }}
     {{ kpi('Rest / off', c.rest, 'rest day, holiday, stand-by', 't-na', 'coffee') }}
-    {{ kpi('Permits to review', c.exceptions, c.late_permit ~ ' اذن حضور · ' ~ c.early_permit ~ ' اذن انصراف', 't-warn' if c.exceptions else 't-na', 'alert-triangle') }}
+    {{ kpi('Permits to review', c.exceptions, c.late_permit ~ ' late arrival · ' ~ c.early_permit ~ ' early departure', 't-warn' if c.exceptions else 't-na', 'alert-triangle') }}
   </div>
 </section>
 

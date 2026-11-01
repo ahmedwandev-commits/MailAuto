@@ -194,9 +194,9 @@ def test_pdf_export_renders_arabic_names(app, world, repo, admin_b):
 
 # ---------------------------------------------------------------- navigation per role
 @pytest.mark.parametrize("who,present,absent", [          # v5.16: one menu - the portal's
-    ("admin", [">Today<", ">Planning<", ">Shift allowance<", ">Analysis<", ">Settings<", ">Logs<"], [">Attendance settings<"]),
-    ("mgr1", [">Today<", ">Planning<", ">Analysis<"], [">Settings<", ">Shift allowance<", ">Attendance settings<"]),
-    ("gm", [">Today<", ">Planning<", ">Attendance analysis<"], [">Settings<", ">Attendance settings<", "/attendance/modify"])])
+    ("admin", [">Today<", ">Schedule<", ">Leave<", ">Allowance<", ">Imports<", ">Analysis<", ">Settings<", ">Logs<"], [">Attendance settings<", ">Planning<"]),
+    ("mgr1", [">Today<", ">Schedule<", ">Leave<", ">Allowance<", ">Analysis<"], [">Settings<", ">Imports<", "/attendance/allowance\"", ">Attendance settings<"]),
+    ("gm", [">Today<", ">Schedule<", ">Leave<", ">Allowance<", ">Attendance analysis<"], [">Settings<", ">Imports<", ">Attendance settings<", "/attendance/modify"])])
 def test_navigation_matches_the_role(app, world, who, present, absent):
     html = login(app, who).get("/planning/day").get_data(as_text=True)
     nav = html.split('aria-label="Main"')[1].split("</nav>")[0]
@@ -204,8 +204,11 @@ def test_navigation_matches_the_role(app, world, who, present, absent):
     assert not any(a in nav for a in absent)
     assert 'aria-label="Attendance sections"' not in html                     # no second menu inside the module
     if who == "admin":                                                         # its settings pages share one tab bar
-        sub = login(app, who).get("/schedule/import").get_data(as_text=True)
-        assert "HR attendance" in sub and "Scoring rules" in sub and "Roles &amp; permissions" in sub
+        b = login(app, who)
+        sub = b.get("/schedule/import").get_data(as_text=True)               # v5.17: the imports have their own tab bar
+        assert "HR attendance" in sub and "Name mapping" in sub and "Import history" in sub and "Scoring rules" not in sub
+        sub = b.get("/admin/settings").get_data(as_text=True)
+        assert "Scoring rules" in sub and "Roles &amp; permissions" in sub and "HR attendance" not in sub.split('class="subtabs"')[1].split("</nav>")[0]
 
 
 def test_weekly_plan_shows_the_default_shift_as_auto_and_counts_it(app, world, repo, admin_b):

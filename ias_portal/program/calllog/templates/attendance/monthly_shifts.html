@@ -28,7 +28,7 @@
 
 {% if can_approve %}
 <section class="card row">
-  <div class="grow small muted">If a shift is wrong, change it in <a href="{{ url_for('att_planning.modify', team=team) }}">Modification</a> (the shift you set there is the one that is counted), then come back. Managers are counted for the morning shift and holidays only; every shift is counted for employees.</div>
+  <div class="grow small muted">If a shift is wrong, change it in <a href="{{ url_for('att_planning.modify', team=team) }}">Shift changes</a> (the shift you set there is the one that is counted), then come back. Managers are counted for the morning shift and holidays only; every shift is counted for employees.</div>
   <form method="post" class="inline-form" data-confirm-form>{{ csrf() }}<input type="hidden" name="month" value="{{ month }}"><input type="hidden" name="team" value="{{ team }}">
     {% if mv.status == 'approved' %}<input type="hidden" name="action" value="reopen"><button class="btn btn-ghost" data-confirm="Withdraw the approval of {{ month }} for {{ team }}?">{{ icon('refresh') }}Reopen</button>
     {% else %}<input type="hidden" name="action" value="approve"><button class="btn btn-primary">{{ icon('check') }}Approve {{ month }}</button>{% endif %}</form>
@@ -37,17 +37,17 @@
 {% endif %}
 
 <section class="card flush" aria-labelledby="ms-h">
-  <div class="card-head"><h2 id="ms-h">{{ icon('users') }}<span dir="auto" class="bidi">{{ team }}</span> · {{ month }}</h2><span class="hint">open a person to see their days</span></div>
+  <div class="card-head"><h2 id="ms-h">{{ icon('users') }}<span dir="auto" class="bidi">{{ team }}</span> · {{ month }}</h2><span class="hint">click a name to see that person's days</span></div>
   <div class="tbl-wrap"><table class="tbl" id="monthly-shifts">
     <thead><tr><th>ID</th><th>Person</th>{% for k in mv.kinds %}<th class="num">{{ EN[k] }}</th>{% endfor %}<th class="num">Total</th></tr></thead>
     <tbody>
-    {% for r in mv.rows %}<tr><td>{{ r.employee_id }}</td><td dir="auto" class="bidi"><b>{{ r.name }}</b></td>
+    {% for r in mv.rows %}{% set mine = mv.days|selectattr('employee_id', 'equalto', r.employee_id)|list %}
+      <tr><td>{{ r.employee_id }}</td><td>{% if mine %}<button class="row-toggle" type="button" data-toggle-row="msd-{{ r.employee_id }}" aria-expanded="false" aria-controls="msd-{{ r.employee_id }}">{{ icon('chevron-right') }}<b dir="auto" class="bidi">{{ r.name }}</b></button> <span class="small muted">{{ mine|length }} day(s)</span>{% else %}<b dir="auto" class="bidi">{{ r.name }}</b>{% endif %}</td>
       {% for k in mv.kinds %}<td class="num">{{ r[k].count }}</td>{% endfor %}<td class="num"><b>{{ r.total_count }}</b></td></tr>
-      {% set mine = mv.days|selectattr('employee_id', 'equalto', r.employee_id)|list %}
-      {% if mine %}<tr class="detail"><td></td><td colspan="{{ 2 + mv.kinds|length }}"><details><summary class="small muted">{{ mine|length }} day(s)</summary>
+      {% if mine %}<tr class="detail" id="msd-{{ r.employee_id }}" hidden><td></td><td colspan="{{ 2 + mv.kinds|length }}">
         <table class="tbl" aria-label="Days of {{ r.name }}"><thead><tr><th>Date</th><th>Check-in</th><th>Check-out</th><th>Counted as</th><th>Because</th></tr></thead><tbody>
         {% for d in mine %}<tr><td>{{ d.date|dmy }} · {{ d.date|dayname }}</td><td>{{ (d.in_time or '—')[:5] }}</td><td>{{ (d.out_time or '—')[:5] }}</td><td>{{ AR[d.kind] }} <span class="small muted">{{ EN[d.kind] }}</span></td><td class="small muted">{{ SRC[d.source] }}</td></tr>{% endfor %}
-        </tbody></table></details></td></tr>{% endif %}
+        </tbody></table></td></tr>{% endif %}
     {% else %}<tr><td colspan="{{ 3 + mv.kinds|length }}">{% call empty('users', 'Nobody in this team', 'Teams come from the portal accounts.') %}{% endcall %}</td></tr>{% endfor %}
     </tbody>
     {% if mv.rows %}<tfoot><tr><td colspan="2"><b>Total</b></td>{% for k in mv.kinds %}<td class="num">{{ mv.totals[k] }}</td>{% endfor %}<td class="num"><b>{{ mv.totals.total_count }}</b></td></tr></tfoot>{% endif %}
@@ -55,13 +55,13 @@
 </section>
 
 {% if mv.skipped %}
-<section class="card flush" aria-labelledby="mskip-h">
-  <div class="card-head"><h2 id="mskip-h">{{ icon('alert-triangle') }}Days with punches that were not counted</h2><span class="hint">{{ mv.skipped|length }} day(s) - the reason is shown; fix the shift in Modification if it is wrong</span></div>
+<details class="card flush fold" aria-labelledby="mskip-h">
+  <summary class="card-head"><h2 id="mskip-h">{{ icon('alert-triangle') }}Days with punches that were not counted</h2><span class="count">{{ mv.skipped|length }}</span><span class="hint">click to open - the reason is shown; fix the shift in Shift changes if it is wrong</span></summary>
   <div class="tbl-wrap"><table class="tbl" id="monthly-skipped">
     <thead><tr><th>Person</th><th>Date</th><th>Check-in</th><th>Check-out</th><th>Reason</th></tr></thead><tbody>
     {% for s in mv.skipped[:200] %}<tr><td dir="auto" class="bidi">{{ mv.names.get(s.employee_id, s.employee_id) }}</td><td>{{ s.date|dmy }}</td><td>{{ (s.in_time or '—')[:5] }}</td><td>{{ (s.out_time or '—')[:5] }}</td><td>{{ s.reason }}</td></tr>{% endfor %}
     </tbody></table></div>
-</section>
+</details>
 {% endif %}
 {% endif %}
 {% endblock %}

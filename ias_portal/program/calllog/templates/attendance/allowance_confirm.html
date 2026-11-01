@@ -4,7 +4,7 @@
 {% block content %}
 {% set rnd = st.round %}
 {% call head('Allowance confirmation', 'The ' ~ st.label[0] ~ ' shift allowance: employees confirm, then each team manager, then the General Manager. The administrative affairs are told at the end.', 'check-circle') %}
-  <form method="get" class="inline-form"><label class="field">Month<input type="month" name="month" value="{{ month }}"></label><button class="btn btn-sm" type="submit">Show</button></form>
+  <form method="get" class="inline-form"><input type="month" name="month" value="{{ month }}" data-autosubmit aria-label="Month"><button class="btn btn-ghost btn-sm" type="submit">Show</button></form>
 {% endcall %}
 
 {# the steps: sent -> employees -> team managers -> General Manager -> administrative affairs #}

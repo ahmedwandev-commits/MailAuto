@@ -1,9 +1,9 @@
 {% extends "attendance/base.html" %}
 {% from "attendance/_ui.html" import icon, head, banner, chip, tone_chip, shift, csrf, empty with context %}
-{% block att_title %}Modification{% endblock %}
+{% block att_title %}Shift changes{% endblock %}
 {% block content %}
 {% set here_url = url_for('att_planning.modify', date=day, team=team) %}
-{% call head('Modification', 'Change an employee\'s shift and manage leave · ' ~ day|dmy ~ ' · ' ~ (day|dayname) ~ ' · ' ~ (team if team else 'all teams in your scope'), 'pencil') %}
+{% call head('Shift changes', 'Change an employee\'s shift and manage leave · ' ~ day|dmy ~ ' · ' ~ (day|dayname) ~ ' · ' ~ (team if team else 'all teams in your scope'), 'pencil') %}
   <span class="datenav">
     <a class="btn btn-ghost btn-sm" href="{{ url_for('att_planning.modify', date=prev, team=team) }}" aria-label="Previous day">{{ icon('chevron-left') }}</a>
     <form method="get" class="inline-form"><input type="date" name="date" value="{{ day }}" data-autosubmit aria-label="Date">

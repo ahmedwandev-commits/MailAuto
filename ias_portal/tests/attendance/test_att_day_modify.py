@@ -131,7 +131,7 @@ def test_the_three_dashboards_today_team_person_for_every_role(app, world, admin
         assert b.get("/").headers["Location"].endswith("/attendance/planning/day")
         day = b.get("/planning/day").get_data(as_text=True)
         menu = day.split('aria-label="Main"')[1].split("</nav>")[0]                  # the sections are in the portal's menu
-        assert ">Today<" in menu and ">Planning<" in menu and 'aria-label="Attendance sections"' not in day
+        assert ">Today<" in menu and ">Schedule<" in menu and 'aria-label="Attendance sections"' not in day
         r = b.get("/today?date=2026-10-12")                                     # the old overview page is gone: old links land on Today
         assert r.status_code == 302 and r.headers["Location"].endswith("/attendance/planning/day?date=2026-10-12")
     # Today carries the teams table; /team without a team (several teams) is Today, with a team it is that team's dashboard

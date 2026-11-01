@@ -32,7 +32,7 @@
 </section>
 
 <section class="card flush">
-  <div class="card-head"><h2>{{ icon('users') }}Balances {{ year }}</h2><span class="hint">taken counts approved requests only</span></div>
+  <div class="card-head"><h2>{{ icon('users') }}Balances {{ year }}</h2><span class="hint">taken counts approved requests only</span>{% if att_user.role == 'admin' %}<span class="grow"></span><button class="btn btn-ghost btn-sm" type="button" data-dialog="entDlg">{{ icon('sliders') }}Set entitlement</button>{% endif %}</div>
   <div class="tbl-wrap"><table class="tbl" id="bal">
     <thead><tr><th>Employee</th>{% for t in types %}<th class="num">{{ t.name }} taken</th>{% endfor %}<th class="num">Annual left</th><th class="num">Casual left</th></tr></thead><tbody>
     {% for id, e in emps.items() if (not team or e.team == team) %}{% set b = bal[id] %}
@@ -56,13 +56,19 @@
 {% endif %}
 
 {% if att_user.role == 'admin' %}
-<section class="card"><div class="card-head"><h2>{{ icon('sliders') }}Entitlement &amp; opening balance</h2><span class="hint">administrators only</span></div>
-<form method="post" action="{{ url_for('att_people.leave_entitlement') }}" class="form-grid">{{ csrf() }}
-  <label class="field">Employee<select name="emp">{% for id, e in emps.items() %}<option value="{{ id }}">{{ e.name|short_name(3) }} ({{ id }})</option>{% endfor %}</select></label>
-  <label class="field">Year<input name="year" value="{{ year }}"></label>
-  <label class="field">Type<select name="type">{% for t in types %}<option value="{{ t.code }}">{{ t.name }}</option>{% endfor %}</select></label>
-  <label class="field">Entitlement (days)<input name="entitlement" required></label><label class="field">Opening balance<input name="opening" value="0"></label>
-  <div><button class="btn btn-primary">Save</button></div></form></section>
+{# the yearly entitlement belongs to the Balances table: a dialog opened from its header (it was a loose form at the page's end) #}
+<dialog class="dlg" id="entDlg" aria-labelledby="entTitle">
+  <form method="post" action="{{ url_for('att_people.leave_entitlement') }}">{{ csrf() }}
+    <div class="dlg-head"><h2 id="entTitle">{{ icon('sliders') }}Entitlement &amp; opening balance</h2><span class="grow"></span><button class="iconbtn" type="button" data-close aria-label="Close">{{ icon('x') }}</button></div>
+    <div class="dlg-body"><div class="form-grid">
+      <label class="field wide">Employee<select name="emp">{% for id, e in emps.items() %}<option value="{{ id }}">{{ e.name|short_name(3) }} ({{ id }})</option>{% endfor %}</select></label>
+      <label class="field">Year<input name="year" value="{{ year }}" inputmode="numeric"></label>
+      <label class="field">Type<select name="type">{% for t in types %}<option value="{{ t.code }}">{{ t.name }}</option>{% endfor %}</select></label>
+      <label class="field">Entitlement (days)<input name="entitlement" required inputmode="decimal"></label><label class="field">Opening balance<input name="opening" value="0" inputmode="decimal"></label></div>
+      <p class="small muted">Administrators only. The balance is the entitlement plus the opening balance minus the approved leave of that year.</p></div>
+    <div class="dlg-foot"><button class="btn btn-ghost" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save</button></div>
+  </form>
+</dialog>
 {% endif %}
 
 {% if can_edit %}

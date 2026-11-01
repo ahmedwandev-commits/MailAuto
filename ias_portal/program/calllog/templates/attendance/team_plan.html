@@ -2,9 +2,9 @@
 {% from "attendance/_ui.html" import icon, head, tone_chip, csrf with context %}
 {% block att_title %}Team schedule · {{ b.team }}{% endblock %}
 {% block content %}
-{% call head(b.team ~ ' · ' ~ b.label[0], 'Drag your people into Morning, Normal (08:00-16:00) or Evening for every working day, or into Comp day (as many as you need, you too). Leaves are recorded on Planning › Leave and show here.' if not b.can.affairs else 'Morning, Normal, Evening and Comp day come from the team manager. Night, Day off and official holidays are yours (administrative affairs).', 'calendar') %}
+{% call head(b.team ~ ' · ' ~ b.label[0], 'Drag your people into Morning, Normal (08:00-16:00) or Evening for every working day, or into Comp day (as many as you need, you too). Leaves are recorded on Workforce › Leave and show here.' if not b.can.affairs else 'Morning, Normal, Evening and Comp day come from the team manager. Night, Day off and official holidays are yours (administrative affairs).', 'calendar') %}
   <form method="get" class="inline-form"><input type="hidden" name="team" value="{{ b.team }}">
-    <label class="field">Month<input type="month" name="month" value="{{ b.month }}"></label><button class="btn btn-sm" type="submit">Show</button></form>
+    <input type="month" name="month" value="{{ b.month }}" data-autosubmit aria-label="Month"><button class="btn btn-ghost btn-sm" type="submit">Show</button></form>
   <a class="btn btn-ghost btn-sm" href="{{ url_for('att_plan.index', month=b.month) }}">{{ icon('arrow-left') }}All teams</a>
 {% endcall %}
 
@@ -47,7 +47,12 @@
     {% endfor %}</ul>
   </aside>
 
-  <div class="tp-weeks" id="tpWeeks">
+  {# one row per week, one column per working weekday, so every Sunday is under the Sunday before it #}
+  {% set wk_names = b.weekday.values()|list %}
+  {% set working = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']|select('in', wk_names)|list %}
+  {% set pad = working.index(b.weekday[b.days[0]]) if b.days and b.weekday[b.days[0]] in working else 0 %}
+  <div class="tp-weeks tp-cols-{{ working|length or 5 }}" id="tpWeeks">
+    {% for i in range(pad) %}<div class="tp-pad" aria-hidden="true"></div>{% endfor %}
     {% for d in b.days %}
       <section class="tp-day card{{ ' tp-hol' if d in b.holidays }}" data-date="{{ d }}">
         <header><b>{{ b.weekday[d] }}</b> <span>{{ d|dmy }}</span>{% if d in b.holidays %} <span class="chip t-warn">{{ icon('sun') }}<span dir="auto">{{ b.holidays[d] }}</span></span>{% endif %}
