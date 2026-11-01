@@ -11,12 +11,16 @@
 {% call banner('t-warn', 'alert-triangle') %}<b>HR policy decisions needed.</b> None of these values comes from an HR document. The defaults assume the least (no grace, nothing penalised, no minimum staffing). Management should confirm each one.{% endcall %}
 
 <form method="post" class="card stack" id="managers">{{ csrf() }}<input type="hidden" name="action" value="team_managers">
-  <div class="card-head"><h2>{{ icon('users') }}Team managers</h2><span class="hint">The names shown as “Team manager” on Team availability. Each team lists its own people (every portal account on that team); tick the manager(s). A team with none ticked shows “no manager assigned”.</span></div>
+  <div class="card-head"><h2>{{ icon('users') }}Team managers</h2><span class="hint">ONE manager per team runs the team in Workforce (Today, Schedule, Leave, Allowance, its e-mails). Another manager of the team keeps E-mail and Calls, and sees only their own schedule and attendance here. A team with a single manager has that one until you choose.</span></div>
   {% if not team_members %}<p class="small muted">No team has people yet.</p>{% endif %}
+  {% set unset = [] %}{% for t, people in team_members.items() if people and not team_manager[t] %}{% set _ = unset.append(t) %}{% endfor %}
+  {% if unset %}{% call banner('t-warn', 'alert-triangle') %}<b>No manager runs {{ unset|length }} team(s) in Workforce:</b> <span dir="auto" class="bidi">{{ unset|join('، ') }}</span> - choose one below.{% endcall %}{% endif %}
   <div class="stack">
-  {% for t, people in team_members.items() %}{% set picked = st.team_managers.get(t, []) %}
-    <fieldset class="field wide"><legend dir="auto" class="bidi"><b>{{ t }}</b> <span class="hint">{{ people|length }} people</span></legend>
-      {% for m in people %}<label class="check"><input type="checkbox" name="mgr:{{ t }}" value="{{ m.user_id }}" {{ 'checked' if m.user_id in picked }}> <span dir="auto" class="bidi">{{ m.name }}</span> <span class="hint">{{ m.user_id }}{% if m.hub_role == 'manager' %} · manager{% endif %}</span></label>{% endfor %}
+  {% for t, people in team_members.items() %}
+    <fieldset class="field wide"><legend dir="auto" class="bidi"><b>{{ t }}</b> <span class="hint">{{ people|length }} manager(s)</span></legend>
+      {% for m in people %}<label class="check"><input type="radio" name="mgr:{{ t }}" value="{{ m.user_id }}" {{ 'checked' if team_manager[t] == m.user_id }}> <span dir="auto" class="bidi">{{ m.name }}</span> <span class="hint">{{ m.user_id }}</span></label>
+      {% else %}<span class="muted small">No portal manager is on this team.</span>{% endfor %}
+      {% if people %}<label class="check"><input type="radio" name="mgr:{{ t }}" value="" {{ 'checked' if not team_manager[t] }}> <span class="muted">Nobody</span></label>{% endif %}
     </fieldset>
   {% endfor %}
   </div>

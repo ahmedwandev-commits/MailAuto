@@ -6,7 +6,8 @@ HOW TO UPDATE (your data is kept)
   2. Copy everything inside "program" over the old program folder. This package has NO data folder, NO .secret_key
      and NO collector_config.json, so your users, history, settings and collector passwords are never touched.
   3. Start run.py, then collector.py.
-  4. Settings > Rules & allowance: check "Amount per day" (100 / 150 / 200 / 300 are the new defaults - an amount you
+  4. Settings > Rules & allowance > Team managers: choose the ONE manager of every team that has several managers.
+  5. Settings > Rules & allowance: check "Amount per day" (100 / 150 / 200 / 300 are the new defaults - an amount you
      saved before is kept) and the new "Overtime & meals" section.
 
 A. WORKFORCE IS ORGANISED BY TASK
@@ -26,6 +27,10 @@ A. WORKFORCE IS ORGANISED BY TASK
    - ONE TEAM PER PERSON in Workforce: an account with several teams (for the E-mail module) counts once, in its first team,
      or the one chosen in Settings > Staff & teams. "Unclassified" is an e-mail inbox, never a Workforce team. A manager
      manages that one team (a manager set to "every team" still sees all).
+   - ONE MANAGER PER TEAM in Workforce: the one chosen in Settings > Rules & allowance > Team managers (a team with a
+     single manager gets that one automatically). Only that manager has the team's Workforce pages, approvals and e-mails;
+     another manager of the team keeps E-mail and Calls and sees only their own schedule and attendance in Workforce.
+     A manager set to "every team" still sees all. AFTER UPDATING: choose the manager of every team that has several.
    - Nobody is without a team: Admin > Users refuses to save an employee, manager or administrative-affairs account without
      a real team, and Staff & teams lists any account that has none.
    - Administrative affairs: an account with this role and an HR number is on its team's roster (its own attendance and
@@ -47,6 +52,9 @@ B. MY ATTENDANCE (new) - every employee and supervisor sees their own month; man
      day whose sheet is not uploaded yet shows "waiting for the HR sheet" and is counted as expected from the schedule;
      it is recalculated as soon as the sheet is uploaded (a day, two days or a week at once).
    - Every number above is editable: Settings > Rules & allowance > Overtime & meals.
+
+   - SPEED: the Workforce pages checked each data file on the shared folder hundreds of times per page (Today: ~690 checks,
+     about 2 s on the share). A file is now checked at most once a second: Today ~65 ms, every Workforce page under 0.25 s.
 
 C. BUGS FIXED (whole application, 41 fixes - each has an automatic test)
    - Schedule import: a name matching several employees gave the shifts to the first of them (now: skipped and listed).

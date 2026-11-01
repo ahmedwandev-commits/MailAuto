@@ -82,6 +82,7 @@ def test_build_send_approve_is_official_then_mail(app, world, repo, admin_b, gm_
 def test_the_manager_is_scheduled_too(app, world, repo, mgr1_b):
     from .support import add_user
     add_user(repo, "150", "manager", ["Team A"], name="Hany Manager")          # a manager with an HR number: on the roster
+    repo.save_settings({"team_managers": {"Team A": ["mgr1"]}})                # mgr1 stays the team's one manager (v5.17)
     page = mgr1_b.get(f"/attendance/team-plan?month={M}&team=Team A").get_data(as_text=True)
     assert "Hany Manager" in page and "tp-mgr" in page and "morning shift is paid" in page
     from calllog.attendance.services import team_plan as tp
@@ -96,6 +97,7 @@ def test_the_manager_is_scheduled_too(app, world, repo, mgr1_b):
 def test_comp_day_for_any_number_of_people_and_the_manager(app, world, repo, admin_b, gm_b, mgr1_b):
     from .support import add_user
     add_user(repo, "150", "manager", ["Team A"], name="Hany Manager")
+    repo.save_settings({"team_managers": {"Team A": ["mgr1"]}})
     assert _save(mgr1_b, "Team A", {"2026-11-02": {"M": [101], "E": [102]}, "2026-11-03": {"CD": [101, 102, 150]}}).status_code == 200
     assert mgr1_b.post("/team-plan/submit", {"month": M, "team": "Team A"}).status_code == 302
     assert gm_b.post("/team-plan/review", {"month": M, "team": "Team A", "decision": "approve"}).status_code == 302

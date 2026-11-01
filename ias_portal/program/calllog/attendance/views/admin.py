@@ -189,13 +189,12 @@ def settings():
             old = settings_svc.load(repo)
             repo.save_settings(vals)
             auth.audit("settings_changed", "settings", "rules", {"previous": {k: old[k] for k in vals}, "new": vals})
-        elif a == "team_managers":
+        elif a == "team_managers":                             # ONE manager per team (owner, v5.17)
             chosen = {}
             for t in _team_names(repo):
-                members = {m["user_id"] for m in repo.directory.team_members(t)}
-                ids = [x for x in request.form.getlist("mgr:" + t) if x in members]      # only people who are on that team
-                if ids:
-                    chosen[t] = ids
+                ids = {m["user_id"] for m in repo.directory.team_manager_candidates(t)}
+                pick = (request.form.get("mgr:" + t) or "").strip()
+                chosen[t] = [pick] if pick in ids else []       # [] = nobody (an explicit choice)
             old = settings_svc.load(repo)
             repo.save_settings({"team_managers": chosen})
             auth.audit("settings_changed", "settings", "team_managers", {"previous": old["team_managers"], "new": chosen})
@@ -294,7 +293,8 @@ def settings():
     st = settings_svc.load(repo)
     return render_template("attendance/admin_settings.html", st=st, shifts=repo.list_shift_types(), holidays=repo.list_holidays(),
                            leave_types=repo.list_leave_types(),
-                           team_members={t: repo.directory.team_members(t) for t in _team_names(repo)},
+                           team_members={t: repo.directory.team_manager_candidates(t) for t in _team_names(repo)},
+                           team_manager={t: repo.directory.team_manager_of(t) for t in _team_names(repo)},
                            allowance_rules=settings_svc.allowance_rules(st),
                            ot=settings_svc.overtime_rules(st),
                            allowance_kinds=[(k, al.ENGLISH[k], k in al.SHIFT_KINDS) for k in al.KINDS],

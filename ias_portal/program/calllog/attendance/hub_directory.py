@@ -86,7 +86,12 @@ class HubDirectory:
         if user["user_id"] in self._gm_ids():
             return GM
         if user.get("role") == "manager":
-            return "manager"
+            # owner (v5.17): ONE manager per team has the team's Workforce pages - the one chosen in Settings › Team managers (or
+            # the only manager of the team). Another manager of the team is an employee here (own schedule and attendance);
+            # a manager set to every team keeps every team.
+            if overlay.user_teams(user) == [ALL_TEAMS_MARK] or self.team_manager_of(self.att_team(user)) == user["user_id"]:
+                return "manager"
+            return EMPLOYEE if self._is_employee(user) else None
         if user["user_id"] in self._allowance_ids():
             return ALLOWANCE                                      # an account with only the allowance export (+ its own schedule)
         return EMPLOYEE if self._is_employee(user) else None      # an employee: only their own schedule
@@ -124,6 +129,36 @@ class HubDirectory:
         if chosen and any(chosen.strip().casefold() == c.strip().casefold() for c in choices):
             return next(c for c in choices if chosen.strip().casefold() == c.strip().casefold())
         return choices[0] if choices else ""
+
+    def team_managers_all(self):
+        """{team (lower case): the account id of its one Workforce manager} for every team."""
+        users = [u for u in self.store.users().values() if u.get("active", True) and u.get("role") == "manager"
+                 and overlay.user_teams(u) != [ALL_TEAMS_MARK]]
+        by_team = {}
+        for u in users:
+            t = self.att_team(u).strip().lower()
+            if t:
+                by_team.setdefault(t, []).append(u["user_id"])
+        chosen = {str(k).strip().lower(): v for k, v in (self.repo._get("settings.json", {}).get("team_managers") or {}).items()}
+        out = {}
+        for t, ids in by_team.items():
+            pick = next((i for i in (chosen.get(t) or []) if i in ids), None)
+            if pick is None and len(ids) == 1 and t not in chosen:
+                pick = ids[0]                                # the only manager of the team, until the administrator chooses
+            if pick:
+                out[t] = pick
+        return out
+
+    def team_manager_of(self, team):
+        """The account id of the one manager who runs ``team`` in Workforce (None = nobody chosen yet)."""
+        return self.team_managers_all().get((team or "").strip().lower())
+
+    def team_manager_candidates(self, team):
+        """The portal managers whose Workforce team is ``team`` (the administrator picks one of them)."""
+        t = (team or "").strip().lower()
+        return sorted((self._view(u) for u in self.store.users().values() if u.get("active", True) and u.get("role") == "manager"
+                       and overlay.user_teams(u) != [ALL_TEAMS_MARK] and self.att_team(u).strip().lower() == t),
+                      key=lambda v: v["name"])
 
     def att_teams(self, u):
         """The Workforce scope of an account: [ALL] for the all-teams marker, else its one team (or none)."""

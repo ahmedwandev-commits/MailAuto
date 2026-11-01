@@ -21,6 +21,7 @@ def test_forgotten_punches_reach_the_employee_and_the_manager(app, repo, admin_b
     add_employees(repo, [{"id": 1, "name": "Ali", "team": "Team A"}, {"id": 2, "name": "Mona", "team": "Team A"},
                          {"id": 3, "name": "Omar", "team": "Team A"}])
     add_user(repo, "mgra", "manager", ["Team A"])
+    repo.save_settings({"team_managers": {"Team A": ["mgra"]}})                            # the team's one manager (v5.17)
     for uid in ("1", "2", "3", "mgra"):
         set_user(repo, uid, {"email": f"{uid}@nbe.test"})
     f = att_file(tmp_path, "a.xlsx", [[1, "Ali", "2026-10-01", "08:00", None], [2, "Mona", "2026-10-01", None, "16:00"],

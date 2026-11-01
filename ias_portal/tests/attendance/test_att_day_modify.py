@@ -31,26 +31,30 @@ def test_team_summary_has_the_numbers_of_every_team(app, world, repo):
     assert (b["not_arrived"], b["rest"]) == (1, 0)                                    # 202 was expected, no check-in recorded
 
 
-def test_team_managers_are_only_the_ones_the_administrator_chose(app, world, repo):
-    assert _summary(repo, "gm")["Team A"]["managers"] == []                          # nothing chosen: nobody is guessed from the accounts
+def test_one_manager_per_team_runs_it_in_workforce(app, world, repo):
+    """Owner (v5.17): ONE manager per team - the only manager of the team, or the one the administrator chose."""
+    assert _summary(repo, "gm")["Team A"]["managers"] == ["mgr1"]                    # the only manager of Team A
     add_user(repo, "mgr3", "manager", ["Team A"], name="Second Manager")
+    assert _summary(repo, "gm")["Team A"]["managers"] == []                          # two managers, nobody chosen yet: nobody
+    assert repo.get_user("mgr1")["role"] is None and repo.get_user("mgr3")["role"] is None   # no team pages for either
     choose_managers(repo, {"Team A": ["mgr3"], "Team B": ["mgr2", "mgr1"]})
     s = _summary(repo, "admin")
-    assert s["Team A"]["managers"] == ["Second Manager"] and s["Team B"]["managers"] == ["mgr2", "mgr1"]
+    assert s["Team A"]["managers"] == ["Second Manager"] and s["Team B"]["managers"] == ["mgr2"]   # one each, on their own team
+    assert repo.get_user("mgr3")["role"] == "manager" and repo.get_user("mgr1")["role"] is None
 
 
-def test_each_team_lists_its_own_people_and_the_administrator_picks_the_managers(app, world, repo, admin_b, mgr1_b):
+def test_the_administrator_picks_one_manager_per_team(app, world, repo, admin_b, mgr1_b):
+    add_user(repo, "mgr3", "manager", ["Team A"], name="Second Manager")
     page = admin_b.get("/admin/settings").get_data(as_text=True)
-    assert "Team managers" in page and 'name="mgr:Team A"' in page and 'name="mgr:Team B"' in page
+    assert "Team managers" in page and 'name="mgr:Team A"' in page and 'type="radio"' in page and "No manager runs" in page
     team_a = page.split('name="mgr:Team A"', 1)[1].split("</fieldset>")[0]
-    assert 'value="101"' in team_a and 'value="mgr1"' in team_a and 'value="201"' not in team_a and 'value="mgr2"' not in team_a
-    r = admin_b.post("/admin/settings", {"action": "team_managers", "mgr:Team A": ["mgr1", "101", "mgr2", "nobody"], "mgr:Team B": ["mgr2"]})
+    assert 'value="mgr3"' in team_a and 'value="101"' not in team_a and 'value="mgr2"' not in team_a   # the team's managers only
+    r = admin_b.post("/admin/settings", {"action": "team_managers", "mgr:Team A": "mgr3", "mgr:Team B": "mgr1"})
     assert r.status_code == 302
-    assert repo.get_settings()["team_managers"] == {"Team A": ["mgr1", "101"], "Team B": ["mgr2"]}      # only people who are on that team
+    assert repo.get_settings()["team_managers"] == {"Team A": ["mgr3"], "Team B": []}           # mgr1 is not on Team B
     assert repo.list_audit(action="settings_changed")
-    assert mgr1_b.post("/admin/settings", {"action": "team_managers", "mgr:Team A": ["102"]}).status_code in (302, 403)
-    assert repo.get_settings()["team_managers"] == {"Team A": ["mgr1", "101"], "Team B": ["mgr2"]}
-    assert admin_b.post("/admin/settings", {"action": "team_managers"}).status_code == 302 and repo.get_settings()["team_managers"] == {}
+    assert mgr1_b.post("/admin/settings", {"action": "team_managers", "mgr:Team A": "mgr1"}).status_code in (302, 403)
+    assert repo.get_settings()["team_managers"]["Team A"] == ["mgr3"]
 
 
 def test_a_manager_account_is_listed_on_its_team_even_when_managers_are_not_employees(app, world, repo, admin_b):
@@ -82,10 +86,10 @@ def test_the_managers_column_is_a_number_and_how_many_of_them_arrived(app, world
     u, now = repo.get_user("gm"), dt.datetime(2026, 10, 12, 20, 0)
     td = ps.team_dashboard(repo, u, "", "2026-10-12", now)
     s = {t["team"]: t for t in ps.team_summary(repo, td["rows"], td["shifts"], None, "2026-10-12", now)["rows"]}
-    assert (s["Team A"]["manager_count"], s["Team B"]["manager_count"]) == (1, 2)
+    assert (s["Team A"]["manager_count"], s["Team B"]["manager_count"]) == (1, 1)                  # ONE manager per team (v5.17)
     assert s["Team A"]["manager_arrived"] == 0                       # mgr1 is not on the roster list here and has no sign-in on 12 Oct
     unchosen = ps.team_summary(repo, td["rows"], td["shifts"], "Team B", "2026-10-12", now)
-    repo.save_settings({"team_managers": {}})
+    repo.save_settings({"team_managers": {"Team A": [], "Team B": []}})                 # "Nobody" chosen for both teams
     td = ps.team_dashboard(repo, u, "", "2026-10-12", now)
     assert {t["team"]: t["manager_count"] for t in ps.team_summary(repo, td["rows"], td["shifts"], None, "2026-10-12", now)["rows"]} == {"Team A": 0, "Team B": 0}
     assert unchosen["rows"][0]["team"] == "Team B"
@@ -120,10 +124,11 @@ def test_today_is_the_day_view_with_the_counters_and_the_teams(app, world, admin
 def test_a_manager_with_two_teams_on_the_account_manages_one_workforce_team(app, world, repo):
     """v5.17 (owner): in Workforce everybody is in ONE team - the first on the account unless the administrator chose another."""
     add_user(repo, "both", "manager", ["Team A", "Team B"])
+    repo.save_settings({"team_managers": {"Team A": ["both"]}})                            # one manager per team (v5.17)
     page = login(app, "both").get("/team?date=2026-10-12").get_data(as_text=True)
     assert "Ali A1" in page and "Omar B1" not in page
     assert login(app, "both").get("/team?date=2026-10-12&team=Team%20B").status_code == 403
-    repo.save_settings({"attendance_team_of": {"both": "Team B"}})
+    repo.save_settings({"attendance_team_of": {"both": "Team B"}, "team_managers": {"Team A": ["mgr1"], "Team B": ["both"]}})
     page = login(app, "both").get("/team?date=2026-10-12").get_data(as_text=True)
     assert "Omar B1" in page and "Ali A1" not in page
 

@@ -37,6 +37,12 @@
 {% set IC_CLOCK = 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2' %}
 {% macro workforce(analysis_here=False) -%}
 <div class="op-nav-sec">Workforce</div>
+{% if att_role in ('employee', 'allowance') %}{# a portal manager who is not the team's one Workforce manager: own pages only (v5.17) #}
+{% if att_is_employee %}{{ alink('/attendance/my', 'My schedule', ap is not none and ap.startswith('/my') and not att_myatt, IC_TODAY) }}
+{{ alink('/attendance/my/attendance', 'My attendance', att_myatt, IC_CLOCK) }}{% endif %}
+{% if att_can_allowance %}{{ alink('/attendance/allowance', 'Allowance', att_allow, IC_ALLOW) }}{% endif %}
+{{ guide_link() }}
+{% else %}
 {{ alink('/attendance/planning/day', 'Today', att_today, IC_TODAY) }}
 {{ alink('/attendance/my/attendance', 'My attendance', att_myatt, IC_CLOCK) }}
 {{ alink('/attendance/schedule', 'Schedule', att_sched, IC_GRID) }}
@@ -45,6 +51,7 @@
 {% if analysis_here %}{{ alink('/attendance/analytics', 'Attendance analysis', att_analysis, IC_CHART) }}{% endif %}
 {% if att_role == 'admin' %}{{ alink('/attendance/schedule/import', 'Imports', att_imports, IC_UPLOAD) }}{% endif %}
 {{ guide_link() }}
+{% endif %}
 {%- endmacro %}
 <header class="topbar">
   <div class="brand">

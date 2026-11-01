@@ -75,12 +75,17 @@ def test_manager_scope_comes_from_the_teams_on_the_portal_account(app, world, re
     add_user(repo, "none", "manager")                                                         # a manager without teams
     add_user(repo, "all", "manager", ["__all__"])
     add_user(repo, "both", "manager", ["Team A", "Team B"])
-    ids = lambda who: {x["employee_id"] for x in login(app, who).get("/api/overview?date=2026-10-12").get_json()["rows"]}      # noqa: E731
-    assert ids("none") == set()                                                               # never "everything" by accident
-    assert ids("all") == {101, 102, 201, 202}
-    assert ids("both") == {101, 102}                                                          # one Workforce team: the first (v5.17)
     add_user(repo, "uncl", "manager", ["Unclassified", "Team B"])                             # "Unclassified" is e-mail only
+    ids = lambda who: {x["employee_id"] for x in login(app, who).get("/api/overview?date=2026-10-12").get_json().get("rows", [])}  # noqa: E731
+    assert ids("none") == set()                                                               # never "everything" by accident
+    assert ids("all") == {101, 102, 201, 202}                                                 # every team: still every team
+    # ONE manager per team (v5.17): two managers on Team A and none chosen -> neither has the team
+    assert ids("both") == set() and ids("mgr1") == set()
+    repo.save_settings({"team_managers": {"Team A": ["both"], "Team B": ["uncl"]}})
+    assert ids("both") == {101, 102}                                                          # one Workforce team: the first
     assert ids("uncl") == {201, 202}
+    assert ids("mgr1") == set() and ids("mgr2") == set()                                      # not chosen: no team pages
+    repo.save_settings({"team_managers": {"Team A": ["mgr1"], "Team B": ["mgr2"]}})
     assert ids("mgr1") == {101, 102} and ids("mgr2") == {201, 202}
     assert login(app, "none").get("/employee/101").status_code == 403
 

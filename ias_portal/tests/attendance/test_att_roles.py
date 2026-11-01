@@ -140,12 +140,15 @@ def test_roles_page_lists_holders(app, world, admin_b):
 def test_attendance_roles_follow_the_portal_account(app, world, repo, admin_b):
     """Manager / administrator come from the portal's own role; nothing is stored twice."""
     add_user(repo, "m9", "manager", ["Team B"])
+    repo.save_settings({"team_managers": {"Team B": ["m9"]}})                              # one manager per team (v5.17)
     assert repo.get_user("m9")["role"] == "manager" and repo.get_user("m9")["teams"] == ["Team B"]
     b = login(app, "m9")
     assert b.get("/employee/201").status_code == 200
     set_user(repo, "m9", {"role": "user"})                                       # demoted on the portal's Users page
     assert b.get("/today").status_code == 403
     set_user(repo, "m9", {"role": "manager", "teams": ["Team A"]})                # team changed on the portal: scope follows at once
+    assert b.get("/employee/201").status_code == 403 and b.get("/employee/101").status_code == 403   # Team A has mgr1 too: not chosen
+    repo.save_settings({"team_managers": {"Team A": ["m9"]}})                     # chosen as Team A's one manager
     assert b.get("/employee/201").status_code == 403 and b.get("/employee/101").status_code == 200
     set_user(repo, "m9", {"active": False})
     assert b.get("/today").status_code == 302

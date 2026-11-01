@@ -17,6 +17,7 @@ def test_an_employee_sees_only_their_own_pages(app, world, repo):
 
 def test_a_team_manager_sees_their_teams_work_and_their_own_month(app, world, repo):
     add_user(repo, "301", "manager", ["Team A"], name="Mona Boss")                         # a manager with an HR number
+    repo.save_settings({"team_managers": {"Team A": ["301"]}})                             # ... chosen as the team's one manager
     page = login(app, "301").get("/guide").get_data(as_text=True)
     assert sections(page) == {"today", "plan", "leave", "team", "myatt", "mine", "allow", "analysis"}
     assert "مدير الفريق" in page and "المدير العام</h3>" not in page and "الشئون الإدارية</h3>" not in page

@@ -82,9 +82,10 @@ def _now(repo):
 def _team_managers(repo, team, users=None):
     """The active managers of ``team``. ``users``: the directory's list, when the caller already has it (a page with 35
     teams reads it once, not 35 times)."""
-    t = team.strip().lower()
-    return [u for u in (users if users is not None else repo.directory.list_users())
-            if u.get("hub_role") == "manager" and u.get("active", True) and t in [x.strip().lower() for x in u.get("teams") or []]]
+    uid = repo.directory.team_manager_of(team)             # the ONE manager of the team (owner, v5.17)
+    if not uid:
+        return []
+    return [u for u in (users if users is not None else repo.directory.list_users()) if u.get("user_id") == uid and u.get("active", True)]
 
 
 def _gms(repo):

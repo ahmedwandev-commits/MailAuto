@@ -136,6 +136,7 @@ def test_an_employee_sees_only_their_own_month(app, world, repo):
 
 def test_a_manager_sees_their_own_month_and_their_team_only(app, world, repo):
     add_user(repo, "301", "manager", ["Team A"], name="Mona Boss")                             # a manager with an HR number
+    repo.save_settings({"team_managers": {"Team A": ["301"]}})                                 # the team's one manager (v5.17)
     b = login(app, "301")
     page = b.get("/attendance/my/attendance?month=2026-10").get_data(as_text=True)
     assert 'id="my-attendance"' in page and "Mona Boss" in page
@@ -206,3 +207,16 @@ def test_an_account_without_a_team_is_flagged(app, world, repo, admin_b):
     repo.directory.store.update_user("202", {"teams": ["Unclassified"]})
     page = admin_b.get("/admin/employees").get_data(as_text=True)
     assert "have no team" in page and "Nour B2" in page.split("have no team")[1]
+
+
+# ---------------------------------------------------------------- ONE manager per team in Workforce (owner, v5.17)
+def test_a_second_manager_of_a_team_sees_only_their_own_pages(app, world, repo):
+    add_user(repo, "302", "manager", ["Team A"], name="Second Boss")                     # Team A now has mgr1 and 302
+    repo.save_settings({"team_managers": {"Team A": ["mgr1"]}})
+    b = login(app, "302")
+    assert b.get("/planning/day").status_code == 403 and b.get("/team-plan").status_code == 403
+    assert b.get("/attendance/my/attendance").status_code == 200                        # their own month
+    menu = b.get("/attendance/my/attendance").get_data(as_text=True).split('aria-label="Main"')[1].split("</nav>")[0]
+    assert ">My attendance<" in menu and ">My schedule<" in menu and ">Today<" not in menu and ">Schedule<" not in menu
+    assert ">E-mail<" in menu or "/email" in menu                                         # the portal itself is unchanged
+    assert login(app, "mgr1").get("/planning/day").status_code == 200
