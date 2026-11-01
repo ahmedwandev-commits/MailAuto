@@ -675,3 +675,6 @@
 .att .tbl td.actions { display: table-cell; vertical-align: middle; }
 .att .tbl td.actions > * { vertical-align: middle; }
 .att .tbl td.actions > * + * { margin-inline-start: 8px; }
+/* Team schedule on a 1280-1440 px screen: a long name in a day card no longer pushes the page wider than the screen */
+.att .tp-weeks > .tp-day, .att .tp-slot, .att .tp-in { min-width: 0; }
+.att .tp-in > * { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

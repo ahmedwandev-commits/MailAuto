@@ -30,7 +30,7 @@
 {% set IC_GRID = 'M3 4h18v16H3zM3 9h18M3 14h18M9 9v11M15 9v11' %}
 {% set IC_BOOK = 'M4 4h6a3 3 0 0 1 2 1 3 3 0 0 1 2-1h6v15h-6a2 2 0 0 0-2 2 2 2 0 0 0-2-2H4zM12 5v16' %}
 {% macro guide_link() -%}
-<a class="op-nav-link" href="{{ url_for('static', filename='attendance/guide/index.html') }}" target="_blank" rel="noopener"><svg class="op-nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="{{ IC_BOOK }}"/></svg><span class="op-nav-tx">User guide</span></a>
+<a class="op-nav-link" href="/attendance/guide" target="_blank" rel="noopener"><svg class="op-nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="{{ IC_BOOK }}"/></svg><span class="op-nav-tx">User guide</span></a>
 {%- endmacro %}
 {% set IC_LEAVE = 'M3 13l7-1 4-8 2 1-2 8 6 1 1 2-7 1-3 5-2-1 1-5-6 0z' %}
 {% set IC_UPLOAD = 'M12 15V3M7 8l5-5 5 5M5 21h14' %}
