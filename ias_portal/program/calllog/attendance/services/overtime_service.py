@@ -109,7 +109,7 @@ def build(repo, employees, month, today):
                         row["note"] = (f"comp day {taken[0]} - no overtime" if taken else
                                        f"no comp day in the next working week - hours x{float(ot['holiday_rate']):g}")
                     else:
-                        w = otd.working_day_overtime(tin, tout, ot)
+                        w = otd.working_day_overtime(tin, tout, ot, rule.rest_days)
                         row.update(raw=w["raw"], weighted=w["weighted"], bands=w["minutes"])
                 elif r.get("in_time"):
                     row["note"] = "no check-out" if d < today else "at work"

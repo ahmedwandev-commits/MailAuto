@@ -5,7 +5,7 @@ Every number is a setting (``services/settings.OVERTIME_DEFAULTS``, Settings ›
 Overtime of a **working day**
   The overtime starts once the person has stayed ``base_hours`` (8) hours since the check-in. Each overtime minute is weighted by the
   clock: before ``evening_from`` (18:00) × ``day_rate`` (1), from 18:00 to ``night_from`` (22:00) × ``evening_rate`` (1.5), from 22:00
-  to ``night_until`` (06:00) × ``night_rate`` (1.75).
+  to ``night_until`` (07:00; ``night_until_rest`` 08:00 on a Friday / Saturday morning) × ``night_rate`` (1.75).
 Overtime of a **weekly rest day / official holiday** worked
   No compensatory rest day taken on a *working day of the following week* (the week starts on ``work_week_start``, Sunday; its working
   days are the weekdays that are not weekly rest days - Sunday to Thursday - and not official holidays): every hour of that day ×
@@ -32,9 +32,15 @@ def _min(hhmm):
     return int(h) * 60 + int(m)
 
 
-def band_of(minute_of_day, ot):
-    """'day' | 'evening' | 'night' for a minute of the day (0..1439). The night band runs over midnight."""
-    ev, ni, nu = _min(ot["evening_from"]), _min(ot["night_from"]), _min(ot["night_until"])
+def night_until(day, ot, rest_weekdays=()):
+    """When the night rate ends on the morning of ``day``: ``night_until`` (07:00), or ``night_until_rest`` (08:00) on the morning of a
+    weekly rest day (Friday / Saturday) - the night shift that starts on Thursday / Friday ends at 08:00 (owner, v5.17)."""
+    return ot["night_until_rest"] if day.weekday() in rest_weekdays else ot["night_until"]
+
+
+def band_of(minute_of_day, ot, until=None):
+    """'day' | 'evening' | 'night' for a minute of the day (0..1439). The night band runs over midnight and ends at ``until``."""
+    ev, ni, nu = _min(ot["evening_from"]), _min(ot["night_from"]), _min(until or ot["night_until"])
     if ni <= nu:                                   # a night band that does not cross midnight (unusual settings)
         if ni <= minute_of_day < nu:
             return "night"
@@ -45,12 +51,12 @@ def band_of(minute_of_day, ot):
     return "day"
 
 
-def split_bands(start, end, ot):
+def split_bands(start, end, ot, rest_weekdays=()):
     """Minutes between two datetimes in each clock band: {'day': m, 'evening': m, 'night': m}."""
     out = {b: 0.0 for b in BANDS}
     if end <= start:
         return out
-    marks = sorted({_min(ot["evening_from"]), _min(ot["night_from"]), _min(ot["night_until"])})
+    marks = sorted({_min(ot["evening_from"]), _min(ot["night_from"]), _min(ot["night_until"]), _min(ot["night_until_rest"])})
     t = start
     while t < end:
         m = t.hour * 60 + t.minute
@@ -58,7 +64,7 @@ def split_bands(start, end, ot):
         nxt = next((x for x in marks if x > m), None)
         boundary = midnight + timedelta(minutes=nxt) if nxt is not None else midnight + timedelta(days=1, minutes=marks[0])
         seg_end = min(end, boundary)
-        out[band_of(m, ot)] += (seg_end - t).total_seconds() / 60.0
+        out[band_of(m, ot, night_until(t.date(), ot, rest_weekdays))] += (seg_end - t).total_seconds() / 60.0
         t = seg_end
     return out
 
@@ -67,10 +73,10 @@ def rate_of(band, ot):
     return float(ot[{"day": "day_rate", "evening": "evening_rate", "night": "night_rate"}[band]])
 
 
-def working_day_overtime(tin, tout, ot):
+def working_day_overtime(tin, tout, ot, rest_weekdays=()):
     """-> {'minutes': {band: m}, 'raw': h, 'weighted': h} for a working day: the minutes after ``base_hours`` of stay."""
     start = tin + timedelta(hours=float(ot["base_hours"]))
-    bands = split_bands(start, tout, ot) if tout > start else {b: 0.0 for b in BANDS}
+    bands = split_bands(start, tout, ot, rest_weekdays) if tout > start else {b: 0.0 for b in BANDS}
     raw = sum(bands.values()) / 60.0
     weighted = sum(bands[b] * rate_of(b, ot) for b in BANDS) / 60.0
     return {"minutes": bands, "raw": raw, "weighted": weighted}

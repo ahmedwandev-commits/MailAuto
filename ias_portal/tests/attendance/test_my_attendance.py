@@ -29,9 +29,13 @@ def test_overtime_starts_after_8_hours_and_is_weighted_by_the_clock():
     assert otd.working_day_overtime(dt("2026-10-13T08:00"), dt("2026-10-13T16:00"), OT)["raw"] == 0     # exactly 8 h: none
 
 
-def test_a_night_shift_runs_into_the_day_rate_after_night_until():
-    w = otd.working_day_overtime(dt("2026-10-13T22:00"), dt("2026-10-14T09:00"), OT)     # OT from 06:00: day rate
-    assert w["minutes"] == {"day": 180, "evening": 0, "night": 0}
+def test_the_night_rate_ends_at_7_and_at_8_on_a_friday_or_saturday_morning():
+    w = otd.working_day_overtime(dt("2026-10-13T22:00"), dt("2026-10-14T09:00"), OT, {4, 5})       # Tue night: OT 06-07 night, 07-09 day
+    assert w["minutes"] == {"day": 120, "evening": 0, "night": 60}
+    w = otd.working_day_overtime(dt("2026-10-15T22:00"), dt("2026-10-16T09:00"), OT, {4, 5})       # Thu night -> Fri morning: night until 08
+    assert w["minutes"] == {"day": 60, "evening": 0, "night": 120}
+    w = otd.working_day_overtime(dt("2026-10-17T22:00"), dt("2026-10-18T09:00"), OT, {4, 5})       # Sat night -> Sun morning: until 07
+    assert w["minutes"] == {"day": 120, "evening": 0, "night": 60}
 
 
 def test_a_holiday_worked_counts_double_unless_a_comp_day_is_taken():
