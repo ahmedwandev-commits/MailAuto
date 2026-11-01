@@ -1,0 +1,6 @@
+# Optional: the PDF export of the Workforce reports (without these the Print button / Save as PDF of the browser is used).
+# Install once, on the PC that runs run.py (internet needed):   python -m pip install -r requirements-pdf.txt
+reportlab>=4,<5
+pillow>=9
+arabic-reshaper>=2.1,<4
+python-bidi>=0.4,<1

@@ -22,6 +22,7 @@ def find_font(configured=None):
 def available(configured=None):
     try:
         import arabic_reshaper, bidi, reportlab  # noqa: F401,E401  (availability probe)
+        import PIL  # noqa: F401  (reportlab needs Pillow to draw a page: without it a PDF would be an error page)
     except ImportError:
         return False
     return find_font(configured) is not None
