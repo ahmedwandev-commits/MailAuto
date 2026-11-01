@@ -280,6 +280,25 @@ class OpsStore:
         with self._lock("settings")():
             self.write_json(self.settings_path, data)
 
+    def update_settings_raw(self, change):
+        """Read-modify-write the settings under the settings lock: ``change(saved_raw)`` returns the document to save.
+        The saved file is read from disk inside the lock (never from the cache), so two saves at the same moment (two
+        managers adding a classification rule, an administrator saving the System page) both keep their change. A
+        damaged file is never replaced by defaults: the save fails and the file stays as it is."""
+        path = Path(self.settings_path)
+        with self._lock("settings")():
+            self._forget(path)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+            except FileNotFoundError:
+                data = {}
+            except json.JSONDecodeError as exc:
+                raise StorageError(f"{path} is damaged and cannot be read ({exc}). Restore it from a backup.") from exc
+            new = change(data if isinstance(data, dict) else {})
+            self.write_json(path, new)
+            return new
+
     # --------------------------------------------------------------- auto-assign config
     def read_auto_assign(self):
         """The auto-assign config: ``{"applications": [{name, team}], "teams": {team: {email|ticketing: {...}}}}``."""

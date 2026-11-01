@@ -246,10 +246,17 @@ def _bool(ctx, path, v):
 
 def _int(lo, hi):
     def check(ctx, path, v):
-        if isinstance(v, bool) or not isinstance(v, int) and not (isinstance(v, str) and v.strip().lstrip("-").isdigit()):
+        n = None
+        if isinstance(v, int) and not isinstance(v, bool):
+            n = v
+        elif isinstance(v, str) and v.strip().lstrip("-").isdigit():
+            try:                                   # "--5" or "²" pass isdigit() but int() refuses them: never crash
+                n = int(v.strip())
+            except ValueError:
+                n = None
+        if n is None:
             ctx.err(path, f"must be a whole number between {lo} and {hi}")
             return lo
-        n = int(v)
         if not lo <= n <= hi:
             ctx.err(path, f"must be between {lo} and {hi}")
             return min(max(n, lo), hi)
@@ -575,7 +582,8 @@ def load(store):
 
 
 def save(store, new_settings):
-    """Validate and save the WHOLE settings document. Raises SettingsError listing every problem."""
+    """Validate and save the WHOLE settings document (it replaces what is saved, even a damaged file). Raises
+    SettingsError listing every problem. To change PART of the settings use ``update`` / ``patch``."""
     clean, errors = validate(new_settings)
     if errors:
         raise SettingsError(errors)
@@ -583,9 +591,27 @@ def save(store, new_settings):
     return clean
 
 
+def update(store, change):
+    """Read-modify-write the settings atomically: ``change(current)`` gets the settings as saved RIGHT NOW (checked,
+    defaults filled in; its own copy) and returns the new whole document, which is validated and saved - all under the
+    settings lock, so a change made by somebody else a moment ago is never lost. ``change`` may raise (nothing is
+    saved then). Raises SettingsError listing every problem."""
+    out = {}
+
+    def apply(raw):
+        current, _ = validate(raw)
+        clean, errors = validate(change(current))
+        if errors:
+            raise SettingsError(errors)
+        out["clean"] = clean
+        return clean
+    store.update_settings_raw(apply)
+    return out["clean"]
+
+
 def patch(store, changes):
-    """Merge ``changes`` over the saved settings, validate and save."""
-    return save(store, deep_merge(load(store), changes))
+    """Merge ``changes`` over the saved settings, validate and save (atomically, see ``update``)."""
+    return update(store, lambda current: deep_merge(current, changes))
 
 
 # ------------------------------------------------------------------ scheduling helpers

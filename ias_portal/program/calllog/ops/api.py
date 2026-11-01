@@ -1688,6 +1688,9 @@ def itsm_listed_vs_counted(scope):
     return {"counted": counted, "listed": min(listed, counted)}
 
 
+_COLLECTOR_EVENT_KINDS = ("scan_failed", "scan_recovered")      # events.job_event: the collector's own health
+
+
 @bp.get("/events")
 @auth.ops_view_required
 def events():
@@ -1697,6 +1700,8 @@ def events():
     except ValueError:
         raise ApiError("limit must be a number.")
     items = ops().read_events(day, limit)
+    if not viewer_is_admin():          # a scan that failed / works again (with the collector's error text): administrators
+        items = [e for e in items if e.get("kind") not in _COLLECTOR_EVENT_KINDS]   # only, like _mask_collector_health
     scope = auth.team_scope()
     if scope is not None:
         items = [e for e in (_scope_event(e, scope) for e in items) if e]
@@ -1940,6 +1945,8 @@ def email_team():
         via = "manager"
     else:                                               # employee: a mail assigned to them, or an open mail of their team
         entry, rows = assignee_target(message_id, "team", team=True)
+        if not rows:                                    # assigned to them, but gone from the latest scan (as for managers)
+            raise ApiError("That e-mail is not in the latest scan. Reload the page.", 404)
         via = "assignee" if is_assignee(g.user, entry) else "team member"
         _notify(schemas.NOTIFY_REASSIGNED, entry, rows, message_id, entry, detail=f"moved to {team}")
     previous = rows[0].get("team", "")
@@ -2114,7 +2121,7 @@ def mail_access(message_id, route):
 
 def read_only_view():
     """True when the page is somebody else's (``?as=<user>``): looking is allowed, acting is not."""
-    wanted = norm_uid(request.args.get("as") or optional_body().get("as"))
+    wanted = norm_uid(str(request.args.get("as") or optional_body().get("as") or ""))   # (a JSON number is text here)
     return bool(wanted) and wanted != g.user["user_id"]
 
 
@@ -2267,6 +2274,11 @@ def assignment_target(message_id):
     if read_only_view():
         raise ApiError("This is somebody else's page - it is read-only.", 403)
     entry, rows = mail_access(message_id, "done")
+    # mail_access also lets an employee in to an OPEN mail of their team (to read / take it): closing or reopening
+    # somebody else's assignment stays with the assignee and the managers
+    if g.user["role"] not in auth.OPS_ROLES and not is_assignee(g.user, entry):
+        auth.audit("ops_mail_denied", target=message_id[:200], details={"route": "done"})
+        raise not_available()
     if not entry:
         raise ApiError("That e-mail is not assigned.", 409)
     return entry, rows, ("assignee" if is_assignee(g.user, entry) else "manager")
@@ -2379,7 +2391,7 @@ def my_email_reassign():
     assigner and the team's managers are told who has it now. The employee no longer holds it."""
     body = json_body()
     message_id = clean_message_id(body.get("message_id"))
-    to_uid = norm_uid(body.get("to_user_id"))
+    to_uid = norm_uid(str(body.get("to_user_id") or ""))           # a JSON number must not crash the request
     note = clean_text(body.get("note"), "Note", 300, multiline=True)
     entry, rows = assignee_target(message_id, "reassign")
     if not _mail_is_open(rows, entry):
@@ -2576,12 +2588,20 @@ def _check_builtin_keyword(keyword):
         raise ApiError("That keyword already belongs to another team's rule.", 403)
 
 
-def _save_rules(rules):
+def _save_rules(edit):
+    """Change the keyword -> team rules: ``edit(rules)`` changes the dict in place (it may raise ApiError) and runs on
+    the rules AS SAVED RIGHT NOW, under the settings lock (``hub_settings.update``) - two managers adding a rule at the
+    same moment both keep theirs (editing a copy read earlier and saving it whole lost the other one's rule)."""
+    def change(current):
+        rules = dict(current["email"]["classification"]["system_team_map"])
+        edit(rules)
+        return hub_settings.deep_merge(current, {"email": {"classification": {"system_team_map": rules}}})
     try:
-        saved = hub_settings.patch(ops(), {"email": {"classification": {"system_team_map": rules}}})
+        saved = hub_settings.update(ops(), change)
     except hub_settings.SettingsError as exc:
         raise ApiError("; ".join(f"{e['path']}: {e['message']}" for e in exc.errors[:3]), 400)
-    forget_settings()
+    finally:
+        forget_settings()
     return saved["email"]["classification"]["system_team_map"]
 
 
@@ -2595,16 +2615,17 @@ def classification_rule_add():
         raise ApiError("A rule must point to a real team, not to Unclassified.")
     if not auth.may_act_on_team(team):
         raise ApiError("You can only create rules for your own team.", 403)
-    rules = dict(hub_cfg()["email"]["classification"]["system_team_map"])
-    existing = _find_rule(rules, keyword)
-    if existing:
-        if not auth.may_act_on_team(rules[existing]):
-            raise ApiError("That keyword already belongs to another team's rule.", 403)
-        del rules[existing]
-    else:                                                    # a built-in keyword of another team is theirs too
-        _check_builtin_keyword(keyword)
-    rules[keyword] = team
-    saved = _save_rules(rules)
+
+    def edit(rules):
+        existing = _find_rule(rules, keyword)
+        if existing:
+            if not auth.may_act_on_team(rules[existing]):
+                raise ApiError("That keyword already belongs to another team's rule.", 403)
+            del rules[existing]
+        else:                                                # a built-in keyword of another team is theirs too
+            _check_builtin_keyword(keyword)
+        rules[keyword] = team
+    saved = _save_rules(edit)
     auth.audit("ops_classification_rule", target=keyword, details={"op": "add", "team": team})
     return jsonify(ok=True, rule={"keyword": keyword, "team": team}, system_team_map=saved)
 
@@ -2616,15 +2637,17 @@ def classification_rule_remove():
     keyword = " ".join(str(body.get("keyword") or request.args.get("keyword") or "").split())
     if not keyword:
         raise ApiError("Say which keyword to remove.")
-    rules = dict(hub_cfg()["email"]["classification"]["system_team_map"])
-    existing = _find_rule(rules, keyword)
-    if not existing:
-        raise ApiError("There is no such rule.", 404)
-    if not auth.may_act_on_team(rules[existing]):
-        raise ApiError("You can only remove rules of your own team.", 403)
-    team = rules.pop(existing)
-    saved = _save_rules(rules)
-    auth.audit("ops_classification_rule", target=existing, details={"op": "remove", "team": team})
+    taken = {}
+
+    def edit(rules):
+        existing = _find_rule(rules, keyword)
+        if not existing:
+            raise ApiError("There is no such rule.", 404)
+        if not auth.may_act_on_team(rules[existing]):
+            raise ApiError("You can only remove rules of your own team.", 403)
+        taken["keyword"], taken["team"] = existing, rules.pop(existing)
+    saved = _save_rules(edit)
+    auth.audit("ops_classification_rule", target=taken["keyword"], details={"op": "remove", "team": taken["team"]})
     return jsonify(ok=True, system_team_map=saved)
 
 
@@ -2690,14 +2713,14 @@ def classification_suggestion_approve():
         raise ApiError("You can only approve classifications for your own team.", 403)
     previous = rows[0].get("team", "")
     # 1) learn the keyword -> team rule (added to system_team_map; it wins over the built-in map)
-    rules = dict(hub_cfg()["email"]["classification"]["system_team_map"])
-    existing = _find_rule(rules, keyword)
-    if existing:
-        if not auth.may_act_on_team(rules[existing]):
-            raise ApiError("That keyword already belongs to another team's rule.", 403)
-        del rules[existing]
-    rules[keyword] = team
-    saved = _save_rules(rules)
+    def edit(rules):
+        existing = _find_rule(rules, keyword)
+        if existing:
+            if not auth.may_act_on_team(rules[existing]):
+                raise ApiError("That keyword already belongs to another team's rule.", 403)
+            del rules[existing]
+        rules[keyword] = team
+    saved = _save_rules(edit)
     # 2) file this mail under the team now
     ops().set_override("team", message_id, {"team": team, "marked_by": _who(), "marked_by_id": g.user["user_id"],
                                             "marked_at": _stamp(), "subject": _subject(rows)})
@@ -3184,16 +3207,21 @@ def settings_put():
     if secrets_found:
         message = "Passwords are never stored in the settings - put them in collector_config.json on the collector PC."
         return jsonify(error=message, errors=[{"path": p, "message": message} for p in secrets_found]), 400
-    before = hub_cfg()
-    if isinstance(body.get("base"), dict):                  # only what this page changed goes over the saved settings
-        doc = _merge_changes(before, body["base"], doc)
+    seen = {}
+
+    def change(current):                                    # the settings as saved right now, under the settings lock
+        seen["before"] = current
+        if isinstance(body.get("base"), dict):              # only what this page changed goes over the saved settings
+            return _merge_changes(current, body["base"], doc)
+        return doc
     try:
-        saved = hub_settings.save(ops(), doc)
+        saved = hub_settings.update(ops(), change)
     except hub_settings.SettingsError as exc:
         return jsonify(error="Some settings are not valid: " + "; ".join(
             f"{e['path']}: {e['message']}" for e in exc.errors[:3]), errors=exc.errors), 400
-    forget_settings()
-    changed = _changed_paths(before, saved)
+    finally:
+        forget_settings()
+    changed = _changed_paths(seen["before"], saved)
     auth.audit("ops_settings_saved", details={"changed": changed[:40], "count": len(changed)})
     return jsonify(ok=True, settings=saved, changed=changed)
 

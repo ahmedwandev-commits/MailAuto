@@ -15,11 +15,18 @@ def _path(store):
 
 
 def _mutate(store, change):
-    with store._lock(f"state-{NAME}")():
-        data = store.read_json(_path(store), {"items": []})
-        out = change(data)
-        store.write_json(_path(store), data)
-    return out
+    """Read-modify-write the outbox under its lock. The file is read from disk inside the lock (``_update_json``), never
+    from the store's cache: a cached copy may be up to a second old (another process - the web app queueing a mail while
+    the collector marks one sent - wrote it meanwhile), and writing it back would drop that process's change.
+    ``change(data)`` edits ``data`` in place; what it returns is handed back to the caller."""
+    out = {}
+
+    def apply(data):
+        if not isinstance(data.get("items"), list):
+            data["items"] = []
+        out["value"] = change(data)
+    store._update_json(_path(store), f"state-{NAME}", lambda: {"items": []}, apply)
+    return out.get("value")
 
 
 def add(store, to, subject, html, kind="", cc=(), now=None):
