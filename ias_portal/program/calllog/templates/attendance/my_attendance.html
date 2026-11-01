@@ -89,7 +89,7 @@
   <div class="tbl-wrap"><table class="tbl" id="my-allowance-days"><thead><tr><th>Date</th><th>Counted as</th><th class="num">Transport</th><th>Meals</th><th class="num">Meals</th><th></th></tr></thead><tbody>
   {% for d in rep.days if d.transport or d.meal_amount %}<tr class="{{ 'muted' if d.expected }}"><td class="nowrap">{{ d.date|dmy }} · {{ d.date|dayname }}</td>
     <td>{% if d.kind %}{{ shift(KIND_CODE[d.kind]) }} {{ KIND_EN[d.kind] }}{% else %}—{% endif %}</td><td class="num">{{ egp(d.transport) }}</td>
-    <td class="small">{% for mm in d.meals %}{{ MEAL_EN[mm] }}{{ ', ' if not loop.last }}{% endfor %}</td><td class="num">{{ egp(d.meal_amount) }}</td>
+    <td class="small">{% for mm in d.meals %}<span>{{ MEAL_EN[mm] }}</span>{{ ' · ' if not loop.last }}{% endfor %}</td><td class="num">{{ egp(d.meal_amount) }}</td>
     <td>{% if d.expected %}{{ tone_chip('Expected', 't-info') }}{% endif %}</td></tr>
   {% else %}<tr><td colspan="6">{% call empty('download', 'Nothing yet', 'No day of this month counts for the shift allowance.') %}{% endcall %}</td></tr>{% endfor %}
   </tbody></table></div>
@@ -99,7 +99,7 @@
 {# ------------------------------------------------------------------------------------------------ Overtime #}
 {% elif tab == 'overtime' %}
 <section class="kpis" aria-label="Overtime">
-  {{ kpi('Overtime this month', hrs(o.capped), 'counted hours, after the weekly deduction' ~ (' and the cap' if o.over_cap else ''), 't-warn' if o.capped else 't-na', 'bars') }}
+  {{ kpi('Overtime this month', hrs(o.capped), 'counted hours after the weekly deduction and the cap' if o.over_cap else 'counted hours after the weekly deduction', 't-warn' if o.capped else 't-na', 'bars') }}
   {{ kpi('Of a normal month', '%.1f'|format(o.pct) ~ ' %', 'of ' ~ o.base_hours_month|num ~ ' h (' ~ rep.rules.base_days|num ~ ' days × ' ~ rep.rules.base_hours|num ~ ' h) · at most ' ~ o.cap_pct|num ~ ' %', 's0', 'award') }}
   {{ kpi('Room left', hrs(o.cap - o.capped), 'until the cap of ' ~ hrs(o.cap) ~ ' h', 't-ok' if o.cap > o.capped else 't-danger', 'clock') }}
 </section>
@@ -117,9 +117,9 @@
 <details class="card flush fold" aria-labelledby="od-h" open>
   <summary class="card-head"><h2 id="od-h">{{ icon('clock') }}Days with overtime</h2><span class="hint">minutes in each part of the day</span></summary>
   <div class="tbl-wrap"><table class="tbl" id="my-ot-days"><thead><tr><th>Date</th><th>Worked</th><th class="num">Before {{ rep.rules.evening_from }} ×{{ rep.rules.day_rate|num(2) }}</th><th class="num">{{ rep.rules.evening_from }}–{{ rep.rules.night_from }} ×{{ rep.rules.evening_rate|num(2) }}</th><th class="num">After {{ rep.rules.night_from }} ×{{ rep.rules.night_rate|num(2) }}</th><th class="num">Counted</th><th>Note</th></tr></thead><tbody>
-  {% for d in rep.days if d.raw or (d.day_kind and d.stay) %}<tr><td class="nowrap">{{ d.date|dmy }} · {{ d.date|dayname }}</td><td>{{ d.in }}–{{ d.out }}</td>
+  {% for d in rep.days if d.raw or (d.day_kind and d.stay) %}<tr><td class="nowrap">{{ d.date|dmy }} · {{ d.date|dayname }}</td><td><span dir="ltr">{{ d.in }}–{{ d.out }}</span></td>
     {% if d.bands %}<td class="num">{{ hrs(d.bands.day / 60) }}</td><td class="num">{{ hrs(d.bands.evening / 60) }}</td><td class="num">{{ hrs(d.bands.night / 60) }}</td>
-    {% else %}<td class="num" colspan="3">{{ tone_chip('Holiday' if d.day_kind == 'official_holiday' else 'Rest day', 't-na') }} {{ hrs(d.stay) }} h</td>{% endif %}
+    {% else %}<td class="num" colspan="3">{{ tone_chip('Holiday' if d.day_kind == 'official_holiday' else 'Rest day', 't-na') }} {{ hrs(d.stay) }}</td>{% endif %}
     <td class="num"><b>{{ hrs(d.weighted) }}</b></td><td class="small muted">{{ d.note }}</td></tr>
   {% else %}<tr><td colspan="7">{% call empty('check-circle', 'No overtime', 'No day of this month went beyond ' ~ rep.rules.base_hours|num ~ ' hours.') %}{% endcall %}</td></tr>{% endfor %}
   </tbody></table></div>
