@@ -122,7 +122,10 @@ def build(repo, employees, month, today):
                 if c:
                     row["kind"] = c["kind"]
                     row["transport"] = rate[c["kind"]]
-                row["meals"] = otd.meals_of(row["kind"], is_mgr, row["stay"], ot)
+                eats_as = row["kind"]
+                if row["day_kind"] and row["stay"]:                           # a day off worked: the meal of its check-in time
+                    eats_as = otd.meal_shift(r["in_time"], lambda t: al.shift_of(t, rules))
+                row["meals"] = otd.meals_of(eats_as, is_mgr, row["stay"], ot)
                 if d == today and not c and not row["stay"]:
                     row["expected"] = True                                    # today, still at work: the planned shift is expected
             elif d >= today:

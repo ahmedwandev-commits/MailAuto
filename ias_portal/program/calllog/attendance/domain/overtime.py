@@ -18,7 +18,8 @@ The **week and the month**
   ``base_hours`` (8) = 176 h -> 70.4 h. The percentage shown is the month's (capped) overtime of those 176 h.
 **Meals** of a day the shift allowance counts
   An employee: morning -> breakfast, evening -> evening meal, night -> dinner. A supervisor (a manager) is paid the morning shift only,
-  so: morning -> breakfast. Anybody who stays ``long_day_hours`` (10) hours or more gets one more meal (lunch), on any day.
+  so: morning -> breakfast. A rest day / holiday worked eats like the shift of its check-in time. Anybody who stays ``long_day_hours``
+  (10) hours or more gets one more meal (lunch), on any day.
 """
 from datetime import date, datetime, timedelta
 
@@ -88,6 +89,16 @@ def holiday_overtime(stay_hours, comp_taken, ot):
     if comp_taken:
         return {"raw": 0.0, "weighted": 0.0}
     return {"raw": stay_hours, "weighted": stay_hours * float(ot["holiday_rate"])}
+
+
+def meal_shift(in_time, start_of):
+    """The shift a day off worked eats like, by the check-in time (owner, v5.17): the switched-on shift whose start it is at
+    (``start_of(in_time)``, the allowance rule), otherwise night from 20:00 to 04:00, evening from 12:00, morning before."""
+    k = start_of(in_time)
+    if k:
+        return k
+    h = int(str(in_time)[:2])
+    return "night" if h >= 20 or h < 4 else "evening" if h >= 12 else "morning"
 
 
 def meals_of(kind, is_manager, stay_hours, ot):

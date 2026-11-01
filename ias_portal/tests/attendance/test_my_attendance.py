@@ -92,6 +92,7 @@ def test_a_rest_day_worked_and_its_comp_day(app, world, repo):
     rep = ots.build(repo, [repo.get_employee(102)], "2026-10", "2026-10-14")[102]
     d = next(x for x in rep["days"] if x["date"] == "2026-10-09")
     assert d["day_kind"] == "rest_day" and d["transport"] == 300 and d["weighted"] == 16
+    assert d["meals"] == ["breakfast"]                                                         # a day off eats like its check-in time
     c = repo.add_comp_day({"employee_id": 102, "earned_date": "2026-10-09", "reason": "t"})
     repo.update_comp_day(c["id"] if isinstance(c, dict) else c, {"taken_date": "2026-10-12"})
     rep = ots.build(repo, [repo.get_employee(102)], "2026-10", "2026-10-14")[102]
@@ -179,3 +180,10 @@ def test_a_day_uploaded_later_becomes_real(app, world, repo):
     after = ots.build(repo, [emp], "2026-10", "2026-10-14")[101]
     d11 = next(d for d in after["days"] if d["date"] == "2026-10-11")
     assert not d11["expected"] and d11["kind"] == "morning" and d11["raw"] == 4 and d11["meals"] == ["breakfast", "lunch"]
+
+
+def test_a_day_off_worked_eats_like_its_check_in_time():
+    start = lambda t: None                                                                     # no shift start matches
+    assert otd.meal_shift("09:30", start) == "morning" and otd.meal_shift("15:00", start) == "evening"
+    assert otd.meal_shift("23:00", start) == "night" and otd.meal_shift("02:00", start) == "night"
+    assert otd.meal_shift("07:05", lambda t: "morning") == "morning"

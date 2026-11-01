@@ -78,7 +78,7 @@
     </tbody><tfoot><tr><td colspan="4"><b>Total</b></td><td class="num"><b>{{ egp(s.transport + r.transport) }}</b></td></tr></tfoot></table>
   </section>
   <section class="card flush" aria-labelledby="ml-h">
-    <div class="card-head"><h2 id="ml-h">{{ icon('coffee') }}Meals</h2><span class="hint">by shift, plus a lunch for a day of {{ rep.rules.long_day_hours|num }} hours or more</span></div>
+    <div class="card-head"><h2 id="ml-h">{{ icon('coffee') }}Meals</h2><span class="hint">by shift (a day off by its check-in time), plus a lunch for a day of {{ rep.rules.long_day_hours|num }} hours or more</span></div>
     <table class="tbl" id="my-meals"><thead><tr><th>Meal</th><th class="num">Price</th><th class="num">So far</th><th class="num">Expected</th><th class="num">Amount</th></tr></thead><tbody>
     {% for k in ('breakfast', 'evening_meal', 'dinner', 'lunch') if s.meal_counts[k] or r.meal_counts[k] or k in ('breakfast', 'lunch') %}
       <tr><td>{{ MEAL_EN[k] }}</td><td class="num">{{ egp(rep.meal_price[k]) }}</td><td class="num">{{ s.meal_counts[k] }}</td><td class="num">{{ r.meal_counts[k] }}</td>

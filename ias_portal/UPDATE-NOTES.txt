@@ -28,7 +28,7 @@ B. MY ATTENDANCE (new) - every employee and supervisor sees their own month; man
    - Attendance: check-in, check-out, hours and overtime of every day.
    - Shift allowance (expected, in EGP): the transport allowance of every counted shift (morning 100, evening 150,
      night 200, rest day / holiday 300) + meals (morning = breakfast, evening = evening meal, night = dinner; a day of
-     10 hours or more = lunch, 100 each). A supervisor is paid the morning shift only, with its breakfast (+ the lunch
+     10 hours or more = lunch, 100 each; a rest day or holiday worked gets the meal of its check-in time). A supervisor is paid the morning shift only, with its breakfast (+ the lunch
      of a 10-hour day). "So far" from the HR attendance + "still expected" from the schedule.
    - Overtime: starts after 8 hours of work. Before 18:00 x1, 18:00-22:00 x1.5, after 22:00 x1.75. A rest day or
      holiday worked: every hour x2 when no comp day is taken on a working day (Sunday-Thursday, not an official
