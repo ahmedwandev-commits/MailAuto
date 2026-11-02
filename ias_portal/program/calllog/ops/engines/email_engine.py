@@ -854,8 +854,7 @@ def _status_of(cfg, customer, replies, teams_replied, teams_pending, ovr, team_r
 
 def _split_rows(cfg, base_row, customer, split_teams, now):
     """One PENDING row per owning team while a multi-team mail is still unanswered, so every team sees it waiting.
-    Once any team replies the mail is a single Replied row (see _rows_for_customer, "one reply clears all"), so this
-    is only ever called for not-yet-answered mail and only builds pending rows."""
+    Once a team replies, ``_team_part_rows`` gives every team its own row and status (owner, v5.17)."""
     age_days = base_row["age_days"]
     waiting = _minutes_between(now, customer["received_time"])
     sla_status, escalated = _pending_status(cfg, waiting)
@@ -876,6 +875,38 @@ def _split_rows(cfg, base_row, customer, split_teams, now):
     return children
 
 
+_NO_REPLY_YET = dict(quality_rating="", quality_note="", quality_reasons="", quality_appeal="", appeal_decision="",
+                    rating_withdrawn=False, quality_reviewed_by="", quality_reviewed_at="")
+
+
+def _team_part_rows(cfg, customer, cls, replies, match_method, split_teams, ovr, team_replies, now, late):
+    """One row per team of a multi-team mail once somebody answered: each team's row is Replied by that team's own first
+    reply (response time and SLA to it), or still Pending (or No Action) when that team has not answered (owner, v5.17)."""
+    key = customer.get("message_id", "")
+    age_days = (now.date() - customer["received_time"].date()).days
+    rows, resolved = [], 0
+    for team in split_teams:
+        mine = [r for r in replies
+                if team in cfg.directory.linked_teams(cfg.directory.member_team(r.get("sender_email", "")) or "")]
+        info = _status_of(cfg, customer, mine, [team] if mine else [], [] if mine else [team], ovr, team_replies, now)
+        info["match_method"] = match_method
+        pending = info["status"] == "Pending Reply"
+        if age_days > 0 and not pending:                  # an old part this team finished: not today's business
+            resolved += 1
+            continue
+        info["is_carryover"], info["age_days"] = age_days > 0 and pending, age_days
+        row = _new_row(cfg, customer, cls, ovr, info)
+        row.update(team=team, all_teams=[team], is_split_child=True, split_sibling_teams=list(split_teams),
+                   row_id=f"{key}|{team}")
+        if not mine:
+            row.update(_NO_REPLY_YET)                     # a team that has not answered carries no reply and no rating
+        rows.append(row)
+    if age_days > 0 and resolved == len(split_teams) and late is not None and key:
+        late.append({"message_id": key, "received_time": customer["received_time"].isoformat(timespec="seconds"),
+                     "team": cls.get("team") or "", "all_teams": list(cls.get("all_teams") or [])})
+    return rows
+
+
 def _rows_for_customer(cfg, customer, indexes, team_replies, ovr, now, late=None):
     by_conversation, by_root, by_subject = indexes
     replies, match_method = find_team_replies(customer, by_conversation, by_root, by_subject)
@@ -883,7 +914,13 @@ def _rows_for_customer(cfg, customer, indexes, team_replies, ovr, now, late=None
     override = (ovr["team"].get(key) or {}).get("team") if key else None
     cls = classify(cfg, customer, override)
     teams_replied, unattributed = _attribute_replies(cfg.directory, replies, cls["all_teams"])
-    # one reply clears every team; with no reply yet, every classified team is still waiting
+    split_teams = [t for t in cls["all_teams"] if t and t != UNCLASSIFIED]
+    if replies and len(split_teams) >= 2 and not unattributed:
+        # owner (v5.17): a mail for several teams goes to every one of them and EACH team answers its own part - a team
+        # that has not answered stays Pending (its SLA keeps running) whatever the other teams did.
+        return _team_part_rows(cfg, customer, cls, replies, match_method, split_teams, ovr, team_replies, now, late)
+    # a single team (or a reply nobody can attribute to a team: it answers everything, the old rule); with no reply yet,
+    # every classified team is still waiting
     teams_pending = [] if replies else [t for t in cls["all_teams"] if t not in teams_replied]
 
     info = _status_of(cfg, customer, replies, teams_replied, teams_pending, ovr, team_replies, now)
@@ -898,10 +935,8 @@ def _rows_for_customer(cfg, customer, indexes, team_replies, ovr, now, late=None
     info["is_carryover"], info["age_days"] = is_carryover, age_days
     base = _new_row(cfg, customer, cls, ovr, info)
 
-    split_teams = [t for t in cls["all_teams"] if t and t != UNCLASSIFIED]
-    # One reply clears the whole mail (confirmed rule): a mail addressed to several teams is split into one PENDING
-    # row per team only while NOBODY has replied yet, so every team sees it waiting. The moment any one team answers
-    # it is a single Replied mail and leaves every other team's pending list - so a replied split mail is one row.
+    # nobody answered yet: one PENDING row per team, so every team sees it waiting (a mail somebody answered is split by
+    # _team_part_rows above, each team with its own status)
     can_split = info["status"] == "Pending Reply" and len(split_teams) >= 2 and not unattributed and not teams_replied
     return _split_rows(cfg, base, customer, split_teams, now) if can_split else [base]
 

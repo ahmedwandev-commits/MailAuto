@@ -56,6 +56,13 @@ B. MY ATTENDANCE (new) - every employee and supervisor sees their own month; man
    - SPEED: the Workforce pages checked each data file on the shared folder hundreds of times per page (Today: ~690 checks,
      about 2 s on the share). A file is now checked at most once a second: Today ~65 ms, every Workforce page under 0.25 s.
 
+D. E-MAIL: A MAIL FOR SEVERAL TEAMS - EACH TEAM ANSWERS ITS OWN PART
+   - Before: the first reply of any team closed the mail for every team, and it showed in the first team's list as
+     "Replied by <other> team".
+   - Now: the mail goes to every team it concerns, one line per team. A team's line is Replied only when somebody of
+     THAT team answers (its own response time and SLA); a team that has not answered stays Pending (its SLA keeps
+     running), whatever the other teams did. A reply from an address that belongs to no team still answers every team.
+
 C. BUGS FIXED (whole application, 41 fixes - each has an automatic test)
    - Schedule import: a name matching several employees gave the shifts to the first of them (now: skipped and listed).
    - E-mail outbox: a mail queued while the collector was sending could be lost.
