@@ -40,4 +40,4 @@ def index():
     teams = sorted({t for e in access.visible_employees(repo, user) for t in e["teams"]}, key=str.lower) if can_team else []
     return render_template("attendance/my_attendance.html", rep=rep, tab=tab, mine=mine, can_team=can_team, team_rows=team_rows,
                            month=month, prev_m=prev_m, next_m=next_m, label=ots.MONTH_NAMES[m - 1] + f" {y}", today=today,
-                           teams=teams, team=request.args.get("team") or "")
+                           teams=teams, team=request.args.get("team") or "", team_money=access.sees_team_money(user))

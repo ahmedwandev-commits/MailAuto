@@ -68,6 +68,12 @@ def require_employee(repo, user, employee_id):
         raise Forbidden("You do not have access to this employee.")
     return e
 
+def sees_team_money(user):
+    """May this account see OTHER people's allowance amounts? The administrators, the General Manager, the administrative affairs
+    and the accounts given the allowance export. A team manager sees only their own amounts, never their employees' (owner, v5.18)."""
+    return user["role"] in ("admin", "gm") or bool(user.get("att_admin")) or bool(user.get("can_allowance"))
+
+
 def can_write(user):
     """admin and manager may change data; the general manager is read-only."""
     return user["role"] in ("admin", "manager")

@@ -23,6 +23,10 @@ F. NEW IN v5.18
      everywhere - Settings > Rules & allowance "Amount per day" (100 / 150 / 200 / 300 unless you saved others) and the
      currency, the meal prices under "Overtime & meals" (100 each), the allowance sheet, the confirmation page and e-mails,
      My schedule, My attendance (transport + meals in EGP) and the guide. The days behind every count (checkpoint 4) stay.
+   - A TEAM MANAGER NEVER SEES THE EMPLOYEES' AMOUNTS (owner): the Team tab of My attendance shows their overtime and the
+     number of shifts (so far / expected), and Allowance > Confirmation shows the days without the Amount column or totals.
+     The manager sees only their own amounts (My attendance, My schedule). The administrators, the General Manager, the
+     administrative affairs and the accounts given the allowance export still see every amount.
    - The user guide screenshots were retaken.
 
 --------------------------------------------------------------------------------

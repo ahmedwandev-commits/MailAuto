@@ -138,18 +138,20 @@
   <button class="btn btn-ghost" type="submit">{{ icon('refresh') }}Show</button>
 </form>
 <section class="card flush" aria-labelledby="tm-h">
-  <div class="card-head"><h2 id="tm-h">{{ icon('users') }}{{ label }}</h2><span class="hint">overtime and the expected shift allowance of every person you can see</span></div>
-  <div class="tbl-wrap"><table class="tbl" id="team-overtime"><thead><tr><th>Person</th><th class="num">Days worked</th><th class="num">Overtime (h)</th><th class="num">% of a normal month</th><th class="num">Allowance so far</th><th class="num">Expected this month</th></tr></thead><tbody>
+  <div class="card-head"><h2 id="tm-h">{{ icon('users') }}{{ label }}</h2><span class="hint">{{ 'overtime and the expected shift allowance of every person you can see' if team_money else 'overtime and the expected shifts of your team - the amounts are on each person\'s own page' }}</span></div>
+  <div class="tbl-wrap"><table class="tbl" id="team-overtime"><thead><tr><th>Person</th><th class="num">Days worked</th><th class="num">Overtime (h)</th><th class="num">% of a normal month</th>{% if team_money %}<th class="num">Allowance so far</th><th class="num">Expected this month</th>{% else %}<th class="num">Shifts so far</th><th class="num">Shifts expected this month</th>{% endif %}</tr></thead><tbody>
   {% for r in team_rows %}{% set o = r.overtime %}<tr>
     <td>{{ person(r.employee.name, r.employee.id, r.employee.teams|join(', '), url_for('att_people.profile', emp_id=r.employee.id)) }}{% if r.is_manager %} {{ tone_chip('Supervisor', 't-na') }}{% endif %}</td>
     <td class="num">{{ r.days|selectattr('stay')|list|length }}</td>
     <td class="num"><b>{{ hrs(o.capped) }}</b>{% if o.over_cap %} <span class="small muted">(+{{ hrs(o.over_cap) }} over the cap)</span>{% endif %}</td>
     <td class="num">{{ '%.1f'|format(o.pct) }} %</td>
-    <td class="num">{{ egp(r.so_far.total) }}</td><td class="num"><b>{{ egp(r.expected_total) }}</b> <span class="small muted">{{ r.currency }}</span></td></tr>
+    {% if team_money %}<td class="num">{{ egp(r.so_far.total) }}</td><td class="num"><b>{{ egp(r.expected_total) }}</b> <span class="small muted">{{ r.currency }}</span></td>
+    {% else %}<td class="num">{{ r.so_far.shifts }}</td><td class="num"><b>{{ r.so_far.shifts + r.rest.shifts }}</b></td>{% endif %}</tr>
   {% else %}<tr><td colspan="6">{% call empty('users', 'Nobody here', 'People appear here when they belong to your teams.') %}{% endcall %}</td></tr>{% endfor %}
   </tbody>
   {% if team_rows %}<tfoot><tr><td><b>Total</b></td><td></td><td class="num"><b>{{ hrs(team_rows|map(attribute='overtime')|sum(attribute='capped')) }}</b></td><td></td>
-    <td class="num">{{ egp(team_rows|map(attribute='so_far')|sum(attribute='total')) }}</td><td class="num"><b>{{ egp(team_rows|sum(attribute='expected_total')) }}</b></td></tr></tfoot>{% endif %}
+    {% if team_money %}<td class="num">{{ egp(team_rows|map(attribute='so_far')|sum(attribute='total')) }}</td><td class="num"><b>{{ egp(team_rows|sum(attribute='expected_total')) }}</b></td>
+    {% else %}<td class="num">{{ team_rows|map(attribute='so_far')|sum(attribute='shifts') }}</td><td class="num"><b>{{ team_rows|map(attribute='so_far')|sum(attribute='shifts') + team_rows|map(attribute='rest')|sum(attribute='shifts') }}</b></td>{% endif %}</tr></tfoot>{% endif %}
   </table></div>
 </section>
 {% endif %}

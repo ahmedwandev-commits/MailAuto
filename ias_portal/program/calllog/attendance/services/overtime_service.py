@@ -149,7 +149,7 @@ def build(repo, employees, month, today):
             transport = sum(x["transport"] for x in sel)
             meal_amount = sum(x["meal_amount"] for x in sel)
             return {"transport": transport, "meals": meal_amount, "total": transport + meal_amount, "meal_counts": meals,
-                    "shift_counts": shifts}
+                    "shift_counts": shifts, "shifts": sum(shifts.values())}          # "shifts": what a team manager sees of the others
         so_far, rest = money(False), money(True)
         out[eid] = {"employee": emp, "is_manager": is_mgr, "month": month, "label": f"{MONTH_NAMES[m - 1]} {y}", "days": rows,
                     "so_far": so_far, "rest": rest, "expected_total": so_far["total"] + rest["total"],

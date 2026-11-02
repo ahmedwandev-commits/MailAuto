@@ -220,3 +220,13 @@ def test_a_second_manager_of_a_team_sees_only_their_own_pages(app, world, repo):
     assert ">My attendance<" in menu and ">My schedule<" in menu and ">Today<" not in menu and ">Schedule<" not in menu
     assert ">E-mail<" in menu or "/email" in menu                                         # the portal itself is unchanged
     assert login(app, "mgr1").get("/planning/day").status_code == 200
+
+
+def test_a_team_manager_never_sees_the_employees_amounts(app, world, repo, mgr1_b, admin_b, gm_b):
+    """Owner (v5.18): a team manager sees the overtime and the shifts of the team, never their money - only their own amounts."""
+    page = mgr1_b.get("/attendance/my/attendance?month=2026-10").get_data(as_text=True)
+    table = page.split('id="team-overtime"')[1].split("</table>")[0]
+    assert "Shifts so far" in table and "Allowance so far" not in table and "EGP" not in table
+    for b in (admin_b, gm_b):                                                                   # the office still sees them
+        table = b.get("/attendance/my/attendance?month=2026-10&tab=team").get_data(as_text=True).split('id="team-overtime"')[1].split("</table>")[0]
+        assert "Allowance so far" in table and "EGP" in table

@@ -24,7 +24,8 @@ def index():
         st["teams"] = [t for t in st["teams"] if t["team"] != ac.NO_TEAM and access.in_scope(me, t["team"])]
     team = request.args.get("team", "")
     months = sorted(ac.rounds(repo), reverse=True)
-    return render_template("attendance/allowance_confirm.html", st=st, month=month, months=months, team=team, me=me)
+    return render_template("attendance/allowance_confirm.html", st=st, month=month, months=months, team=team, me=me,
+                           show_money=access.sees_team_money(me))     # a team manager never sees the employees' amounts
 
 
 def _back(month):

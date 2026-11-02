@@ -106,3 +106,13 @@ def test_the_amounts_are_shown_again(app, world, repo, admin_b):
     assert "150.00 EGP" in str(mail)
     sheet = admin_b.get("/allowance?from=2026-10-01&to=2026-10-31").get_data(as_text=True)
     assert "Amount (EGP)" in sheet and "150.00" in sheet
+
+
+def test_a_team_manager_sees_no_amounts_on_the_confirmation(app, world, repo, admin_b, mgr1_b, gm_b):
+    repo.save_settings({"allowance_rules": {"morning": {"rate": 150}}})
+    repo.directory.store.update_user("201", {"teams": ["Team A"]})
+    assert admin_b.post("/allowance/confirm/start", {"month": "2026-10"}).status_code == 302
+    page = mgr1_b.get("/allowance/confirm?month=2026-10").get_data(as_text=True)
+    assert "Team A" in page and "150.00" not in page and "<th class=\"num\">Amount</th>" not in page
+    page = gm_b.get("/allowance/confirm?month=2026-10").get_data(as_text=True)
+    assert "150.00" in page and "<th class=\"num\">Amount</th>" in page
