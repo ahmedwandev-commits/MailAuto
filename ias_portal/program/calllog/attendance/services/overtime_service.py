@@ -1,5 +1,5 @@
 """My attendance (v5.17): a person's month - check-in / check-out, the overtime (weighted, the weekly deduction, the 40 % cap) and the
-expected shift allowance as COUNTS (the shifts of every counted day + the meals - no money). The rules are in ``domain/overtime.py``;
+expected shift allowance in money (the transport allowance of every counted day + the meals). The rules are in ``domain/overtime.py``;
 which day counts as which shift is the shift-allowance classification (``domain/allowance.py`` via ``allowance_service.compute``), so a
 day is never judged two different ways.
 
@@ -77,9 +77,9 @@ def build(repo, employees, month, today):
             comp.setdefault(emp, set()).add(d)
 
     first_weekday = int(st.get("work_week_start", 6))
-    rate = {k: 1.0 if rules[k].get("enabled") else 0.0 for k in al.KINDS}      # 1 = this kind counts: "transport" below is a number of shifts
-    meal_price = {k: 1.0 for k in otd.MEALS}                                  # "meal_amount" is a number of meals
-    currency = ""
+    rate = {k: float(rules[k].get("rate") or 0) if rules[k].get("enabled") else 0.0 for k in al.KINDS}
+    meal_price = {k: float(ot["meal_" + k]) for k in otd.MEALS}
+    currency = st.get("allowance_currency") or "EGP"
     out = {}
     # every number comes from the administrator's HR sheet (never from the portal sign-in, which only shows that somebody started
     # working). A day whose sheet is not uploaded yet (the administrator may upload a day, two, or a week at once) is still expected

@@ -103,10 +103,15 @@ def build(repo, d1, d2, team=None, include_pending=False):
     rows = [{"employee_id": i, "name": names[i], **summary[i]} for i in sorted(summary, key=lambda i: (names[i], i))]
     totals = {k: {"count": sum(r[k]["count"] for r in rows)} for k in (*al.KINDS, *al.OUT)}
     totals["total_count"] = sum(r["total_count"] for r in rows)
+    rates = {k: float(rules[k].get("rate") or 0) for k in al.KINDS}               # the amount per day of Settings › Shift allowance
+    for r in rows:
+        r["amount"] = sum(r[k]["count"] * rates[k] for k in al.KINDS)
+    totals["amount"] = sum(r["amount"] for r in rows)
     return {"from": d1, "to": d2, "team": team or "", "days": days, "skipped": skipped, "rows": rows, "totals": totals, "names": names,
             "rules": rules, "kinds": al.enabled_kinds(rules), "employees": len(employees), "evening_after": st["allowance_evening_after"],
             "use_schedule": bool(st["allowance_use_schedule"]), "data_loaded": bool(repo.dates_with_attendance(d1, d2)),
-            "approvals": approvals, "hidden_days": hidden, "include_pending": include_pending,
+            "approvals": approvals, "hidden_days": hidden, "include_pending": include_pending, "rates": rates,
+            "currency": st.get("allowance_currency") or "EGP", "has_amounts": any(rates.values()),
             "status_note": "" if not include_pending else "includes days not approved by the managers yet"}
 
 

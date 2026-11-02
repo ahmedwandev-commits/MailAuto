@@ -42,18 +42,19 @@
 <section class="kpis" aria-label="Totals">
   {% for k in rep.kinds %}{{ kpi(EN[k], rep.totals[k].count, 'days', 's0', IC[k]) }}{% endfor %}
   {{ kpi('Total', rep.totals.total_count, 'days · ' ~ rep.rows|length ~ ' employees', 't-ok', 'check-circle') }}
+  {% if rep.has_amounts %}{{ kpi('Amount', '{:,.2f}'.format(rep.totals.amount), rep.currency, 't-ok', 'award') }}{% endif %}
 </section>
 
 <section class="card flush" aria-labelledby="al-h">
   <div class="card-head"><h2 id="al-h">{{ icon('users') }}Per employee</h2><span class="hint">Counted days.</span></div>
   <div class="tbl-wrap"><table class="tbl" id="allowance-table">
-    <thead><tr><th>ID</th><th>Employee</th>{% for k in rep.kinds %}<th class="num">{{ EN[k] }}</th>{% endfor %}<th class="num">Total</th></tr></thead>
+    <thead><tr><th>ID</th><th>Employee</th>{% for k in rep.kinds %}<th class="num">{{ EN[k] }}</th>{% endfor %}<th class="num">Total</th>{% if rep.has_amounts %}<th class="num">Amount ({{ rep.currency }})</th>{% endif %}</tr></thead>
     <tbody>
     {% for r in rep.rows %}<tr><td>{{ r.employee_id }}</td><td dir="auto" class="bidi">{{ r.name }}</td>
-      {% for k in rep.kinds %}<td class="num">{{ r[k].count }}</td>{% endfor %}<td class="num"><b>{{ r.total_count }}</b></td></tr>
+      {% for k in rep.kinds %}<td class="num">{{ r[k].count }}</td>{% endfor %}<td class="num"><b>{{ r.total_count }}</b></td>{% if rep.has_amounts %}<td class="num">{{ '{:,.2f}'.format(r.amount) }}</td>{% endif %}</tr>
     {% else %}<tr><td colspan="{{ 3 + rep.kinds|length }}">{% call empty('users', 'No counted days in this period', 'Nobody has a day that qualifies in the chosen period and team.') %}{% endcall %}</td></tr>{% endfor %}
     </tbody>
-    {% if rep.rows %}<tfoot><tr><td colspan="2"><b>Total</b></td>{% for k in rep.kinds %}<td class="num">{{ rep.totals[k].count }}</td>{% endfor %}<td class="num"><b>{{ rep.totals.total_count }}</b></td></tr></tfoot>{% endif %}
+    {% if rep.rows %}<tfoot><tr><td colspan="2"><b>Total</b></td>{% for k in rep.kinds %}<td class="num">{{ rep.totals[k].count }}</td>{% endfor %}<td class="num"><b>{{ rep.totals.total_count }}</b></td>{% if rep.has_amounts %}<td class="num"><b>{{ '{:,.2f}'.format(rep.totals.amount) }}</b></td>{% endif %}</tr></tfoot>{% endif %}
   </table></div>
 </section>
 

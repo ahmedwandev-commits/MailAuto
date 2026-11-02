@@ -11,8 +11,6 @@ HOW TO UPDATE (your data is kept)
   5. Settings > Daily summary: tick "Send on these days" if the summary should not go on every working day.
 
 E. MERGED FROM CHECKPOINT 4 (kept as they were decided)
-   - Shift allowance and meals are COUNTS only (days / shifts / meals) - no money and no currency anywhere: the sheet, the
-     confirmation, the e-mails, My attendance and the guide.
    - An HR sheet uploaded again (or a fuller one) completes / corrects the days stored before; every change is recorded.
    - A name written «name (MFA)» in the schedule counts for the MFA team for that shift.
    - Today's team table: Manager and Maker as "arrived / of".
@@ -21,7 +19,11 @@ E. MERGED FROM CHECKPOINT 4 (kept as they were decided)
 F. NEW IN v5.18
    - Settings > Daily summary > "Send on these days": tick the days the summary and the Best Performance e-mail go (none
      ticked = the general working days), right under the send times; "Only between these hours" is optional.
-   - The user guide screenshots were retaken (counts, no money) and the guide no longer mentions an amount.
+   - THE MONEY IS BACK (owner): checkpoint 4 had made the shift allowance counts only; the amounts of v5.17 are restored
+     everywhere - Settings > Rules & allowance "Amount per day" (100 / 150 / 200 / 300 unless you saved others) and the
+     currency, the meal prices under "Overtime & meals" (100 each), the allowance sheet, the confirmation page and e-mails,
+     My schedule, My attendance (transport + meals in EGP) and the guide. The days behind every count (checkpoint 4) stay.
+   - The user guide screenshots were retaken.
 
 --------------------------------------------------------------------------------
 
@@ -34,7 +36,8 @@ HOW TO UPDATE (your data is kept)
      and NO collector_config.json, so your users, history, settings and collector passwords are never touched.
   3. Start run.py, then collector.py.
   4. Settings > Rules & allowance > Team managers: choose the ONE manager of every team that has several managers.
-  5. Settings > Rules & allowance: check the new "Overtime & meals" section.
+  5. Settings > Rules & allowance: check "Amount per day" (100 / 150 / 200 / 300 are the new defaults - an amount you
+     saved before is kept) and the new "Overtime & meals" section.
 
 A. WORKFORCE IS ORGANISED BY TASK
    - Side menu: Today · My attendance · Schedule · Leave · Allowance (+ Imports for administrators).

@@ -1,5 +1,5 @@
 """My attendance (v5.17): the signed-in person's month in three tabs - Attendance (check-in / check-out, hours, overtime of each day),
-Shift allowance (the expected shifts and meals, as counts - no money) and Overtime (weighted hours, the weekly deduction, the cap and the %).
+Shift allowance (the expected money: transport + meals) and Overtime (weighted hours, the weekly deduction, the cap and the %).
 Managers, the General Manager and the administrators also get a Team tab: the same numbers for every person they may see.
 The employee number is always the signed-in account's own - never a request parameter."""
 from flask import Blueprint, g, render_template, request

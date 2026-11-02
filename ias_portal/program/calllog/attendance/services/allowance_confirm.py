@@ -110,7 +110,7 @@ def figures(repo, month, employees=None):
     d1, d2 = f"{month}-01", f"{month}-{calendar.monthrange(y, m)[1]:02d}"
     emps = employees if employees is not None else repo.list_employees()
     days, skipped, rules, st = allowance_service.compute(repo, d1, d2, emps)
-    rates = {k: 0.0 for k in al.KINDS}                      # counts only - no money (owner's decision); the pages and e-mails hide a zero amount
+    rates = {k: float(rules[k].get("rate") or 0) for k in al.KINDS}
     out = {e["id"]: {**{k: 0 for k in al.KINDS}, "total": 0, "amount": 0.0} for e in emps}
     for d in days:
         row = out.setdefault(d["employee_id"], {**{k: 0 for k in al.KINDS}, "total": 0, "amount": 0.0})
@@ -120,7 +120,7 @@ def figures(repo, month, employees=None):
     not_counted = {}
     for s in skipped:
         not_counted.setdefault(s["employee_id"], []).append(s)
-    return out, rates, "", not_counted
+    return out, rates, st.get("allowance_currency") or "EGP", not_counted
 
 
 def days_of(repo, month, emp):

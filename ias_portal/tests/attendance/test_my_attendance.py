@@ -74,13 +74,12 @@ def test_the_month_of_an_employee(app, world, repo):
     _long_day(repo)
     rep = ots.build(repo, [repo.get_employee(101)], "2026-10", "2026-10-14")[101]
     d13 = next(d for d in rep["days"] if d["date"] == "2026-10-13")
-    # counts only, no money (checkpoint 4): "transport" = shifts counted, "meal_amount" = meals
-    assert d13["kind"] == "morning" and d13["transport"] == 1 and d13["meals"] == ["breakfast", "lunch"] and d13["meal_amount"] == 2
+    assert d13["kind"] == "morning" and d13["transport"] == 100 and d13["meals"] == ["breakfast", "lunch"] and d13["meal_amount"] == 200
     assert d13["weighted"] == pytest.approx(7.5) and not d13["expected"]
-    assert rep["so_far"]["transport"] == 1 and rep["so_far"]["meals"] == 2
+    assert rep["so_far"]["transport"] == 100 and rep["so_far"]["meals"] == 200
     assert all(d["expected"] for d in rep["days"] if d["date"] >= "2026-10-14")                 # the rest comes from the schedule
     # the rest: 14..31 from the schedule + 1..11, whose HR sheet is not uploaded yet (only the 12th and the 13th are)
-    assert rep["rest"]["transport"] == 29 and rep["rest"]["meal_counts"]["breakfast"] == 29
+    assert rep["rest"]["transport"] == 29 * 100 and rep["rest"]["meal_counts"]["breakfast"] == 29
     assert next(d for d in rep["days"] if d["date"] == "2026-10-05")["note"] == "waiting for the HR sheet"
     assert next(d for d in rep["days"] if d["date"] == "2026-10-12")["expected"] is False                  # uploaded: real (short day)
     assert rep["expected_total"] == rep["so_far"]["total"] + rep["rest"]["total"]
@@ -92,13 +91,13 @@ def test_a_rest_day_worked_and_its_comp_day(app, world, repo):
     repo.commit_attendance_rows_atomic(a, [{"employee_id": 102, "work_date": "2026-10-09", "in_time": "08:00:00", "out_time": "16:00:00"}])   # a Friday
     rep = ots.build(repo, [repo.get_employee(102)], "2026-10", "2026-10-14")[102]
     d = next(x for x in rep["days"] if x["date"] == "2026-10-09")
-    assert d["day_kind"] == "rest_day" and d["transport"] == 1 and d["weighted"] == 16
+    assert d["day_kind"] == "rest_day" and d["transport"] == 300 and d["weighted"] == 16
     assert d["meals"] == ["breakfast"]                                                         # a day off eats like its check-in time
     c = repo.add_comp_day({"employee_id": 102, "earned_date": "2026-10-09", "reason": "t"})
     repo.update_comp_day(c["id"] if isinstance(c, dict) else c, {"taken_date": "2026-10-12"})
     rep = ots.build(repo, [repo.get_employee(102)], "2026-10", "2026-10-14")[102]
     d = next(x for x in rep["days"] if x["date"] == "2026-10-09")
-    assert d["weighted"] == 0 and d["transport"] == 1 and "comp day" in d["note"]
+    assert d["weighted"] == 0 and d["transport"] == 300 and "comp day" in d["note"]
 
 
 def test_the_comp_day_must_be_a_working_day_of_the_same_or_the_next_week():
@@ -119,7 +118,7 @@ def test_a_day_off_on_the_next_friday_or_saturday_is_not_a_comp_day(app, world, 
     repo.update_comp_day(c["id"] if isinstance(c, dict) else c, {"taken_date": taken})
     rep = ots.build(repo, [repo.get_employee(102)], "2026-10", "2026-10-31")[102]
     d = next(x for x in rep["days"] if x["date"] == "2026-10-10")
-    assert d["transport"] == 1 and d["weighted"] == (0 if counts else 16), taken
+    assert d["transport"] == 300 and d["weighted"] == (0 if counts else 16), taken
 
 
 # ---------------------------------------------------------------- the page and who sees what
@@ -154,10 +153,10 @@ def test_a_manager_without_an_hr_number_gets_the_team_tab(app, world, repo, mgr1
 
 def test_the_administrator_sets_the_overtime_rules(app, world, repo, admin_b):
     form = {"action": "overtime", **{f"ot_{k}": v for k, v in settings_svc.OVERTIME_DEFAULTS.items()}}
-    form["ot_evening_rate"] = "1.6"
+    form["ot_evening_rate"], form["ot_meal_lunch"] = "1.6", "120"
     assert admin_b.post("/admin/settings", form).status_code == 302
     ot = settings_svc.overtime_rules(settings_svc.load(repo))
-    assert ot["evening_rate"] == 1.6 and ot["night_from"] == "22:00" and "meal_lunch" not in ot      # meals are counted, not priced
+    assert ot["evening_rate"] == 1.6 and ot["meal_lunch"] == 120 and ot["night_from"] == "22:00"
     bad = {**form, "ot_cap_pct": "abc"}
     assert admin_b.post("/admin/settings", bad).status_code == 400
     bad = {**form, "ot_evening_from": "23:00"}                                                  # after the night rate

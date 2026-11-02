@@ -174,10 +174,10 @@
     </ul>
   </div>
   <div class="row">
-    <figure>{{ img('myatt-allowance.jpg', 'البدل المتوقع') }}<figcaption>البدل المتوقع بالعدد (ورديات ووجبات): حتى الآن + المتبقي من جدولك.</figcaption></figure>
+    <figure>{{ img('myatt-allowance.jpg', 'البدل المتوقع') }}<figcaption>البدل المتوقع بالجنيه (الانتقال + الوجبات): حتى الآن + المتبقي من جدولك.</figcaption></figure>
     <ul>
-      <li><b class="k">الورديات</b> المحسوبة بالعدد (صباحي · مسائي · ليلي · عطلة) من غير أي مبالغ.</li>
-      <li><b class="k">الوجبات</b>: الصباحي فطار، المسائي غدا، الليلي عشا - من أول {{ num(ot.base_hours) }} ساعات. ولو قعدت {{ num(ot.long_day_hours) }} ساعات أو أكتر وجبة إضافية.</li>
+      <li><b class="k">بدل الانتقال</b> لكل وردية: صباحي {{ num(rates.morning.rate) }} · مسائي {{ num(rates.evening.rate) }} · ليلي {{ num(rates.night.rate) }} · عطلة {{ num(rates.rest_day.rate) }} {{ currency }}.</li>
+      <li><b class="k">الوجبات</b> ({{ num(ot.meal_breakfast) }} {{ currency }}): الصباحي فطار، المسائي غدا، الليلي عشا - من أول {{ num(ot.base_hours) }} ساعات. ولو قعدت {{ num(ot.long_day_hours) }} ساعات أو أكتر وجبة إضافية.</li>
       <li>يوم الإجازة لو اشتغلت فيه: وجبة حسب وقت حضورك.</li>
       {% if who.manager %}<li>المشرف: الوردية الصباحية بس (والعطلات) مع الفطار، والوجبة الإضافية لو قعد {{ num(ot.long_day_hours) }} ساعات.</li>{% endif %}
       <li>ده تقدير؛ البدل الرسمي هو اللي بيتعزز آخر الشهر.</li>

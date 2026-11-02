@@ -11,7 +11,7 @@ def sections(page):
 def test_an_employee_sees_only_their_own_pages(app, world, repo):
     page = login(app, "101").get("/guide").get_data(as_text=True)
     assert sections(page) == {"myatt", "mine", "allow"}
-    assert "×1.5" in page and "70.4" in page and "جنيه" not in page and "EGP" not in page    # rules from Settings; counts, no money
+    assert "×1.5" in page and "70.4" in page and "100" in page                          # the numbers come from Settings
     assert 'href="#settings"' not in page and 'href="#hr"' not in page and 'href="#roles"' not in page
 
 

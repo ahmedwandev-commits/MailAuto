@@ -80,16 +80,29 @@ def test_the_collector_sends_the_outbox(app, world, repo, admin_b):
     assert mail_outbox.pending(store) == []
 
 
-def test_the_allowance_is_counts_only_no_money(app, world, repo, admin_b):
-    """Owner's decision (checkpoint 4): the shift allowance is counted in days - no amount, no currency, even an old saved rate."""
+def test_amounts_come_from_the_settings(app, world, repo, admin_b):
     from calllog.attendance.services import allowance_confirm as ac
-    repo.save_settings({"allowance_rules": {"morning": {"rate": 150}}})
+    rules = {"morning": {"rate": 150}}
+    repo.save_settings({"allowance_rules": rules})
     nums, rates, currency, _ = ac.figures(repo, "2026-10")
-    assert not any(rates.values()) and currency == ""
-    assert nums[201]["morning"] == 1 and nums[201]["amount"] == 0                                # 07:00-15:00: a full morning
+    assert rates["morning"] == 150 and currency == "EGP"
+    assert nums[201]["morning"] == 1 and nums[201]["amount"] == 150                              # 07:00-15:00: a full morning
     assert nums[101]["total"] == 0 and _not_counted(repo)[101]                                   # 07:10-15:00 is short of 8 h
 
 
 def _not_counted(repo):
     from calllog.attendance.services import allowance_confirm as ac
     return ac.figures(repo, "2026-10")[3]
+
+
+def test_the_amounts_are_shown_again(app, world, repo, admin_b):
+    """Owner (v5.18): the money is back - the amount per day on the employee's card, the sheet and the confirmation e-mail."""
+    repo.save_settings({"allowance_rules": {"morning": {"rate": 150}}})
+    set_user(repo, "201", {"email": "201@nbe.test"})
+    assert admin_b.post("/allowance/confirm/start", {"month": "2026-10"}).status_code == 302
+    page = login(app, "201").get("/attendance/my").get_data(as_text=True)
+    assert "× 150" in page and "150.00" in page and "Amount (EGP)" in page
+    mail = next(i for i in _outbox(app) if i["to"] == ["201@nbe.test"])
+    assert "150.00 EGP" in str(mail)
+    sheet = admin_b.get("/allowance?from=2026-10-01&to=2026-10-31").get_data(as_text=True)
+    assert "Amount (EGP)" in sheet and "150.00" in sheet

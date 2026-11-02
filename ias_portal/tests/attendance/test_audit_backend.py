@@ -175,9 +175,8 @@ def test_the_sector_total_counts_a_person_of_two_teams_once(app, world, repo):
     repo.save_settings({"allowance_rules": {"morning": {"rate": 150}}})
     repo.directory.store.update_user("201", {"teams": ["Team B", "Team A"]})
     st = ac.status(repo, "2026-10")
-    assert st["total_amount"] == 0                                                              # counts only: no money (checkpoint 4)
-    people = [p for t in st["teams"] for p in t["people"] if p["id"] == 201]
-    assert len(people) == 1 and [t["team"] for t in st["teams"] if any(p["id"] == 201 for p in t["people"])] == ["Team B"]   # one team, once
+    assert {t["team"]: t["amount"] for t in st["teams"]} == {"Team A": 0, "Team B": 150}        # in their one Workforce team (v5.17)
+    assert st["total_amount"] == 150                                                            # paid once
 
 
 # ---------------------------------------------------------------- leave: the days charged must fit the dates

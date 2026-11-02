@@ -24,4 +24,5 @@ def audience(user):
 @auth.login_required
 def index():
     st = settings_svc.load(auth.repo())
-    return render_template("attendance/guide.html", who=audience(g.att_user), ot=settings_svc.overtime_rules(st))
+    return render_template("attendance/guide.html", who=audience(g.att_user), ot=settings_svc.overtime_rules(st),
+                           rates=settings_svc.allowance_rules(st), currency=st.get("allowance_currency") or "EGP")

@@ -34,10 +34,10 @@ DEFAULT_SETTINGS = {
     # --- the monthly confirmation of the shift allowance (employees -> team managers -> General Manager -> administrative affairs)
     "allowance_reminders": True,        # a reminder e-mail every working day to whoever has not confirmed yet
     "allowance_reminder_time": "10:00",
+    "allowance_currency": "EGP",
     # --- Team schedule (drag and drop): who gets the e-mail of the published month
     "team_plan_to": [],
     "team_plan_cc": [],
-
     # --- HR file interpretation
     "hr_workday_labels": ["يوم عمل"],
     "hr_weekly_rest_labels": ["العطلة الاسبوعية"],
@@ -60,13 +60,12 @@ def load(repo):
 # start of the shift: from ``early`` minutes before ``start`` to ``grace`` minutes after it. A day worked on a weekly rest day or on an
 # official holiday (``rest_day`` / ``official_holiday``) is counted whatever the time, with the hours as a condition only when
 # ``needs_hours`` is on. ``allowance_evening_after`` and ``allowance_use_schedule`` are single settings (see domain/allowance.py).
-ALLOWANCE_DEFAULTS = {
-    "morning": {"enabled": True, "start": "07:00", "early": 60, "grace": 15, "hours": 8},
-    "evening": {"enabled": True, "start": "14:00", "early": 60, "grace": 15, "hours": 8},
-    "night": {"enabled": True, "start": "22:00", "early": 60, "grace": 15, "hours": 8},
-    "rest_day": {"enabled": True, "needs_hours": True, "hours": 8},
-    "official_holiday": {"enabled": True, "needs_hours": True, "hours": 8},
-
+ALLOWANCE_DEFAULTS = {          # ``rate``: the amount paid for one such day (EGP) - the transport allowance (owner, v5.17: 100 / 150 / 200 / 300)
+    "morning": {"enabled": True, "start": "07:00", "early": 60, "grace": 15, "hours": 8, "rate": 100},
+    "evening": {"enabled": True, "start": "14:00", "early": 60, "grace": 15, "hours": 8, "rate": 150},
+    "night": {"enabled": True, "start": "22:00", "early": 60, "grace": 15, "hours": 8, "rate": 200},
+    "rest_day": {"enabled": True, "needs_hours": True, "hours": 8, "rate": 300},
+    "official_holiday": {"enabled": True, "needs_hours": True, "hours": 8, "rate": 300},
 }
 
 
@@ -82,6 +81,7 @@ OVERTIME_DEFAULTS = {
     "weekly_deduction_hours": 2,    # taken off every week's overtime
     "cap_pct": 40, "base_days": 22, # the month's overtime is at most cap_pct % of base_days x base_hours (40 % of 176 h = 70.4 h)
     "long_day_hours": 10,           # a stay of this many hours earns a meal (lunch)
+    "meal_breakfast": 100, "meal_evening_meal": 100, "meal_dinner": 100, "meal_lunch": 100,   # EGP per meal
 }
 OVERTIME_TIMES = ("evening_from", "night_from", "night_until", "night_until_rest")
 
@@ -109,7 +109,8 @@ def allowance_rules(st):
         rules["rest_day"]["needs_hours"] = rules["official_holiday"]["needs_hours"] = bool(st["allowance_holiday_needs_hours"])
     for kind, vals in (st.get("allowance_rules") or {}).items():
         if kind in rules and isinstance(vals, dict):
-            rules[kind].update({k: v for k, v in vals.items() if k in ALLOWANCE_DEFAULTS[kind]})
+            old_money = "basis" in vals                    # the first version's money (per hour / per day) is not today's amount per day
+            rules[kind].update({k: v for k, v in vals.items() if k in ALLOWANCE_DEFAULTS[kind] and not (old_money and k == "rate")})
     return rules
 
 

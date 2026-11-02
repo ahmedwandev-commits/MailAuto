@@ -13,8 +13,9 @@
     {% elif a.status == 'objected' %}{{ tone_chip('Objection sent to your manager', 't-warn', 'alert-triangle') }}
     {% else %}{{ tone_chip('Waiting for your confirmation', 't-info', 'clock') }}{% endif %}</div>
   <div class="ac-figs">
-    {% for k, label in a.kinds %}{% if f[k] %}<a class="ac-fig" href="#ac-days-{{ a.month }}-{{ k }}" data-open="ac-days-{{ a.month }}-{{ k }}" title="Show these days"><span class="ac-n">{{ f[k] }}</span><span class="ac-l">{{ label }}</span><span class="ac-r">show the days</span></a>{% endif %}{% endfor %}
+    {% for k, label in a.kinds %}{% if f[k] %}<a class="ac-fig" href="#ac-days-{{ a.month }}-{{ k }}" data-open="ac-days-{{ a.month }}-{{ k }}" title="Show these days"><span class="ac-n">{{ f[k] }}</span><span class="ac-l">{{ label }}{% if a.rates and a.rates[k] %} × {{ '%g'|format(a.rates[k]) }}{% endif %}</span><span class="ac-r">show the days</span></a>{% endif %}{% endfor %}
     <a class="ac-fig ac-total" href="#ac-all-{{ a.month }}" data-open-all="allowance-{{ a.month }}" title="Show every day"><span class="ac-n">{{ f.total or 0 }}</span><span class="ac-l">Total days</span><span class="ac-r">show all the days</span></a>
+    {% if f.amount %}<div class="ac-fig ac-total"><span class="ac-n">{{ '{:,.2f}'.format(f.amount) }}</span><span class="ac-l">Amount ({{ a.currency }})</span></div>{% endif %}
   </div>
   <div id="ac-all-{{ a.month }}">{% for k, label in a.kinds %}{% if a.days[k] %}
     <details class="ac-days" id="ac-days-{{ a.month }}-{{ k }}"><summary><b>{{ label }}</b> · {{ a.days[k]|length }} day(s)</summary>
