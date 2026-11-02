@@ -67,7 +67,9 @@ def _att_flags(u):
     d = _att_directory()
     if d is None:
         return {}
-    return {"att_gm": u["user_id"] in d._gm_ids(), "att_allowance": u["user_id"] in d._allowance_ids()}
+    team, holds = d.schedule_right(u)
+    return {"att_gm": u["user_id"] in d._gm_ids(), "att_allowance": u["user_id"] in d._allowance_ids(),
+            "att_team": team, "att_schedule": holds}
 
 
 def _set_att_flags(uid, body, role):
@@ -82,6 +84,12 @@ def _set_att_flags(uid, body, role):
             if want != (uid in ids()):
                 setter(uid, want)
                 done[key] = {"from": not want, "to": want}
+    if role == "manager" and "att_schedule" in body:      # "Manager + the team's schedule" (one manager per team, owner v5.18)
+        want = bool(body["att_schedule"])
+        team, holds = d.schedule_right(auth.store().get_user(uid))
+        if team and want != holds:
+            before = d.set_team_manager(uid, want)
+            done["att_schedule"] = {"from": holds, "to": want, "team": team, **({"taken_from": before} if want and before else {})}
     return done
 
 

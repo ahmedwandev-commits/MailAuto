@@ -301,7 +301,8 @@
       h("td", {}, bidi(u.department)),
       h("td", {}, u.role === "user" ? ROLE_NAMES.user : h("span", { class: "pill" }, ROLE_NAMES[u.role] || u.role),
         u.att_gm ? h("span", { class: "pill", title: "Attendance: General Manager (read-only, every team)" }, "GM") : null,
-        u.att_allowance ? h("span", { class: "pill", title: "Attendance: shift allowance export" }, "Allowance") : null),
+        u.att_allowance ? h("span", { class: "pill", title: "Attendance: shift allowance export" }, "Allowance") : null,
+        u.att_schedule ? h("span", { class: "pill", title: "Workforce: runs the team's schedule (the one manager of the team)" }, "Team schedule") : null),
       h("td", { class: "ip", dir: "ltr" }, u.email || h("span", { class: "hint" }, "—")),
       h("td", {}, teamsCell(u)),
       h("td", {}, u.active ? h("span", { class: "pill on" }, "Active") : h("span", { class: "pill off" }, "Disabled"),
@@ -408,16 +409,29 @@
       // every permission of an account lives here (owner's rule): the attendance extras too
       gm: h("input", { type: "checkbox", checked: !!(user && user.att_gm) }),
       allow: h("input", { type: "checkbox", checked: !!(user && user.att_allowance) }),
+      // a manager: "Manager only" or "Manager + the team's schedule" - ONE manager per team runs its schedule (owner, v5.18)
+      schedOnly: h("input", { type: "radio", name: "att-sched", value: "0", checked: !(user && user.att_schedule) }),
+      schedYes: h("input", { type: "radio", name: "att-sched", value: "1", checked: !!(user && user.att_schedule) }),
     };
+    const holder = user && user.att_team ? (state.users || []).find((x) => x.att_schedule && x.att_team === user.att_team && x.user_id !== user.user_id) : null;
+    const schedBox = h("fieldset", { class: "field att-perms" }, h("legend", {}, "Manager privileges (Workforce)"),
+      h("label", { class: "check" }, f.schedOnly, " Manager only - E-mail, Calls and the rest; in Workforce only their own schedule and attendance"),
+      h("label", { class: "check" }, f.schedYes, " Manager + the team's schedule - makes and publishes the team's schedule, approves its shifts and leave, confirms its allowance"),
+      h("span", { class: "hint" }, "One manager per team has the schedule." + (holder ? ` Choosing this one takes it from ${holder.name}.` : "")));
     f.role.value = user ? user.role : "user";
     picker.setRole(f.role.value);
     const attBox = h("fieldset", { class: "field att-perms" }, h("legend", {}, "Attendance permissions"),
       h("label", { class: "check" }, f.gm, " General Manager - sees every team and every attendance report, changes nothing"),
       h("label", { class: "check" }, f.allow, " Shift allowance export (بدل ورديات)"),
       h("span", { class: "hint" }, "Administrators and Attendance admins already have both."));
-    const syncAtt = () => { attBox.hidden = f.role.value === "admin" || f.role.value === "attendance"; };
+    const syncAtt = () => {
+      attBox.hidden = f.role.value === "admin" || f.role.value === "attendance";
+      const picked = picker.value();
+      schedBox.hidden = f.role.value !== "manager" || (Array.isArray(picked) && picked.includes(ALL_TEAMS));   // a manager of every team sees all
+    };
     syncAtt();
     f.role.addEventListener("change", () => { picker.setRole(f.role.value); syncAtt(); });
+    picker.el.addEventListener("change", syncAtt);
     const depts = h("datalist", { id: "deptList" }, (state.departments || []).map((d) => h("option", { value: d })));
     const body = h("div", { class: "dlg-body" },
       h("label", { class: "field" }, "User ID (employee number)", f.id), h("label", { class: "field" }, "Full name", f.name),
@@ -427,10 +441,12 @@
       h("label", { class: "field" }, "Name in the security portal", f.secname, h("span", { class: "hint" }, "Exactly as in the portal's “مستخدم السرية” column; shows this person their tickets.")),
       h("label", { class: "field" }, "Number in the security portal", f.portalid, h("span", { class: "hint" }, "The value in the portal's “الموظفين” list; lets ticketing auto-assign hand this person requests.")),
       window.CL_ATTENDANCE ? attBox : null,
+      window.CL_ATTENDANCE ? schedBox : null,
       editing ? null : h("label", { class: "field" }, "Initial password", f.pw));
     const profile = () => {
       const out = { name: f.name.value, department: f.dept.value, role: f.role.value, email: f.email.value, security_name: f.secname.value, portal_id: f.portalid.value };
       if (window.CL_ATTENDANCE && !attBox.hidden) { out.att_gm = f.gm.checked; out.att_allowance = f.allow.checked; }
+      if (window.CL_ATTENDANCE && !schedBox.hidden) out.att_schedule = f.schedYes.checked;
       const picked = picker.value();
       if (picked !== undefined) out.teams = picked;
       return out;

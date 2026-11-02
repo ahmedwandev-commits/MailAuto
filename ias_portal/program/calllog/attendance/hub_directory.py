@@ -153,6 +153,29 @@ class HubDirectory:
         """The account id of the one manager who runs ``team`` in Workforce (None = nobody chosen yet)."""
         return self.team_managers_all().get((team or "").strip().lower())
 
+    def schedule_right(self, u):
+        """(team, holds): the Workforce team of a manager of ONE team, and whether this manager runs it (the team's schedule,
+        approvals and pages). ("", False) for anybody else (an employee, an administrator, a manager of every team)."""
+        if not u or u.get("role") != "manager" or overlay.user_teams(u) == [ALL_TEAMS_MARK]:
+            return "", False
+        team = self.att_team(u)
+        return team, bool(team) and self.team_manager_of(team) == u["user_id"]
+
+    def set_team_manager(self, user_id, on):
+        """Admin › Users: give a manager their team's schedule (they become its ONE Workforce manager, taking it from whoever
+        had it) or take it away (the team then has nobody until the administrator chooses). Returns the previous holder."""
+        u = self.store.get_user(user_id)
+        team, holds = self.schedule_right(u)
+        if not team or holds == bool(on):
+            return None
+        before = self.team_manager_of(team)
+        with self.repo.transaction():
+            st = self.repo._mut("settings.json", {})
+            tm = {k: v for k, v in (st.get("team_managers") or {}).items() if k.strip().lower() != team.strip().lower()}
+            tm[team] = [user_id] if on else []
+            st["team_managers"] = tm
+        return before
+
     def team_manager_candidates(self, team):
         """The portal managers whose Workforce team is ``team`` (the administrator picks one of them)."""
         t = (team or "").strip().lower()
