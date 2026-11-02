@@ -6,8 +6,8 @@ HOW TO UPDATE (your data is kept)
   2. Copy everything inside "program" over the old program folder (the ready-to-run package also carries the data
      folder of checkpoint 4 - see READY-TO-RUN.txt before copying it).
   3. Start run.py, then collector.py.
-  4. Settings > Rules & allowance > Team managers: check the ONE manager of every team. On the first start each team
-     takes the first of the managers listed for it before (the old "Team availability" list); change it if needed.
+  4. Settings > Rules & allowance > Team managers: tick the manager(s) who run each team (make its schedule) and Save. On the
+     first start each team keeps the first of the managers listed for it before (the old "Team availability" list).
   5. Settings > Daily summary: tick "Send on these days" if the summary should not go on every working day.
 
 E. MERGED FROM CHECKPOINT 4 (kept as they were decided)
@@ -25,9 +25,11 @@ F. NEW IN v5.18
      My schedule, My attendance (transport + meals in EGP) and the guide. The days behind every count (checkpoint 4) stay.
    - ADMIN > USERS: MANAGER PRIVILEGES (owner): editing a manager now asks "Manager only" (E-mail, Calls and the rest; in
      Workforce only their own schedule and attendance) or "Manager + the team's schedule" (makes and publishes the team's
-     schedule, approves its shifts and leave, confirms its allowance). One manager per team has it: choosing one takes it
-     from the other (the dialog names who has it now). The users list shows a "Team schedule" mark. It is the same choice as
-     Settings > Rules & allowance > Team managers - either place may be used.
+     schedule, approves its shifts and leave, confirms its allowance). One OR SEVERAL managers of a team may have it (the
+     dialog names who has it now). The users list shows a "Team schedule" mark. It is the same choice as Settings > Rules &
+     allowance > Team managers (now tick boxes, all teams on one screen) - either place may be used.
+     The old "Team availability" lists named several managers per team: until you save the managers once in this version,
+     only the first of each such list runs the team (nobody gets the schedule by surprise).
    - A TEAM MANAGER NEVER SEES THE EMPLOYEES' AMOUNTS (owner): the Team tab of My attendance shows their overtime and the
      number of shifts (so far / expected), and Allowance > Confirmation shows the days without the Amount column or totals.
      The manager sees only their own amounts (My attendance, My schedule). The administrators, the General Manager, the

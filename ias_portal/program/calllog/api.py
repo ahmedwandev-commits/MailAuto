@@ -88,8 +88,8 @@ def _set_att_flags(uid, body, role):
         want = bool(body["att_schedule"])
         team, holds = d.schedule_right(auth.store().get_user(uid))
         if team and want != holds:
-            before = d.set_team_manager(uid, want)
-            done["att_schedule"] = {"from": holds, "to": want, "team": team, **({"taken_from": before} if want and before else {})}
+            d.set_team_manager(uid, want)                  # other managers of the team keep theirs (several may have it)
+            done["att_schedule"] = {"from": holds, "to": want, "team": team}
     return done
 
 

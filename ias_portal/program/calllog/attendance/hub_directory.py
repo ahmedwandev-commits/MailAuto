@@ -86,10 +86,10 @@ class HubDirectory:
         if user["user_id"] in self._gm_ids():
             return GM
         if user.get("role") == "manager":
-            # owner (v5.17): ONE manager per team has the team's Workforce pages - the one chosen in Settings › Team managers (or
-            # the only manager of the team). Another manager of the team is an employee here (own schedule and attendance);
+            # owner (v5.18): only the managers the administrator gave the team's schedule have the team's Workforce pages (or the
+            # only manager of the team). Another manager of the team is an employee here (own schedule and attendance);
             # a manager set to every team keeps every team.
-            if overlay.user_teams(user) == [ALL_TEAMS_MARK] or self.team_manager_of(self.att_team(user)) == user["user_id"]:
+            if overlay.user_teams(user) == [ALL_TEAMS_MARK] or user["user_id"] in self.team_managers_of(self.att_team(user)):
                 return "manager"
             return EMPLOYEE if self._is_employee(user) else None
         if user["user_id"] in self._allowance_ids():
@@ -131,7 +131,9 @@ class HubDirectory:
         return choices[0] if choices else ""
 
     def team_managers_all(self):
-        """{team (lower case): the account id of its one Workforce manager} for every team."""
+        """{team (lower case): [account ids]} - the managers who run each team in Workforce (its schedule, approvals, pages).
+        The administrator gives it (Admin › Users "Manager + the team's schedule", or Settings › Team managers), to one or
+        several managers of a team (owner, v5.18). A team with a single manager has that one until the administrator chooses."""
         users = [u for u in self.store.users().values() if u.get("active", True) and u.get("role") == "manager"
                  and overlay.user_teams(u) != [ALL_TEAMS_MARK]]
         by_team = {}
@@ -139,19 +141,27 @@ class HubDirectory:
             t = self.att_team(u).strip().lower()
             if t:
                 by_team.setdefault(t, []).append(u["user_id"])
-        chosen = {str(k).strip().lower(): v for k, v in (self.repo._get("settings.json", {}).get("team_managers") or {}).items()}
+        chosen = self._chosen_managers()
+        # the lists of older versions ("Team availability" showed several names) are NOT a choice of who runs the team: until
+        # the administrator saves the managers once in this version, only the first of such a list counts (as in v5.17)
+        legacy = not self.repo._get("settings.json", {}).get("team_managers_chosen")
         out = {}
         for t, ids in by_team.items():
-            pick = next((i for i in (chosen.get(t) or []) if i in ids), None)
-            if pick is None and len(ids) == 1 and t not in chosen:
-                pick = ids[0]                                # the only manager of the team, until the administrator chooses
-            if pick:
-                out[t] = pick
+            picks = [i for i in (chosen.get(t) or []) if i in ids]
+            if legacy:
+                picks = picks[:1]
+            if not picks and len(ids) == 1 and t not in chosen:
+                picks = ids[:]                               # the only manager of the team, until the administrator chooses
+            if picks:
+                out[t] = picks
         return out
 
-    def team_manager_of(self, team):
-        """The account id of the one manager who runs ``team`` in Workforce (None = nobody chosen yet)."""
-        return self.team_managers_all().get((team or "").strip().lower())
+    def _chosen_managers(self):
+        return {str(k).strip().lower(): list(v or []) for k, v in (self.repo._get("settings.json", {}).get("team_managers") or {}).items()}
+
+    def team_managers_of(self, team):
+        """The account ids of the managers who run ``team`` in Workforce ([] = nobody chosen yet)."""
+        return self.team_managers_all().get((team or "").strip().lower(), [])
 
     def schedule_right(self, u):
         """(team, holds): the Workforce team of a manager of ONE team, and whether this manager runs it (the team's schedule,
@@ -159,21 +169,26 @@ class HubDirectory:
         if not u or u.get("role") != "manager" or overlay.user_teams(u) == [ALL_TEAMS_MARK]:
             return "", False
         team = self.att_team(u)
-        return team, bool(team) and self.team_manager_of(team) == u["user_id"]
+        return team, bool(team) and u["user_id"] in self.team_managers_of(team)
 
     def set_team_manager(self, user_id, on):
-        """Admin › Users: give a manager their team's schedule (they become its ONE Workforce manager, taking it from whoever
-        had it) or take it away (the team then has nobody until the administrator chooses). Returns the previous holder."""
+        """Admin › Users: give a manager their team's schedule, or take it away. Other managers of the team keep theirs
+        (several may have it). Returns the team's holders before the change."""
         u = self.store.get_user(user_id)
         team, holds = self.schedule_right(u)
         if not team or holds == bool(on):
             return None
-        before = self.team_manager_of(team)
+        working = self.team_managers_all()                  # who runs every team today (an older list: its first manager)
+        before = working.get(team.strip().lower(), [])
+        after = [i for i in before if i != user_id] + ([user_id] if on else [])
         with self.repo.transaction():
             st = self.repo._mut("settings.json", {})
             tm = {k: v for k, v in (st.get("team_managers") or {}).items() if k.strip().lower() != team.strip().lower()}
-            tm[team] = [user_id] if on else []
+            if not st.get("team_managers_chosen"):           # the first choice in this version: keep the others as they work today
+                tm = {k: working.get(k.strip().lower(), []) for k in tm}
+            tm[team] = after                                  # [] = nobody (an explicit choice)
             st["team_managers"] = tm
+            st["team_managers_chosen"] = True
         return before
 
     def team_manager_candidates(self, team):

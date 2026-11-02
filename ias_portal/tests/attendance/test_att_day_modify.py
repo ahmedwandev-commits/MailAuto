@@ -43,10 +43,10 @@ def test_one_manager_per_team_runs_it_in_workforce(app, world, repo):
     assert repo.get_user("mgr3")["role"] == "manager" and repo.get_user("mgr1")["role"] is None
 
 
-def test_the_administrator_picks_one_manager_per_team(app, world, repo, admin_b, mgr1_b):
+def test_the_administrator_picks_the_managers_of_each_team(app, world, repo, admin_b, mgr1_b):
     add_user(repo, "mgr3", "manager", ["Team A"], name="Second Manager")
     page = admin_b.get("/admin/settings").get_data(as_text=True)
-    assert "Team managers" in page and 'name="mgr:Team A"' in page and 'type="radio"' in page and "No manager runs" in page
+    assert "Team managers" in page and 'name="mgr:Team A"' in page and 'type="checkbox"' in page and "No manager runs" in page
     team_a = page.split('name="mgr:Team A"', 1)[1].split("</fieldset>")[0]
     assert 'value="mgr3"' in team_a and 'value="101"' not in team_a and 'value="mgr2"' not in team_a   # the team's managers only
     r = admin_b.post("/admin/settings", {"action": "team_managers", "mgr:Team A": "mgr3", "mgr:Team B": "mgr1"})
@@ -55,6 +55,11 @@ def test_the_administrator_picks_one_manager_per_team(app, world, repo, admin_b,
     assert repo.list_audit(action="settings_changed")
     assert mgr1_b.post("/admin/settings", {"action": "team_managers", "mgr:Team A": "mgr1"}).status_code in (302, 403)
     assert repo.get_settings()["team_managers"]["Team A"] == ["mgr3"]
+    # owner (v5.18): one OR several managers of a team may run it
+    admin_b.client.post("/attendance/admin/settings", data={"action": "team_managers", "mgr:Team A": ["mgr1", "mgr3"], "csrf_token": admin_b.csrf})
+    assert sorted(repo.get_settings()["team_managers"]["Team A"]) == ["mgr1", "mgr3"]
+    assert repo.get_user("mgr1")["role"] == "manager" and repo.get_user("mgr3")["role"] == "manager"
+    assert mgr1_b.get("/attendance/team-plan").status_code == 200
 
 
 def test_a_manager_account_is_listed_on_its_team_even_when_managers_are_not_employees(app, world, repo, admin_b):

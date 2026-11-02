@@ -302,7 +302,7 @@
       h("td", {}, u.role === "user" ? ROLE_NAMES.user : h("span", { class: "pill" }, ROLE_NAMES[u.role] || u.role),
         u.att_gm ? h("span", { class: "pill", title: "Attendance: General Manager (read-only, every team)" }, "GM") : null,
         u.att_allowance ? h("span", { class: "pill", title: "Attendance: shift allowance export" }, "Allowance") : null,
-        u.att_schedule ? h("span", { class: "pill", title: "Workforce: runs the team's schedule (the one manager of the team)" }, "Team schedule") : null),
+        u.att_schedule ? h("span", { class: "pill", title: "Workforce: runs the team's schedule" }, "Team schedule") : null),
       h("td", { class: "ip", dir: "ltr" }, u.email || h("span", { class: "hint" }, "—")),
       h("td", {}, teamsCell(u)),
       h("td", {}, u.active ? h("span", { class: "pill on" }, "Active") : h("span", { class: "pill off" }, "Disabled"),
@@ -413,11 +413,11 @@
       schedOnly: h("input", { type: "radio", name: "att-sched", value: "0", checked: !(user && user.att_schedule) }),
       schedYes: h("input", { type: "radio", name: "att-sched", value: "1", checked: !!(user && user.att_schedule) }),
     };
-    const holder = user && user.att_team ? (state.users || []).find((x) => x.att_schedule && x.att_team === user.att_team && x.user_id !== user.user_id) : null;
+    const others = user && user.att_team ? (state.users || []).filter((x) => x.att_schedule && x.att_team === user.att_team && x.user_id !== user.user_id) : [];
     const schedBox = h("fieldset", { class: "field att-perms" }, h("legend", {}, "Manager privileges (Workforce)"),
       h("label", { class: "check" }, f.schedOnly, " Manager only - E-mail, Calls and the rest; in Workforce only their own schedule and attendance"),
       h("label", { class: "check" }, f.schedYes, " Manager + the team's schedule - makes and publishes the team's schedule, approves its shifts and leave, confirms its allowance"),
-      h("span", { class: "hint" }, "One manager per team has the schedule." + (holder ? ` Choosing this one takes it from ${holder.name}.` : "")));
+      h("span", { class: "hint" }, "Several managers of a team may have it." + (others.length ? ` Has it now: ${others.map((x) => x.name).join(", ")}.` : "")));
     f.role.value = user ? user.role : "user";
     picker.setRole(f.role.value);
     const attBox = h("fieldset", { class: "field att-perms" }, h("legend", {}, "Attendance permissions"),

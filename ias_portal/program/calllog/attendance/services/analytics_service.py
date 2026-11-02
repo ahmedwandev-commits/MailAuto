@@ -207,18 +207,23 @@ def managers_by_team(repo):
 
 
 def chosen_managers(repo):
-    """{team (lower case): [manager name]} - the ONE manager of each team (Settings › Team managers, owner v5.17)."""
+    """{team (lower case): [manager name]} - the managers who run each team (Admin › Users / Settings › Team managers)."""
     out = {}
-    for team, uid in repo.directory.team_managers_all().items():
-        u = repo.get_user(uid)
-        if u and u["active"]:
-            out[team] = [u["name"]]
+    for team, ids in repo.directory.team_managers_all().items():
+        names = [u["name"] for u in (repo.get_user(i) for i in ids) if u and u["active"]]
+        if names:
+            out[team] = names
     return out
 
 
 def chosen_manager_ids(repo):
-    """{team (lower case): [account id]} - the ONE manager of each team."""
-    return {team: [uid] for team, uid in repo.directory.team_managers_all().items() if (repo.get_user(uid) or {}).get("active")}
+    """{team (lower case): [account id]} - the managers who run each team."""
+    out = {}
+    for team, ids in repo.directory.team_managers_all().items():
+        act = [i for i in ids if (repo.get_user(i) or {}).get("active")]
+        if act:
+            out[team] = act
+    return out
 
 
 def staffing(rows, st, shifts):

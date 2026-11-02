@@ -189,14 +189,14 @@ def settings():
             old = settings_svc.load(repo)
             repo.save_settings(vals)
             auth.audit("settings_changed", "settings", "rules", {"previous": {k: old[k] for k in vals}, "new": vals})
-        elif a == "team_managers":                             # ONE manager per team (owner, v5.17)
+        elif a == "team_managers":                             # the managers who run each team (one or several, owner v5.18)
             chosen = {}
             for t in _team_names(repo):
-                ids = {m["user_id"] for m in repo.directory.team_manager_candidates(t)}
-                pick = (request.form.get("mgr:" + t) or "").strip()
-                chosen[t] = [pick] if pick in ids else []       # [] = nobody (an explicit choice)
+                ids = [m["user_id"] for m in repo.directory.team_manager_candidates(t)]
+                picks = {x.strip() for x in request.form.getlist("mgr:" + t)}
+                chosen[t] = [i for i in ids if i in picks]       # [] = nobody (an explicit choice)
             old = settings_svc.load(repo)
-            repo.save_settings({"team_managers": chosen})
+            repo.save_settings({"team_managers": chosen, "team_managers_chosen": True})
             auth.audit("settings_changed", "settings", "team_managers", {"previous": old["team_managers"], "new": chosen})
         elif a == "allowance":
             rules = {}
@@ -294,7 +294,7 @@ def settings():
     return render_template("attendance/admin_settings.html", st=st, shifts=repo.list_shift_types(), holidays=repo.list_holidays(),
                            leave_types=repo.list_leave_types(),
                            team_members={t: repo.directory.team_manager_candidates(t) for t in _team_names(repo)},
-                           team_manager={t: repo.directory.team_manager_of(t) for t in _team_names(repo)},
+                           team_manager={t: repo.directory.team_managers_of(t) for t in _team_names(repo)},
                            allowance_rules=settings_svc.allowance_rules(st),
                            ot=settings_svc.overtime_rules(st),
                            allowance_kinds=[(k, al.ENGLISH[k], k in al.SHIFT_KINDS) for k in al.KINDS],
