@@ -1,6 +1,15 @@
 IAS PORTAL v5.18 = v5.17 + the checkpoint-4 changes
 ====================================================
 
+HOW TO UPDATE (your data is kept)
+  1. Stop run.py and collector.py.
+  2. Copy everything inside "program" over the old program folder (the ready-to-run package also carries the data
+     folder of checkpoint 4 - see READY-TO-RUN.txt before copying it).
+  3. Start run.py, then collector.py.
+  4. Settings > Rules & allowance > Team managers: check the ONE manager of every team. On the first start each team
+     takes the first of the managers listed for it before (the old "Team availability" list); change it if needed.
+  5. Settings > Daily summary: tick "Send on these days" if the summary should not go on every working day.
+
 E. MERGED FROM CHECKPOINT 4 (kept as they were decided)
    - Shift allowance and meals are COUNTS only (days / shifts / meals) - no money and no currency anywhere: the sheet, the
      confirmation, the e-mails, My attendance and the guide.
@@ -25,8 +34,7 @@ HOW TO UPDATE (your data is kept)
      and NO collector_config.json, so your users, history, settings and collector passwords are never touched.
   3. Start run.py, then collector.py.
   4. Settings > Rules & allowance > Team managers: choose the ONE manager of every team that has several managers.
-  5. Settings > Rules & allowance: check "Amount per day" (100 / 150 / 200 / 300 are the new defaults - an amount you
-     saved before is kept) and the new "Overtime & meals" section.
+  5. Settings > Rules & allowance: check the new "Overtime & meals" section.
 
 A. WORKFORCE IS ORGANISED BY TASK
    - Side menu: Today · My attendance · Schedule · Leave · Allowance (+ Imports for administrators).
