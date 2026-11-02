@@ -10,11 +10,15 @@ from ..services import allowance_service as svc
 bp = Blueprint("att_allowance", __name__)
 
 
+def _month_of(day):
+    first = day.replace(day=1)
+    return first.isoformat(), ((first + timedelta(days=32)).replace(day=1) - timedelta(days=1)).isoformat()
+
+
 def _period():
-    """The period of the request; the default is the previous 28 days up to today."""
-    d2 = request.args.get("to") or auth.today()
-    d1 = request.args.get("from") or (date.fromisoformat(auth.today()) - timedelta(days=27)).isoformat()
-    return d1, d2
+    """The period of the request; the default is the whole current month (what the managers approve and the employees confirm)."""
+    d1, d2 = _month_of(date.fromisoformat(auth.today()))
+    return request.args.get("from") or d1, request.args.get("to") or d2
 
 
 @bp.get("/allowance")
@@ -27,7 +31,10 @@ def index():
     pending = can_pending
     rep = svc.build(repo, d1, d2, team or None, pending)
     teams = sorted({t for e in repo.list_employees() for t in e["teams"]}, key=str.lower)
+    this_m = _month_of(date.fromisoformat(auth.today()))
+    last_m = _month_of(date.fromisoformat(this_m[0]) - timedelta(days=1))
     return render_template("attendance/allowance.html", rep=rep, teams=teams, team=team, d1=d1, d2=d2, can_pending=can_pending,
+                           months=(("This month", *this_m), ("Last month", *last_m)),
                            include_pending=pending, approvals=rep["approvals"])
 
 

@@ -1,3 +1,21 @@
+IAS PORTAL v5.18 = v5.17 + the checkpoint-4 changes
+====================================================
+
+E. MERGED FROM CHECKPOINT 4 (kept as they were decided)
+   - Shift allowance and meals are COUNTS only (days / shifts / meals) - no money and no currency anywhere: the sheet, the
+     confirmation, the e-mails, My attendance and the guide.
+   - An HR sheet uploaded again (or a fuller one) completes / corrects the days stored before; every change is recorded.
+   - A name written «name (MFA)» in the schedule counts for the MFA team for that shift.
+   - Today's team table: Manager and Maker as "arrived / of".
+   - Ticketing auto-assign: one run per team (two teams can run at the same time).
+   - A richer daily summary with charts.
+F. NEW IN v5.18
+   - Settings > Daily summary > "Send on these days": tick the days the summary and the Best Performance e-mail go (none
+     ticked = the general working days), right under the send times; "Only between these hours" is optional.
+   - The user guide screenshots were retaken (counts, no money) and the guide no longer mentions an amount.
+
+--------------------------------------------------------------------------------
+
 IAS PORTAL v5.17 - WHAT IS NEW
 ==============================
 

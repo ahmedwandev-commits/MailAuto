@@ -29,7 +29,11 @@ def build(repo, user, d1, d2, now, team=None):
          "late_count": S("late_count"), "late_minutes": S("late_minutes"), "absent": S("absent_days"), "verified_unexcused": S("verified_unexcused_days"),
          "missing": S("missing_in") + S("missing_out") + S("missing_both"), "leave": S("leave_days"), "rest": S("rest_days"),
          "permits": S("late_permit_required") + S("early_permit_required"),
-         "avg_score": round(sum(r["score"]["score"] for r in rows) / len(rows), 1) if rows else None}
+         "avg_score": round(sum(r["score"]["score"] for r in rows) / len(rows), 1) if rows else None, "judged_days": judged,
+         # how many PEOPLE are behind each number (the cards say "N employees" next to the days / times)
+         "late_emps": sum(1 for r in rows if r["summary"]["late_count"]), "absent_emps": sum(1 for r in rows if r["summary"]["absent_days"]),
+         "missing_emps": sum(1 for r in rows if r["summary"]["missing_in"] + r["summary"]["missing_out"] + r["summary"]["missing_both"]),
+         "permit_emps": sum(1 for r in rows if r["summary"]["late_permit_required"] + r["summary"]["early_permit_required"])}
     # the lateness by weekday needs the days themselves
     by_wd = defaultdict(lambda: [0, 0])
     if ids:

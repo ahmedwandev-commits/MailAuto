@@ -41,8 +41,8 @@
 {% else %}
 <section class="kpis">
   {{ kpi('New records', pv.accepted, 'will be added', 't-ok', 'check-circle') }}
-  {{ kpi('Already stored', pv.existing, 'kept unchanged (never overwritten)', 't-na', 'lock') }}
-  {{ kpi('…differ from stored', pv.differs, 'stored value is kept', 't-warn' if pv.differs else 't-na', 'alert-triangle') }}
+  {{ kpi('Already stored', pv.existing, 'days that are in the system already', 't-na', 'lock') }}
+  {{ kpi('…differ from stored', pv.differs, 'this file completes / corrects them (a blank never erases a stored punch)', 't-warn' if pv.differs else 't-na', 'alert-triangle') }}
   {{ kpi('Duplicates in the file', p.duplicates_in_file, 'first occurrence wins', 't-warn' if p.duplicates_in_file else 't-na', 'layers') }}
   {{ kpi('Rejected rows', p.rejected|length, 'invalid id / date / time', 't-danger' if p.rejected else 't-na', 'x') }}
   {{ kpi('Unknown employee ids', pv.unknown_employees|length, pv.rows_unknown ~ ' rows', 't-warn' if pv.unknown_employees else 't-na', 'user-x') }}

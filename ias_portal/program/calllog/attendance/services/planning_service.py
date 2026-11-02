@@ -160,7 +160,7 @@ def day_view(repo, user, day, now, team=None):
     summary = {c: {**ov["shift_stats"][c]} for c in (*WORK, "D")}
     if team:                                   # «name (MFA)» counts for MFA only: not in the evening of Open System
         for c in groups:
-            groups[c] = [r for r in groups[c] if team.lower() in {t.lower() for t in access.shift_teams(r.get("teams") or [r["team"]], (r.get("planned_marks") or {}).get(c))}]
+            groups[c] = [r for r in groups[c] if team.lower() in {t.lower() for t in access.shift_teams(r.get("teams") or [r["team"]], (r.get("planned_marks") or {}).get(c), ov.get("teams") or ())}]
     for r in ov["rows"]:                       # a double shift (Morning + Evening) is in both shifts, not only in the first one
         for c in r["planned_codes"][1:]:
             if c in WORK and c != r["planned_primary"] and c in groups:
@@ -211,25 +211,37 @@ def team_summary(repo, rows, shifts, team=None, day=None, now=None):
     logins = an.todays_logins(repo, day, now) if day and now else {}
     codes = [c for c, s in sorted(shifts.items(), key=lambda kv: kv[1].get("sort_order", 9)) if s["kind"] == "work"]
     by = {}
+    known = {x for r in rows for x in (r.get("teams") or [r["team"]]) if x}
     for r in rows:
-        for t in (r.get("teams") or [r["team"] or "No team"]):
+        for t in (r.get("teams") or [r["team"]]):
+            if not t:                                              # nobody sees a «No team» row: those people are only in All teams
+                continue
             if team and t.lower() != team.lower():
                 continue
             ids = manager_ids.get(t.strip().lower(), [])
             a = by.setdefault(t, {"team": t, "managers": managers.get(t.strip().lower(), []), "manager_count": len(ids),
                                   "manager_arrived": sum(1 for i in ids if i in here or i in logins), "total": 0, "present": 0, "leave": 0,
-                                  "not_arrived": 0, "rest": 0, "shifts": {c: 0 for c in codes}})
+                                  "not_arrived": 0, "rest": 0, "makers": 0, "makers_present": 0, "shifts": {c: 0 for c in codes}})
             a["total"] += 1
             key = r["presence"]["key"]
             a["present"] += key == "present"
+            if str(r["employee_id"]) not in ids:                   # a Maker = a member of the team who is not one of its managers
+                a["makers"] += 1
+                a["makers_present"] += key == "present"
             a["not_arrived"] += key == "missing"
             a["leave"] += r["status"] == daily.LEAVE
             a["rest"] += key == "rest"
             for c in dict.fromkeys([r["planned_primary"], *r.get("planned_codes", [])]):
-                if c in a["shifts"] and t in access.shift_teams(r.get("teams") or [t], (r.get("planned_marks") or {}).get(c)):
+                if c in a["shifts"] and t in access.shift_teams(r.get("teams") or [t], (r.get("planned_marks") or {}).get(c), known):
                     a["shifts"][c] += 1
+    for r in rows:                                                 # «name (MFA)»: the shift counts for the MFA team, whatever the person's own team is
+        for c, mark in (r.get("planned_marks") or {}).items():
+            own = {x.lower() for x in (r.get("teams") or [r["team"]]) if x}
+            for t in access.shift_teams(r.get("teams") or [r["team"]], mark, known):
+                if t.lower() not in own and t in by and c in by[t]["shifts"] and (not team or t.lower() == team.lower()):
+                    by[t]["shifts"][c] += 1
     return {"codes": codes, "rows": [by[k] for k in sorted(by, key=str.lower)],
-            "totals": {k: sum(x[k] for x in by.values()) for k in ("total", "present", "leave", "not_arrived", "rest", "manager_count", "manager_arrived")} |
+            "totals": {k: sum(x[k] for x in by.values()) for k in ("total", "present", "leave", "not_arrived", "rest", "manager_count", "manager_arrived", "makers", "makers_present")} |
                       {"shifts": {c: sum(x["shifts"][c] for x in by.values()) for c in codes}}}
 
 

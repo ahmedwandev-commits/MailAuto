@@ -15,13 +15,14 @@
 </section>
 
 {% if not k.employees %}{% call empty('users', 'No employees in this selection', 'Try another team or period.') %}{% endcall %}{% else %}
+<p class="small muted chart-note">{{ d1|dmy }} → {{ d2|dmy }} · <b>{{ k.employees }} employees</b> · <b>{{ k.judged_days }} working days</b> that are over (every planned shift day up to now; leave days and rest days are not counted).</p>
 <section class="kpis" aria-label="Indicators">
-  {{ kpi('Attendance', (k.attendance_pct|num ~ '%') if k.attendance_pct is not none else '—', k.present_days ~ ' of ' ~ k.scheduled_days ~ ' planned days', 't-ok', 'user-check') }}
-  {{ kpi('Late arrivals', k.late_count, k.late_minutes ~ ' minutes in all', 't-warn' if k.late_count else 't-na', 'clock') }}
-  {{ kpi('Absent (unverified)', k.absent, k.verified_unexcused ~ ' verified unexcused', 't-danger' if k.absent else 't-na', 'user-x') }}
-  {{ kpi('Missing punches', k.missing, 'days without a check-in or out', 't-warn' if k.missing else 't-na', 'alert-circle') }}
-  {{ kpi('Permits to review', k.permits, 'late + early', 't-warn' if k.permits else 't-na', 'file') }}
-  {{ kpi('Average score', k.avg_score|num if k.avg_score is not none else '—', k.employees ~ ' employees', 's0', 'award') }}
+  {{ kpi('Attendance', (k.attendance_pct|num ~ '%') if k.attendance_pct is not none else '—', 'came ' ~ k.present_days ~ ' of ' ~ k.judged_days ~ ' working days · ' ~ k.employees ~ ' employees', 't-ok', 'user-check') }}
+  {{ kpi('Late arrivals', k.late_count ~ ' times', k.late_emps ~ ' employees · ' ~ k.late_minutes ~ ' minutes in all', 't-warn' if k.late_count else 't-na', 'clock') }}
+  {{ kpi('Absent days', k.absent ~ ' days', k.absent_emps ~ ' employees · not reviewed yet' ~ (' (' ~ k.verified_unexcused ~ ' confirmed unexcused)' if k.verified_unexcused else ''), 't-danger' if k.absent else 't-na', 'user-x') }}
+  {{ kpi('Missing punches', k.missing ~ ' days', k.missing_emps ~ ' employees · no check-in or no check-out', 't-warn' if k.missing else 't-na', 'alert-circle') }}
+  {{ kpi('Permits to review', k.permits, k.permit_emps ~ ' employees · late + early', 't-warn' if k.permits else 't-na', 'file') }}
+  {{ kpi('Average score', k.avg_score|num if k.avg_score is not none else '—', 'out of 100 · average of ' ~ k.employees ~ ' employees', 's0', 'award') }}
 </section>
 
 <div class="grid g2">
@@ -40,7 +41,7 @@
 
   <section class="card fit"><div class="card-head"><h2>{{ icon('calendar') }}Is attendance getting better? (last 6 months)</h2><a class="btn btn-ghost btn-sm" href="{{ url_for('att_gm.reports', kind='trends', team=team, **{'from': d1, 'to': d2}) }}">Report</a></div>
     {% set items = [] %}{% for m in a.trend %}{% set _ = items.append({'label': m.month, 'value': m.pct or 0, 'tone': 's4', 'text': ((m.pct|num ~ '%') if m.pct is not none else 'no data')}) %}{% endfor %}
-    <p class="small muted chart-note">Share of planned days people came to work, month by month.</p>
+    <p class="small muted chart-note">Share of working days people came to work, month by month (the same way as the Attendance card above).</p>
     {{ hbars(items, 100) }}{% if a.insight.trend %}<p class="chart-take">{{ a.insight.trend }}</p>{% endif %}</section>
 
   <section class="card fit"><div class="card-head"><h2>{{ icon('alert-triangle') }}Who was late most often</h2><a class="btn btn-ghost btn-sm" href="{{ url_for('att_gm.reports', kind='review', team=team, **{'from': d1, 'to': d2}) }}">Month-end checklist</a></div>

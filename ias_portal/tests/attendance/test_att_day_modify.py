@@ -66,7 +66,7 @@ def test_a_manager_account_is_listed_on_its_team_even_when_managers_are_not_empl
 def test_gm_team_availability_is_numbers_and_a_team_opens_its_people(app, world, repo, gm_b):
     choose_managers(repo, {"Team A": ["mgr1"], "Team B": ["mgr2"]})
     page = gm_b.get("/planning/day?date=2026-10-12").get_data(as_text=True)       # Today: every team, one line of numbers each
-    for text in ("Team A", "Team B", "Managers", "Employees", "On leave", "Expected to work", "Arrived"):
+    for text in ("Team A", "Team B", "Manager", "Maker", "On leave", "Expected to work", "Arrived"):          # checkpoint 4: Manager / Maker
         assert text in page, text
     table = page.split('id="team-summary"')[1].split("</table>")[0]
     for text in ("mgr1", "mgr2", "Review permit", "Staffing"):                                     # the managers are a number

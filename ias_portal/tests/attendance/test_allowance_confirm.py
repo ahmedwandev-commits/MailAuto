@@ -80,13 +80,13 @@ def test_the_collector_sends_the_outbox(app, world, repo, admin_b):
     assert mail_outbox.pending(store) == []
 
 
-def test_amounts_come_from_the_settings(app, world, repo, admin_b):
+def test_the_allowance_is_counts_only_no_money(app, world, repo, admin_b):
+    """Owner's decision (checkpoint 4): the shift allowance is counted in days - no amount, no currency, even an old saved rate."""
     from calllog.attendance.services import allowance_confirm as ac
-    rules = {"morning": {"rate": 150}}
-    repo.save_settings({"allowance_rules": rules})
+    repo.save_settings({"allowance_rules": {"morning": {"rate": 150}}})
     nums, rates, currency, _ = ac.figures(repo, "2026-10")
-    assert rates["morning"] == 150 and currency == "EGP"
-    assert nums[201]["morning"] == 1 and nums[201]["amount"] == 150                              # 07:00-15:00: a full morning
+    assert not any(rates.values()) and currency == ""
+    assert nums[201]["morning"] == 1 and nums[201]["amount"] == 0                                # 07:00-15:00: a full morning
     assert nums[101]["total"] == 0 and _not_counted(repo)[101]                                   # 07:10-15:00 is short of 8 h
 
 

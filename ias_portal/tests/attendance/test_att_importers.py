@@ -84,16 +84,17 @@ def test_attendance_preview_counts_unknown_existing_and_differing(app, repo, adm
     assert repo.get_employee(2) is None and len(repo.attendance_records("2026-10-01", "2026-10-01")) == 1
     res = repo.list_attendance_imports()[0]["result"]
     assert res["inserted"] == 1 and res["rejected_unknown_employee"] == 1
-    # re-import a different file with one identical key but a different time: stored value is kept, difference is reported
+    # re-import a newer file with one identical key but a different time (checkpoint 4): it corrects the stored day, the change is reported
     f2 = att_file(tmp_path, "b.xlsx", [[1, "Ali", "2026-10-01", "09:30", "17:00"], [1, "Ali", "2026-10-02", "08:00", "16:00"]])
     r2 = admin_b.upload("/attendance/import", f2)
     page = admin_b.get(r2.headers["Location"]).get_data(as_text=True)
     assert "differ from stored" in page
     admin_b.post(r2.headers["Location"] + "/confirm", {})
     got = {x["work_date"]: x for x in repo.attendance_records("2026-10-01", "2026-10-02")}
-    assert got["2026-10-01"]["in_time"] == "08:00:00" and got["2026-10-02"]["in_time"] == "08:00:00"
+    assert got["2026-10-01"]["in_time"] == "09:30:00" and got["2026-10-02"]["in_time"] == "08:00:00"
     res2 = repo.list_attendance_imports()[0]["result"]
-    assert (res2["inserted"], res2["existing_kept"], res2["differs_from_stored"]) == (1, 1, 1)
+    assert (res2["inserted"], res2["updated"], res2["differs_from_stored"]) == (1, 1, 1)
+    assert res2["updated_days"][0]["before"]["in_time"] == "08:00:00" and res2["updated_days"][0]["after"]["in_time"] == "09:30:00"
     audit = [a for a in repo.list_audit() if a["action"].startswith("attendance_import")]
     assert audit and all(a["username"] == "admin" for a in audit)
 

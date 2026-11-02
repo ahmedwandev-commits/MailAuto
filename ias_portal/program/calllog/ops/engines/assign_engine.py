@@ -33,6 +33,7 @@ file name or a saved page.
 """
 import hashlib
 import json
+import os
 import re
 from collections import Counter
 from contextlib import suppress
@@ -270,9 +271,16 @@ JS_ARM_DIALOGS = ("(() => { window.confirm = () => true; window.alert = () => {}
 
 # --------------------------------------------------------------------------- browser orchestration
 def open_browser(ctx, cfg, headless):
+    # a run for ONE team (the manager's Run now) gets its own browser profile and port: two teams run at the same time, and a browser
+    # of one run is never closed by the other (a CdpBrowser closes any browser still on its own profile)
+    teams = list((getattr(ctx, "options", None) or {}).get("teams") or [])
+    slug = re.sub(r"[^0-9A-Za-z]+", "_", teams[0]).strip("_")[:40] or "team" if len(teams) == 1 else ""
+    profile_dir = cfg.get("profile_dir") or ""
+    if slug and profile_dir:
+        profile_dir = os.path.join(profile_dir, slug)
     bcfg = {"browser_executable": cfg.get("browser_executable") or "",
-            "cdp_port": cfg.get("cdp_port") or 0, "profile_dir": cfg.get("profile_dir") or ""}
-    return cdp.CdpBrowser(bcfg, log=ctx.log, headless=headless, profile_leaf="assign_profile")
+            "cdp_port": 0 if slug else (cfg.get("cdp_port") or 0), "profile_dir": profile_dir}
+    return cdp.CdpBrowser(bcfg, log=ctx.log, headless=headless, profile_leaf="assign_profile" + (f"_{slug}" if slug else ""))
 
 
 def _settle(browser, cfg, ms=None):
@@ -503,6 +511,8 @@ def plan_run(ctx, requests, used=None, load=None):
         taken = {p["id"] for p in plan}
         picks = auto_assign.plan_ticketing(block, [r for r in requests if r["id"] not in taken],
                                            now, info.get("members") or {}, load, canon=canon)
+        chosen = {auto_assign.overlay.normalize_email(e) for r in block.get("rules") or [] for e in r.get("employees") or []}
+        picks = [p for p in picks if p["email"] in chosen]               # never anybody the manager did not choose in a rule
         cap = auto_assign.clean_max_per_run(block.get("max_per_run"))
         room = max(0, cap - used.get(team, 0)) if cap else len(picks)
         if len(picks) > room:

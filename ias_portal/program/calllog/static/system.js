@@ -561,6 +561,10 @@
       { title: "Daily summary e-mail", runNow: "daily_summary", text: "Today's calls, e-mails, tickets and change requests as one dashboard e-mail, sent by the collector at each checkpoint time below that falls on a working day and inside the active hours. “Run now” sends it at once to the saved recipients.", fields: [
         { path: "summary.enabled", type: "switch", label: "Send the daily summary" },
         { path: "summary.send_times", type: "times", label: "Checkpoints (send at)", hint: "24-hour times, comma separated, like 10:00, 13:00, 15:00. Only times inside the active hours are sent." },
+        { path: "summary.schedule.work_days", type: "days", emptyAs: null, label: "Send on these days",
+          hint: "Tick the days the summary (and the Best Performance e-mail) goes. None ticked = the general working days (General › Working days)." },
+        { path: "summary.schedule.active_hours", type: "hours", emptyAs: null, label: "Only between these hours (optional)",
+          hint: "Like 08:00-20:00. Empty = the general active hours." },
         { path: "summary.to", type: "lines", kind: "email", label: "To", hint: "One address per line." },
         { path: "summary.cc", type: "lines", kind: "email", label: "Cc", hint: "One address per line." },
         { path: "summary.team_recipients", type: "kv", label: "Team summaries", wide: true,
@@ -573,11 +577,10 @@
         { path: "summary.modules.crs", type: "switch", label: "Include change requests (ITSM)" },
         { path: "summary.per_team", type: "switch", label: "Add a table by team" },
         { path: "summary.catch_up_minutes", type: "number", min: 5, max: 180, label: "Send a missed checkpoint up to (minutes) late", hint: "If the collector was restarting at 13:00, the 13:00 summary still goes until this many minutes later." },
-        { path: "summary.display_only", type: "switch", label: "Show instead of sending", hint: "Opens the e-mail on the collector PC without sending it." },
-        SCHEDULE("summary.schedule", "Daily summary")] },
+        { path: "summary.display_only", type: "switch", label: "Show instead of sending", hint: "Opens the e-mail on the collector PC without sending it." }] },
       { title: "Best Performance e-mail", runNow: "best_performer", text: "Once a day, at the time below on a working day, the day's top 3 (as Insights › Analysis › Best performers ranks them: requests handled + 2 per call answered + 3 per e-mail replied) get one celebration e-mail in English with a word of encouragement, at the e-mail addresses of their accounts, with the Cc below. The daily summary does not list them. “Run now” sends it at once to today's top 3 so far.", fields: [
         { path: "summary.best_performer.enabled", type: "switch", label: "Send the Best Performance e-mail" },
-        { path: "summary.best_performer.send_times", type: "times", label: "Send at", hint: "One 24-hour time, like 15:30: it goes once a day, on the working days above." },
+        { path: "summary.best_performer.send_times", type: "times", label: "Send at", hint: "One 24-hour time, like 15:30: it goes once a day, on the summary's days above." },
         { path: "summary.best_performer.top", type: "number", min: 1, max: 5, label: "How many are celebrated", hint: "The first of Best performers: 3 = the top 3." },
         { path: "summary.best_performer.cc", type: "lines", kind: "email", label: "Cc", hint: "One address per line (managers, the team…). The top 3 are the To." },
         { path: "summary.best_performer.subject", type: "text", max: 150, label: "Subject", hint: "{names} is replaced by their names." },
@@ -690,7 +693,7 @@
       },
       hours(f, field, pinned) {
         const input = h("input", { type: "text", id: field.id, value: getPath(st.doc, f.path) ?? "", maxlength: 11, placeholder: "08:00-17:00", dir: "ltr", autocomplete: "off", disabled: pinned });
-        input.addEventListener("input", () => commit(field, input.value));
+        input.addEventListener("input", () => commit(field, input.value.trim() === "" && "emptyAs" in f ? f.emptyAs : input.value));
         return { control: input };
       },
       times(f, field, pinned) {
@@ -720,7 +723,9 @@
       days(f, field, pinned) {
         const current = new Set(getPath(st.doc, f.path) || []);
         const boxes = WEEKDAYS.map((d) => h("input", { type: "checkbox", value: d, checked: current.has(d), disabled: pinned }));
-        boxes.forEach((b) => b.addEventListener("change", () => commit(field, boxes.filter((x) => x.checked).map((x) => x.value))));
+        // ``emptyAs``: what no ticked day means (null = "follow the general working days", v5.17 summary days)
+        const value = () => { const v = boxes.filter((x) => x.checked).map((x) => x.value); return v.length || !("emptyAs" in f) ? v : f.emptyAs; };
+        boxes.forEach((b) => b.addEventListener("change", () => commit(field, value())));
         return { group: true, control: h("div", { class: "op-days", role: "group", "aria-label": f.label }, boxes.map((b) => h("label", {}, b, h("span", {}, b.value)))) };
       },
       lines(f, field, pinned) {

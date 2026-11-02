@@ -34,7 +34,7 @@ from .engines.common import norm_arabic
 from .engines.email_rules import RATINGS
 from .store import now_iso
 
-_TICKETING_LOCK = threading.Lock()                 # one browser-driven ticketing auto-assign run at a time per process
+_TICKETING_LOCK = threading.Lock()                 # guards the table of runs below; each TEAM has its own run (two teams can run at once)
 
 bp = Blueprint("ops_api", __name__)
 
@@ -2898,8 +2898,19 @@ def _assign_settings(settings):
     return assign
 
 
-def _ticketing_run_state():
-    return current_app.extensions.setdefault("ops_ticketing_run", {"running": False})
+def _ticketing_runs():
+    """{team: the state of that team's manual run} - one run per team, so one team's run never blocks another team's."""
+    return current_app.extensions.setdefault("ops_ticketing_runs", {})
+
+
+def _run_view(st):
+    return {"running": bool(st.get("running")), "done": bool(st.get("done")), "team": st.get("team", ""),
+            "started_at": st.get("started_at", ""), "log": list(st.get("log") or [])[-200:],
+            "summary": st.get("summary", ""), "assigned": int(st.get("assigned") or 0),
+            "by_employee": st.get("by_employee") or {}, "error": st.get("error", ""), "dry_run": bool(st.get("dry_run")),
+            "repeat": bool(st.get("repeat")), "runs": int(st.get("runs") or 0), "next_run_at": st.get("next_run_at", ""),
+            "interval_minutes": int(st.get("interval_minutes") or 0), "max_per_run": int(st.get("max_per_run") or 0),
+            "stopping": bool(st.get("stop"))}
 
 
 TICKETING_LOOP_UNIT_SECONDS = 60          # one "minute" of the keep-running interval (tests shorten it)
@@ -2912,26 +2923,23 @@ TICKETING_LOOP_MAX_FAILURES = 3           # this many failed runs in a row end t
 def auto_assign_run_ticketing_status():
     """The live status of the current/last manual ticketing auto-assign run (polled by the page while it runs). A
     manager sees only a run of their own team(s)."""
-    st = current_app.extensions.get("ops_ticketing_run") or {}
     scope = auth.team_scope()
-    if scope is not None and not teams.in_scope(scope, st.get("team")):
-        st = {}
-    return jsonify(running=bool(st.get("running")), done=bool(st.get("done")), team=st.get("team", ""),
-                   started_at=st.get("started_at", ""), log=list(st.get("log") or [])[-200:],
-                   summary=st.get("summary", ""), assigned=int(st.get("assigned") or 0),
-                   by_employee=st.get("by_employee") or {}, error=st.get("error", ""), dry_run=bool(st.get("dry_run")),
-                   repeat=bool(st.get("repeat")), runs=int(st.get("runs") or 0), next_run_at=st.get("next_run_at", ""),
-                   interval_minutes=int(st.get("interval_minutes") or 0), max_per_run=int(st.get("max_per_run") or 0),
-                   stopping=bool(st.get("stop")))
+    visible = {t: s for t, s in _ticketing_runs().items() if scope is None or teams.in_scope(scope, t)}
+    team = request.args.get("team")
+    if team:                                                  # one team's run (the older shape of the answer)
+        return jsonify(_run_view(visible.get(team) or {}))
+    views = [_run_view(s) for s in visible.values()]          # every run the person may see: a manager sees their own team(s)
+    return jsonify(runs=views, running=any(v["running"] for v in views))
 
 
 @bp.post("/auto-assign/run-ticketing/stop")
 @auth.ops_act_required
 def auto_assign_run_ticketing_stop():
     """Stop a "keep running" ticketing loop after its current run (the manager of its team, or an administrator)."""
-    st = current_app.extensions.get("ops_ticketing_run") or {}
+    team = clean_text(json_body().get("team"), "Team", 120)
+    st = _ticketing_runs().get(team) or {}
     if not st.get("running"):
-        raise ApiError("No ticketing auto-assign is running.")
+        raise ApiError("No ticketing auto-assign is running for this team.")
     if not auth.may_act_on_team(st.get("team")):
         raise ApiError("You can only stop your own team's auto-assign.", 403)
     st["stop"] = True
@@ -2974,10 +2982,10 @@ def auto_assign_run_ticketing():
     actor = g.user["user_id"]
 
     with _TICKETING_LOCK:
-        st = _ticketing_run_state()
-        if st.get("running"):
-            raise ApiError("A ticketing auto-assign run is already in progress. Wait for it to finish.", 409)
-        st.clear()
+        st = _ticketing_runs().get(team)
+        if st and st.get("running"):
+            raise ApiError("A ticketing auto-assign run for this team is already in progress. Wait for it to finish (or stop it).", 409)
+        st = _ticketing_runs()[team] = {}                    # this team's own state: other teams' runs go on untouched
         st.update({"running": True, "team": team, "actor": actor, "started_at": now_iso(clock()),
                    "log": [], "done": False, "summary": "", "assigned": 0, "by_employee": {}, "error": "",
                    "dry_run": dry_run, "repeat": repeat, "runs": 0, "next_run_at": "", "interval_minutes": interval,
@@ -2985,14 +2993,14 @@ def auto_assign_run_ticketing():
     auth.audit("ops_auto_assign_run", target=team, details={"kind": "ticketing", "dry_run": dry_run, "repeat": repeat})
     teams_arg = {team: {"block": block, "members": members}}
 
+    state = st                                                # this run's own state (the worker and its log write here)
+
     def worker():
         from .engines import assign_engine
 
         def log(message):
-            state = app.extensions.get("ops_ticketing_run")
-            if state is not None:
-                state.setdefault("log", []).append(f"{clock().strftime('%H:%M:%S')} {message}")
-                del state["log"][:-300]
+            state.setdefault("log", []).append(f"{clock().strftime('%H:%M:%S')} {message}")
+            del state["log"][:-300]
 
         def once():
             ctx = common.JobContext(job="assign", settings=assign_settings, general={}, store=store, now=clock, log=log,
@@ -3004,7 +3012,6 @@ def auto_assign_run_ticketing():
             except Exception as exc:                              # noqa: BLE001 - the thread must always settle the state
                 return common.JobResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 
-        state = app.extensions.get("ops_ticketing_run") or {}
         started, failures, total, by_emp = time.monotonic(), 0, 0, {}
         while True:
             result = once()
@@ -3043,7 +3050,7 @@ def auto_assign_run_ticketing():
                 break
         state.update({"running": False, "done": True, "next_run_at": ""})
 
-    threading.Thread(target=worker, name="ticketing-assign", daemon=True).start()
+    threading.Thread(target=worker, name=f"ticketing-assign-{team}", daemon=True).start()
     return jsonify(ok=True, started=True)
 
 

@@ -88,22 +88,22 @@
 <section class="card flush" aria-labelledby="ts-h">
   <div class="card-head"><h2 id="ts-h">{{ icon('users') }}Teams</h2><span class="hint">numbers per team - click a team to see its people</span></div>
   <div class="tbl-wrap"><table class="tbl" id="team-summary">
-    <thead><tr><th>Team</th><th class="num">Managers</th><th class="num">Employees</th><th class="num">Present</th>
+    <thead><tr><th>Team</th><th class="num" title="managers who arrived / managers of the team">Manager</th><th class="num" title="team members (not managers) who arrived / team members">Maker</th>
       {% for c in ts.codes %}<th class="num">{{ shift(c, True) }} <span class="small">{{ shifts[c].name }}</span></th>{% endfor %}
       <th class="num">On leave</th><th class="num">Not arrived</th><th class="num">Rest / off</th></tr></thead>
     <tbody>
     {% for t in ts.rows %}<tr data-href="{{ url_for('att_planning.team', team=t.team, date=day) }}">
       <td dir="auto" class="bidi"><a href="{{ url_for('att_planning.team', team=t.team, date=day) }}" title="Show the people of {{ t.team }}"><b>{{ t.team }}</b></a></td>
-      <td class="num">{{ t.manager_count }}{% if t.manager_count %} <span class="small muted">· {{ t.manager_arrived }} arrived</span>{% endif %}</td>
-      <td class="num"><b>{{ t.total }}</b></td><td class="num">{{ t.present }}</td>
+      <td class="num">{{ t.manager_arrived }}<span class="small muted"> / {{ t.manager_count }}</span></td>
+      <td class="num"><b>{{ t.makers_present }}</b><span class="small muted"> / {{ t.makers }}</span></td>
       {% for c in ts.codes %}<td class="num">{{ t.shifts[c] }}</td>{% endfor %}
       <td class="num">{{ t.leave }}</td><td class="num {{ 'short' if t.not_arrived }}">{{ t.not_arrived }}</td><td class="num">{{ t.rest }}</td></tr>
-    {% else %}<tr><td colspan="{{ 7 + ts.codes|length }}">{% call empty('users', 'No teams to show', 'Teams come from the portal accounts of the employees.') %}{% endcall %}</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="{{ 6 + ts.codes|length }}">{% call empty('users', 'No teams to show', 'Teams come from the portal accounts of the employees.') %}{% endcall %}</td></tr>{% endfor %}
     </tbody>
-    {% if ts.rows|length > 1 %}<tfoot><tr><td><b>All teams</b></td><td class="num">{{ ts.totals.manager_count }}{% if ts.totals.manager_count %} <span class="small muted">· {{ ts.totals.manager_arrived }} arrived</span>{% endif %}</td><td class="num"><b>{{ ts.totals.total }}</b></td><td class="num">{{ ts.totals.present }}</td>
+    {% if ts.rows|length > 1 %}<tfoot><tr><td><b>All teams</b></td><td class="num">{{ ts.totals.manager_arrived }}<span class="small muted"> / {{ ts.totals.manager_count }}</span></td><td class="num"><b>{{ ts.totals.makers_present }}</b><span class="small muted"> / {{ ts.totals.makers }}</span></td>
       {% for c in ts.codes %}<td class="num">{{ ts.totals.shifts[c] }}</td>{% endfor %}<td class="num">{{ ts.totals.leave }}</td><td class="num">{{ ts.totals.not_arrived }}</td><td class="num">{{ ts.totals.rest }}</td></tr></tfoot>{% endif %}
   </table></div>
-  <p class="small muted pad">An employee in two teams is counted in both. “Present” = checked in (HR file) or, for today, arrived by signing in to the portal until the HR file of the day is imported. The managers are the ones chosen in Settings. Leave and rest days are never counted as absence.</p>
+  <p class="small muted pad">Manager and Maker read “arrived / of”: a Maker is a team member who is not a manager. A person in two teams is counted in both. “Arrived” = checked in (HR file) or, for today, signed in to the portal until the HR file of the day is imported. The managers are the ones chosen in Settings. Leave and rest days are never counted as absence.</p>
 </section>
 
 

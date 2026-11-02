@@ -68,16 +68,15 @@ def approve(b, month="2026-09", team="Team A"):
 # ---------------------------------------------------------------- the rules of the settings
 def test_the_rules_have_an_amount_per_day_set_in_the_settings():
     assert [(k, RULES[k]["start"], RULES[k]["hours"]) for k in ("morning", "evening", "night")] == [("morning", "07:00", 8), ("evening", "14:00", 8), ("night", "22:00", 8)]
-    assert [RULES[k]["rate"] for k in ("morning", "evening", "night", "rest_day", "official_holiday")] == [100, 150, 200, 300, 300]   # v5.17: owner's amounts
-    assert all("basis" not in r for r in RULES.values()) and "normal" not in RULES
+    assert all("rate" not in r and "basis" not in r for r in RULES.values()) and "normal" not in RULES   # counts only: no money
 
 
 def test_the_first_version_of_the_settings_is_kept_and_old_money_is_ignored():
     old = {"allowance_grace_minutes": 30, "allowance_hours": 7, "allowance_rates": {"morning": 5}, "allowance_holiday_needs_hours": False,
            "allowance_rules": {"morning": {"rate": 9, "basis": "hour", "start": "06:30"}}}
     r = settings_svc.allowance_rules(old)
-    assert (r["morning"]["grace"], r["night"]["hours"], r["morning"]["start"]) == (30, 7, "06:30") and r["morning"]["rate"] == settings_svc.ALLOWANCE_DEFAULTS["morning"]["rate"] and "basis" not in r["morning"]
-    assert settings_svc.allowance_rules({"allowance_rules": {"night": {"rate": 120}}})["night"]["rate"] == 120     # today's amount per day
+    assert (r["morning"]["grace"], r["night"]["hours"], r["morning"]["start"]) == (30, 7, "06:30") and "rate" not in r["morning"] and "basis" not in r["morning"]
+    assert "rate" not in settings_svc.allowance_rules({"allowance_rules": {"night": {"rate": 120}}})["night"]          # counts only: a saved rate is ignored
     assert r["rest_day"]["needs_hours"] is False and r["rest_day"]["hours"] == 7
 
 
@@ -328,7 +327,7 @@ def test_the_settings_screen(app, world, admin_b):
     table = page.split('id="allowance-rules"')[1].split("</table>")[0]
     for k in al.KINDS:
         assert f'name="{k}_enabled"' in table and f'name="{k}_hours"' in table
-    assert all(f'name="{k}_rate"' in table for k in al.KINDS) and "_basis" not in table and "normal" not in table.lower()   # amount per day, no normal day
+    assert not any(f'name="{k}_rate"' in table for k in al.KINDS) and "_basis" not in table and "normal" not in table.lower()   # counts only, no normal day
     assert 'name="reminders"' in page and 'name="reminder_time" value="10:00"' in page
     assert 'name="use_schedule"' in page and 'name="evening_after" value="20:00"' in page and 'name="rest_day_needs_hours"' in table
 

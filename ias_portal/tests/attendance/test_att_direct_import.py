@@ -19,9 +19,11 @@ def test_hr_attendance_is_imported_at_once_and_reports_skipped_numbers(app, repo
     page = admin_b.get(r.headers["Location"], follow_redirects=True).get_data(as_text=True)
     assert "Imported at once" in page and "no portal account" in page and "2" in page
     assert repo.list_audit(action="attendance_import_direct")
-    # the very same file again is still refused
+    # the very same file again (checkpoint 4): accepted, and it changes nothing
     again = admin_b.upload("/attendance/import", f, direct=True)
-    assert again.status_code == 400 and b"already imported" in again.data
+    assert again.status_code == 302 and [x["employee_id"] for x in repo.attendance_records("2026-10-01", "2026-10-01")] == [1]
+    res = repo.list_attendance_imports()[0]["result"]
+    assert res["inserted"] == 0 and res["updated"] == 0
 
 
 def test_review_first_stays_available_as_an_option(app, repo, admin_b, tmp_path):

@@ -10,6 +10,14 @@
     if (cf && !window.confirm(cf.getAttribute("data-confirm"))) ev.preventDefault();
     if (ev.target.closest("[data-print]")) window.print();
     if (ev.target.closest("[data-back]")) window.history.back();
+    var more = ev.target.closest("[data-open],[data-open-all]");      // a count of the allowance card opens the days behind it
+    if (more) {
+      var all = more.getAttribute("data-open-all");
+      var list = all ? $$("details.ac-days", document.getElementById(all)) : [document.getElementById(more.getAttribute("data-open"))];
+      list.forEach(function (d) { if (d) d.open = true; });
+      if (list[0]) list[0].scrollIntoView({ block: "nearest" });
+      ev.preventDefault();
+    }
     var tg = ev.target.closest("[data-toggle-row]");          // a row that opens the row under it (Monthly shifts)
     if (tg) {
       var target = document.getElementById(tg.getAttribute("data-toggle-row"));
@@ -18,6 +26,7 @@
         tg.setAttribute("aria-expanded", target.hidden ? "false" : "true");
       }
     }
+
     var row = ev.target.closest("tr[data-href]");
     if (row && !ev.target.closest("a,button,input,select,summary,label")) window.location = row.getAttribute("data-href");
   });
