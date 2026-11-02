@@ -174,7 +174,9 @@ def compare_groups(rows, key):
     """Aggregate team_rows() by 'team' or 'department'."""
     g = defaultdict(lambda: defaultdict(float))
     for r in rows:
-        k = r["employee"][key] or "(none)"
+        k = r["employee"][key]
+        if not k:                                   # a person with no team / department is in the totals, not a row of its own
+            continue
         s = r["summary"]
         a = g[k]
         a["employees"] += 1
@@ -238,10 +240,11 @@ def staffing(rows, st, shifts):
     not subtracted: it is shown separately. No threshold configured for a team + shift = never flagged."""
     work_codes = {c for c, s in shifts.items() if s["kind"] == "work"}
     groups = defaultdict(list)
+    known = {t for r in rows for t in r["teams"]}
     for r in rows:
         for code in dict.fromkeys([r["planned_primary"], *r.get("planned_codes", [])]):      # every work shift of the day (a double shift is in both)
             if code in work_codes:
-                for t in access.shift_teams(r["teams"], (r.get("planned_marks") or {}).get(code)):
+                for t in access.shift_teams(r["teams"], (r.get("planned_marks") or {}).get(code), known):
                     groups[(t, code)].append(r)
     out = []
     for (team, code), rs in sorted(groups.items()):

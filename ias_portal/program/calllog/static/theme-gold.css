@@ -233,3 +233,9 @@ html .tbl tbody tr:hover, html .op-table tbody tr:hover { background: var(--wash
 .ac-focus { border-color: rgba(197, 160, 89, 0.7) !important; }
 form.inline { display: inline; }
 .inline-form { display: flex; gap: 8px; align-items: end; }
+
+/* the counts of the allowance card are links that open the days behind them */
+a.ac-fig { text-decoration: none; color: inherit; cursor: pointer; }
+a.ac-fig:hover { border-color: rgba(197, 160, 89, 0.7); }
+.ac-days { margin-top: 8px; }
+.ac-days summary { cursor: pointer; padding: 6px 2px; }

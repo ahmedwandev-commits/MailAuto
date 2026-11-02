@@ -16,9 +16,10 @@ def start_import(repo, user, data: bytes, filename, mapping_override=None):
     if len(data) > MAX_UPLOAD_BYTES:
         raise ImportError_("The file is too large.")
     sha = sha256_bytes(data)
+    # The same file may be uploaded again: the days it adds or completes are applied (a day that is the same is left as it is), so a
+    # day that was stored half-way - the check-out was not in the file yet - is completed by a later upload of a fuller file, and a
+    # repeated upload of one file changes nothing.
     dup = repo.find_completed_attendance_import(sha)
-    if dup:
-        raise ImportError_(f"This exact file was already imported (import #{dup['id']}). Nothing was changed.")
     try:
         wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         parsed = attendance_xlsx.parse_workbook(wb, mapping_override)
@@ -30,7 +31,7 @@ def start_import(repo, user, data: bytes, filename, mapping_override=None):
     import_id = repo.create_attendance_import({"filename": filename, "file_sha256": sha, "uploaded_by": user["user_id"],
                                                "status": "preview", "parsed": parsed})
     audit(repo, user, "attendance_import_uploaded", "attendance_import", import_id,
-          {"filename": filename, "rows": len(parsed["rows"])})
+          {"filename": filename, "rows": len(parsed["rows"]), **({"same_file_as_import": dup["id"]} if dup else {})})
     return import_id
 
 
@@ -136,8 +137,9 @@ def confirm_import(repo, user, import_id, create_unknown):
         else:
             before = set()
         new_rows = [r for r in rows if (r["employee_id"], r["work_date"]) not in before]
-        res = repo.commit_attendance_rows_atomic(import_id, rows)
-        result = {"inserted": res["inserted"], "existing_kept": res["existing"], "differs_from_stored": pv["differs"],
+        res = repo.commit_attendance_rows_atomic(import_id, rows, update=True)      # a newer file completes / corrects the days stored before
+        result = {"inserted": res["inserted"], "existing_kept": res["existing"], "updated": res["updated"], "differs_from_stored": pv["differs"],
+                  "updated_days": res["changes"][:300],
                   "rejected": len(p["rejected"]), "rejected_unknown_employee": skipped_unknown,
                   "duplicates_in_file": p["duplicates_in_file"], "employees_created": created,
                   "period": p["period"], "rejected_rows": p["rejected"][:200]}

@@ -206,7 +206,6 @@ def settings():
                 r = {"enabled": bool(request.form.get(f"{k}_enabled"))}
                 try:
                     r["hours"] = float(request.form.get(f"{k}_hours") or 0)
-                    r["rate"] = float(request.form.get(f"{k}_rate") or 0)
                     if k in al.SHIFT_KINDS:
                         r["early"] = int(request.form.get(f"{k}_early") or 0)
                         r["grace"] = int(request.form.get(f"{k}_grace") or 0)
@@ -214,8 +213,6 @@ def settings():
                     raise ImportError_(f"{label}: enter numbers for the hours and the minutes.") from exc
                 if not 0 <= r["hours"] <= 24:
                     raise ImportError_(f"{label}: the hours must be between 0 and 24.")
-                if not 0 <= r["rate"] <= 100000:
-                    raise ImportError_(f"{label}: the amount per day must be between 0 and 100,000.")
                 if k in al.SHIFT_KINDS:
                     r["start"] = _hhmm(request.form.get(f"{k}_start"), f"{label} check-in time")
                     if not (0 <= r["early"] <= 360 and 0 <= r["grace"] <= 180):
@@ -226,8 +223,7 @@ def settings():
             vals = {"allowance_rules": rules, "allowance_use_schedule": bool(request.form.get("use_schedule")),
                     "allowance_evening_after": _hhmm(request.form.get("evening_after"), "Evening if left at or after"),
                     "allowance_reminders": bool(request.form.get("reminders")),
-                    "allowance_reminder_time": _hhmm(request.form.get("reminder_time") or "10:00", "Reminder time"),
-                    "allowance_currency": (request.form.get("currency") or "EGP").strip()[:8] or "EGP"}
+                    "allowance_reminder_time": _hhmm(request.form.get("reminder_time") or "10:00", "Reminder time")}
             old = settings_svc.load(repo)
             repo.save_settings(vals)
             auth.audit("settings_changed", "settings", "allowance", {"previous": {"allowance_rules": settings_svc.allowance_rules(old),
@@ -236,8 +232,7 @@ def settings():
         elif a == "overtime":                                  # v5.17: overtime and meals (My attendance)
             vals, limits = {}, {"base_hours": (1, 24), "day_rate": (0, 5), "evening_rate": (0, 5), "night_rate": (0, 5), "holiday_rate": (0, 5),
                                 "weekly_deduction_hours": (0, 40), "cap_pct": (0, 200), "base_days": (1, 31),
-                                "long_day_hours": (1, 24), "meal_breakfast": (0, 100000), "meal_evening_meal": (0, 100000),
-                                "meal_dinner": (0, 100000), "meal_lunch": (0, 100000)}
+                                "long_day_hours": (1, 24)}
             for k, (lo, hi) in limits.items():
                 try:
                     v = float(request.form.get("ot_" + k, settings_svc.OVERTIME_DEFAULTS[k]))

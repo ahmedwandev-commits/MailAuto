@@ -13,10 +13,15 @@
     {% elif a.status == 'objected' %}{{ tone_chip('Objection sent to your manager', 't-warn', 'alert-triangle') }}
     {% else %}{{ tone_chip('Waiting for your confirmation', 't-info', 'clock') }}{% endif %}</div>
   <div class="ac-figs">
-    {% for k, label in a.kinds %}{% if f[k] %}<div class="ac-fig"><span class="ac-n">{{ f[k] }}</span><span class="ac-l">{{ label }}</span>{% if a.rates[k] %}<span class="ac-r">× {{ '%g'|format(a.rates[k]) }}</span>{% endif %}</div>{% endif %}{% endfor %}
-    <div class="ac-fig ac-total"><span class="ac-n">{{ f.total or 0 }}</span><span class="ac-l">Total days</span></div>
-    {% if f.amount %}<div class="ac-fig ac-total"><span class="ac-n">{{ '{:,.2f}'.format(f.amount) }}</span><span class="ac-l">Amount ({{ a.currency }})</span></div>{% endif %}
+    {% for k, label in a.kinds %}{% if f[k] %}<a class="ac-fig" href="#ac-days-{{ a.month }}-{{ k }}" data-open="ac-days-{{ a.month }}-{{ k }}" title="Show these days"><span class="ac-n">{{ f[k] }}</span><span class="ac-l">{{ label }}</span><span class="ac-r">show the days</span></a>{% endif %}{% endfor %}
+    <a class="ac-fig ac-total" href="#ac-all-{{ a.month }}" data-open-all="allowance-{{ a.month }}" title="Show every day"><span class="ac-n">{{ f.total or 0 }}</span><span class="ac-l">Total days</span><span class="ac-r">show all the days</span></a>
   </div>
+  <div id="ac-all-{{ a.month }}">{% for k, label in a.kinds %}{% if a.days[k] %}
+    <details class="ac-days" id="ac-days-{{ a.month }}-{{ k }}"><summary><b>{{ label }}</b> · {{ a.days[k]|length }} day(s)</summary>
+      <div class="tbl-wrap flat"><table class="tbl"><thead><tr><th>Date</th><th>Day</th><th>Check-in</th><th>Check-out</th><th>Counted because</th></tr></thead><tbody>
+        {% for d in a.days[k] %}<tr><td>{{ d.date|dmy }}</td><td>{{ d.date|dayname }}</td><td>{{ d.in_time or '—' }}</td><td>{{ d.out_time or '—' }}</td>
+          <td class="small muted">{{ {'schedule': 'your shift in the schedule', 'check-in': 'you checked in at the start of the shift', 'time': 'you stayed past the evening time', 'holiday': 'a rest day / holiday you worked'}.get(d.source, d.source) }}</td></tr>{% endfor %}
+      </tbody></table></div></details>{% endif %}{% endfor %}</div>
   {% if a.not_counted %}<details><summary class="small">{{ a.not_counted|length }} day(s) with punches that were not counted</summary>
     <ul class="small muted">{% for s in a.not_counted %}<li>{{ s.date|dmy }} · {{ (s.in_time or '—')[:5] }}–{{ (s.out_time or '—')[:5] }} · <span>{{ s.reason }}</span></li>{% endfor %}</ul></details>{% endif %}
   {% if a.note %}<p class="small"><b>Your note:</b> <span dir="auto">{{ a.note }}</span></p>{% endif %}

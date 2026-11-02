@@ -108,6 +108,7 @@ def email_block(store, hub, day, now, team=None):
     if str(snap.get("date") or "")[:10] != day:
         return {"available": False, "reason": "no e-mail scan today yet", "as_of": snap.get("generated_at", "")}
     ovr = {name: store.overrides(name) for name in schemas.OVERRIDES}
+    scope_team = team
     view = overlay.view_email_data(snap.get("data") or {}, ovr, team, now)
     s = view.get("stats") or {}
     by_team = {}
@@ -123,7 +124,25 @@ def email_block(store, hub, day, now, team=None):
             "sla_compliance_rate", "escalated_count", "carryover_count", "average_response")
     return {"available": True, "as_of": snap.get("generated_at", ""),
             "stale": _stale(hub, "email", snap.get("generated_at"), now),
-            **{k: s.get(k, 0) for k in keys}, "by_team": by_team}
+            **{k: s.get(k, 0) for k in keys}, "by_team": by_team, "quality": quality_block(view, scope_team)}
+
+
+def quality_block(view, team=None):
+    """The Email Quality Review of the day: for every team, how many of its replied e-mails (a team member's reply - a
+    manager's own reply is never reviewed) a manager has reviewed. The same rows as Email > Quality in the portal."""
+    counts = {}
+    for r in view.get("rows") or []:
+        if r.get("status") != schemas.EMAIL_REPLIED or r.get("reply_by_manager") or r.get("reply_other_team"):
+            continue
+        c = counts.setdefault(r.get("team") or overlay.UNCLASSIFIED, [0, 0])
+        c[0] += 1
+        c[1] += bool(r.get("quality_rating")) and not r.get("rating_withdrawn")
+    names = [t for t in view.get("teams") or [] if t and str(t).casefold() != overlay.UNCLASSIFIED.casefold()]
+    names += [t for t in counts if t not in names and str(t).casefold() != overlay.UNCLASSIFIED.casefold()]
+    if team:
+        names = [t for t in names if overlay.team_in((team,), t)]
+    rows = [{"team": t, "replied": counts.get(t, [0, 0])[0], "reviewed": counts.get(t, [0, 0])[1]} for t in names]
+    return {"teams": rows, "replied": sum(e["replied"] for e in rows), "reviewed": sum(e["reviewed"] for e in rows)}
 
 
 def _resolver(store, hub, users):
@@ -258,9 +277,11 @@ def build_subject(cfg, now, slot, data):
 
 # One look for both mails (owner: "everything the same"): white boxes with a thin border and a gold top line, the four
 # headline tiles always the same size, the numbers in NBE green, and the same status colours in the rings and the bars.
-GOOD, WARN, BAD, INFO, NEUTRAL = "#1f9d55", "#e5a00d", "#d64545", "#2a78d6", "#9aa5b1"
-BORDER, TRACK, HEAD_BG = "#e3e8ef", "#edf1f5", "#f6f8fa"
-RING_PX = 100
+GOOD, WARN, BAD, INFO, NEUTRAL = "#3a8f2e", "#e8a712", "#c9392f", "#2f6fd0", "#a8adb5"
+BORDER, TRACK, HEAD_BG = "#dfe3e1", "#edf1f5", "#f6f8fa"
+DARK, SOFT, UNREVIEWED = "#0f4a33", "#e6f1ea", "#d3d7de"            # the header green, the pale green bands, the grey of "not reviewed yet"
+RING_PX, TEAM_RING_PX = 104, 84
+WINDOW_START = "07:00"                                                # every checkpoint reports from here (owner)
 
 
 def _num(value):
@@ -326,21 +347,21 @@ def _tiles(data):
     out = []
     if calls is not None:
         # how each total splits is the ring below it (owner): the tile says only what the number is
-        out.append(_tile("Calls", calls["total"], "logged today")
+        out.append(_tile("Calls", calls["total"], "Logged Today")
                    if calls.get("available") else _tile("Calls", "—", esc(calls.get("reason", ""))))
     if mail is not None:
-        out.append(_tile("E-mails", mail["business_emails"], "received today")
+        out.append(_tile("E-mails", mail["business_emails"], "Received Today")
                    if mail.get("available") else _tile("E-mails", "—", esc(mail.get("reason", ""))))
     if tix is not None:
         if not tix.get("available"):
             out.append(_tile("Tickets", "—", esc(tix.get("reason", ""))))
         elif tix.get("history"):
-            out.append(_tile("Tickets", tix.get("came", 0), "requests of today"))
+            out.append(_tile("Tickets", tix.get("came", 0), "Requests Today"))
         else:
             live = tix.get("live") or {}
             out.append(_tile("Tickets open", live.get("open", 0), f'{_num(live.get("breached", 0))} past the SLA'))
     if crs is not None:
-        out.append(_tile("CRs pending", crs["pending"], f'{_num(crs["completed_today"])} implemented today')
+        out.append(_tile("CRs pending", crs["pending"], f'{_num(crs["completed_today"])} Implemented Today')
                    if crs.get("available") else _tile("CRs pending", "—", esc(crs.get("reason", ""))))
     return _row(out) if out else ""
 
@@ -440,19 +461,45 @@ def _hours(minutes):
     return int(h) if h == int(h) else h
 
 
+def _window(slot, now):
+    """The checkpoint as written on the mail: «07:00 - 13:00» (07:00 is fixed; a checkpoint at or before it is just its time)."""
+    end = slot if slot != "manual" else now.strftime("%H:%M")
+    return end if end <= WINDOW_START else f"{WINDOW_START} - {end}"
+
+
 def _foot(slot, now, next_slot, tail="", as_of=()):
-    text = f"Checkpoint {slot if slot != 'manual' else now.strftime('%H:%M')} of {now:%A %d/%m/%Y}."
+    text = f"Checkpoint {_window(slot, now)} of {now:%A %d/%m/%Y}."
     if as_of:
         text += " Data as of: " + ", ".join(as_of) + "."
     if next_slot:
         text += f" Next checkpoint: {next_slot}."
-    return er._footer(f"{text} {tail}".strip())
+    return f"{text} {tail}".strip()
 
 
-def _subtitle(data, slot, now):
-    return (f"National Bank of Egypt &nbsp;&bull;&nbsp; {esc(now.strftime('%A %d/%m/%Y'))} &nbsp;&bull;&nbsp; "
-            f"{esc(slot if slot != 'manual' else now.strftime('%H:%M'))} checkpoint"
-            + (f" &nbsp;&bull;&nbsp; {esc(data['team'])} only" if data.get("team") else ""))
+def _summary_page(title, data, slot, now, inner, footer, width=780):
+    """The whole mail: the green header with the bank's logo, the checkpoint line, the cards, the footer band."""
+    team = f" &nbsp;|&nbsp; {esc(data['team'])} only" if data.get("team") else ""
+    return (
+        '<html><head><meta charset="UTF-8"></head>'
+        f'<body style="margin:0;padding:0;background:{er.PAGE_BG};font-family:{FONT_STACK};color:{er.INK};">'
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{er.PAGE_BG}" '
+        f'style="background:{er.PAGE_BG};"><tr><td align="center" style="padding:20px 8px;">'
+        f'<table width="{width}" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" '
+        f'style="background:#ffffff;width:{width}px;max-width:100%;border:1px solid #dfe5ec;">'
+        f'<tr><td bgcolor="{DARK}" style="background:{DARK};padding:18px 24px;border-bottom:4px solid {NBE_GOLD};">'
+        '<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
+        f'<td width="58" valign="middle">{er._logo_html()}</td>'
+        '<td valign="middle" style="padding-left:14px;">'
+        f'<div style="color:#ffffff;font-size:22px;font-weight:700;font-family:{FONT_STACK};">{esc(title)}</div>'
+        f'<div style="color:#dcebe3;margin-top:4px;font-size:12.5px;font-family:{FONT_STACK};">Checkpoint Report</div>'
+        '</td></tr></table></td></tr>'
+        f'<tr><td bgcolor="#ffffff" style="background:#ffffff;padding:10px 24px;border-bottom:1px solid #e1e4e8;'
+        f'font-size:13px;color:{er.INK};font-family:{FONT_STACK};">National Bank of Egypt &nbsp;|&nbsp; '
+        f'<b style="color:{DARK};">{esc(now.strftime("%A %d/%m/%Y"))} &ndash; {esc(_window(slot, now))} Checkpoint</b>{team}</td></tr>'
+        f'<tr><td bgcolor="#f3f5f4" style="background:#f3f5f4;padding:14px 16px;font-family:{FONT_STACK};">{inner}</td></tr>'
+        f'<tr><td bgcolor="{SOFT}" style="background:{SOFT};border-top:3px solid {NBE_GOLD};padding:10px 24px;'
+        f'font-size:11.5px;color:#34413b;font-family:{FONT_STACK};">{esc(footer)}</td></tr>'
+        '</table></td></tr></table></body></html>')
 
 
 # the portal's status names behind the English words of the Tickets section (a key: each language in its own cell, so
@@ -537,31 +584,86 @@ def build_html(data, cfg, slot, now, next_slot=None, images=None):
             body = _unavailable(crs)
         sections.append(_section("Change requests (ITSM)", body, _as_of(crs)))
 
-    inner = _tiles(data) + _rings(data, images) + "".join(sections)
     if cfg.get("per_team", True) and not data.get("team"):
         team_rows = _team_rows(data)
         if team_rows:
-            inner += _section("By team", _gap(4) + _team_table(team_rows))
+            sections.append(_section("By team", _gap(4) + _team_table(team_rows)))
     as_of = [f"{label} {_clock(b.get('as_of'))}" for label, b in (("e-mail", mail), ("tickets", tix), ("ITSM", crs))
              if b and b.get("as_of")]
-    inner += _foot(slot, now, next_slot, "Counts only - open the IAS Portal for the details.", as_of)
+    inner = _tiles(data) + _rings(data, images) + _quality(data, images)
+    if sections:
+        inner += _gap(10) + _box("".join(sections))
     title = cfg.get("subject_prefix") or "Daily Operations Summary"
-    return er._page(f"{title} - {data['team']}" if data.get("team") else title, _subtitle(data, slot, now), inner)
+    return _summary_page(title, data, slot, now, inner,
+                         _foot(slot, now, next_slot, "Counts only - open the IAS Portal for the details.", as_of))
 
 
-def pie_charts(data, folder, slot):
-    """The PNG rings of a summary mail: {content_id: path} - calls, e-mails, tickets and the tickets' SLA (see
-    ``_ring_segments``)."""
+RING_CAPTIONS = {"pie_calls": "CALLS", "pie_email": "E-MAILS", "pie_tickets": "TICKETS", "pie_sla": "TICKETS"}
+
+
+def _quality_pies(data):
+    """[(content_id, team, reviewed, replied)] - one pie of the Email Quality Review for every team."""
+    q = (data.get("email") or {}).get("quality") if (data.get("email") or {}).get("available") else None
+    return [(f"pie_q{i}", e["team"], e["reviewed"], e["replied"]) for i, e in enumerate((q or {}).get("teams") or [])]
+
+
+def pie_charts(data, folder, slot, log=None):
+    """The PNG pies of a summary mail: {content_id: path} - calls, e-mails, tickets, the tickets' SLA (see
+    ``_ring_segments``) and one for each team's Email Quality Review. The number in the middle is drawn in the picture."""
     import os
     from . import charts
     os.makedirs(folder, exist_ok=True)
-    tag = "".join(ch for ch in f"{slot}-{data.get('team') or 'all'}" if ch.isalnum() or ch == "-") or "manual"
-    return {cid: charts.ring_png(os.path.join(folder, f"summary-{cid[4:]}-{tag}.png"),
-                                 [(value, colour) for _, value, colour in rows])
-            for cid, _, rows in _ring_segments(data)}
+    for name in os.listdir(folder):                         # yesterday's pictures (Outlook may still hold a recent one: left alone)
+        path = os.path.join(folder, name)
+        try:
+            if name.startswith("summary-") and time.time() - os.path.getmtime(path) > 24 * 3600:
+                os.remove(path)
+        except OSError:
+            pass
+    # a name of its own for every mail: Outlook keeps the picture of a mail it has not finished with open, and a file
+    # that is open cannot be written again (Permission denied)
+    tag = ("".join(ch for ch in f"{slot}-{data.get('team') or 'all'}" if ch.isalnum() or ch == "-") or "manual") \
+        + datetime.now().strftime("-%d%H%M%S%f")
+    out, first = {}, None
+    jobs = [(cid, rows_, {"center": str(sum(v for _, v, _ in rows_)), "caption": RING_CAPTIONS.get(cid, "")},
+             [(v, c) for _, v, c in rows_]) for cid, _, rows_ in _ring_segments(data)]
+    jobs += [(cid, None, {"size": 150, "center": f"{_share(reviewed, replied)}%" if replied else "N/A"},
+              [(reviewed, GOOD), (max(0, replied - reviewed), UNREVIEWED)]) for cid, _, reviewed, replied in _quality_pies(data)]
+    for cid, _, options, segments in jobs:
+        try:
+            out[cid] = charts.ring_png(os.path.join(folder, f"summary-{cid[4:]}-{tag}.png"), segments, **options)
+        except Exception as exc:                            # noqa: BLE001 - this pie is left out, the others still go
+            first = first or exc
+            if log:
+                log(f"daily summary: the pie {cid} could not be drawn in {folder} ({type(exc).__name__}: {exc})")
+    if first and not out:
+        raise first
+    return out
 
 
-def _legend(rows):
+def draw_pies(ctx, data, slot, label):
+    """The pies of a mail, written in the portal's own data folder (else the temp folder); {} when none could be drawn - the
+    mail then shows bars instead of the pies and the log says why."""
+    folders = [os.path.join(tempfile.gettempdir(), "ias-portal-charts")]
+    try:
+        folders.insert(0, os.path.join(str(ctx.data_dir), "ops", "charts"))
+    except Exception:                                       # noqa: BLE001
+        pass
+    problems = []
+    for folder in folders:
+        try:
+            images = pie_charts(data, folder, slot, lambda text: problems.append(text) or ctx.log(text))
+            if images:
+                return images
+        except Exception as exc:                            # noqa: BLE001
+            problems.append(f"{type(exc).__name__}: {exc}")
+            ctx.log(f"daily summary ({label}): the pies could not be drawn in {folder} ({type(exc).__name__}: {exc})")
+    ctx.log(f"daily summary ({label}): no pie could be drawn - the mail goes with bars instead")
+    data["pie_problem"] = " | ".join(problems)[:300] or "no picture was made"      # said at the foot of the mail
+    return {}
+
+
+def _legend(rows, bars=False):
     whole = sum(v for _, v, _ in rows)
     return "".join(
         f'<tr><td width="14" valign="middle" style="padding:5px 0;"><table cellpadding="0" cellspacing="0" border="0" '
@@ -569,19 +671,40 @@ def _legend(rows):
         f'font-size:1px;line-height:10px;">&nbsp;</td></tr></table></td>'
         + _cell(esc(label), line=False)
         + _cell(esc(_num(value)), bold=True, align="right", line=False, width="40")
-        + _cell(f"{_share(value, whole)}%", align="right", line=False, width="40", color=er.MUTED) + "</tr>"
+        + _cell(f"({_share(value, whole)}%)", align="right", line=False, width="46", color=er.MUTED) + "</tr>"
+        + (f'<tr><td colspan="4" style="padding:0 0 4px 0;">{_bar(_share(value, whole), colour)}</td></tr>' if bars else "")
         for label, value, colour in rows)
 
 
 def _ring(cid, title, rows, images):
-    """One ring card: the ring and its legend (the total is on the tile above: the card says only how it splits)."""
+    """One card: the dark title tab, the pie (its total in the middle) and its legend."""
     img = (f'<img src="cid:{cid}" width="{RING_PX}" height="{RING_PX}" alt="{esc(title)}" '
            f'style="display:block;border:0;">' if cid in (images or {}) else "")
     chart = f'<td width="{RING_PX + 12}" valign="middle">{img}</td>' if img else ""
-    return (_label(title) + _gap(10)
-            + '<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
+    tab = ('<table cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
+           f'<td bgcolor="{DARK}" style="background:{DARK};padding:7px 30px 7px 12px;color:#ffffff;font-size:13px;'
+           f'font-weight:700;letter-spacing:0.4px;font-family:{FONT_STACK};">{esc(title.upper())}</td></tr></table>')
+    body = ('<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
             + chart + '<td valign="middle"><table width="100%" cellpadding="0" cellspacing="0" border="0" '
-            f'role="presentation">{_legend(rows)}</table></td></tr></table>')
+            f'role="presentation">{_legend(rows, bars=not img)}</table></td></tr></table>')
+    # the padding sits on a cell: Outlook's Word engine ignores the padding of a div
+    return (tab + '<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
+            f'<td style="padding:8px 12px 10px 10px;">{body}</td></tr></table>')
+
+
+def _cards(cells):
+    """Cards two a row, in ONE table row (so they are the same height, also in Outlook): the gold top line, no padding."""
+    tds = []
+    for i in range(2):
+        if i:
+            tds.append('<td width="2%" style="font-size:1px;">&nbsp;</td>')
+        if i < len(cells):
+            tds.append(f'<td width="49%" valign="top" bgcolor="#ffffff" style="background:#ffffff;border:1px solid {BORDER};'
+                       f'border-top:3px solid {NBE_GOLD};padding:0;font-family:{FONT_STACK};">{cells[i]}</td>')
+        else:
+            tds.append('<td width="49%">&nbsp;</td>')
+    return ('<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
+            + "".join(tds) + "</tr></table>")
 
 
 def _sla_split(tix):
@@ -592,22 +715,21 @@ def _sla_split(tix):
 
 
 def _ring_segments(data):
-    """[(content_id, title, [(label, value, colour)])] of the rings of today - the same in both mails (owner: the line
-    under each headline number is a ring)."""
+    """[(content_id, title, [(label, value, colour)])] of the pies of today - the same in both mails."""
     calls, mail, tix = data.get("calls") or {}, data.get("email") or {}, data.get("tickets") or {}
     out = []
     if calls.get("available"):
         out.append(("pie_calls", "Calls", [
             ("Resolved", calls.get("resolved", 0), GOOD), ("Transferred", calls.get("transferred", 0), INFO),
-            ("Ticket inquiry", calls.get("ticket_inquiry", 0), WARN), ("Other", calls.get("other", 0), NEUTRAL)]))
+            ("Ticket Inquiry", calls.get("ticket_inquiry", 0), WARN), ("Other", calls.get("other", 0), NEUTRAL)]))
     if mail.get("available"):
         out.append(("pie_email", "E-mails", [
             ("Replied", mail.get("replied", 0), GOOD), ("Pending", mail.get("pending", 0), WARN),
-            ("No reply needed", mail.get("no_action_needed", 0), NEUTRAL)]))
+            ("No Reply Needed", mail.get("no_action_needed", 0), NEUTRAL)]))
     if tix.get("available") and tix.get("history"):
         out.append(("pie_tickets", "Tickets", [
             ("Executed", tix.get("executed", 0), GOOD), ("Rejected", tix.get("rejected", 0), BAD),
-            ("With a security user", tix.get("open", 0), INFO)]))
+            ("With a Security User", tix.get("open", 0), INFO)]))
         if tix.get("measured"):
             within, past = _sla_split(tix)
             out.append(("pie_sla", "Tickets - SLA", [
@@ -616,17 +738,59 @@ def _ring_segments(data):
 
 
 def _rings(data, images):
-    """The ring cards, two a row."""
+    """The pie cards, two a row."""
     cards = [_ring(cid, title, rows, images) for cid, title, rows in _ring_segments(data)]
-    return "".join(_gap(12) + _row(cards[i:i + 2], columns=2) for i in range(0, len(cards), 2))
+    return "".join(_gap(8) + _cards(cards[i:i + 2]) for i in range(0, len(cards), 2))
+
+
+def _quality(data, images):
+    """The Email Quality Review band: every team's reviewed e-mails out of its replied ones, a pie each."""
+    mail = data.get("email") or {}
+    q = mail.get("quality") if mail.get("available") else None
+    if not q or not q.get("teams"):
+        return ""
+    head = ('<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
+            f'<td bgcolor="{DARK}" style="background:{DARK};border-top:3px solid {NBE_GOLD};padding:10px 14px;color:#ffffff;'
+            f'font-size:17px;font-weight:700;font-family:{FONT_STACK};">Email Quality Review</td>'
+            f'<td align="right" bgcolor="{DARK}" style="background:{DARK};border-top:3px solid {NBE_GOLD};padding:10px 14px;'
+            f'font-family:{FONT_STACK};"><table cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
+            f'<td bgcolor="#f6edd3" style="background:#f6edd3;color:{DARK};font-size:11px;padding:3px 8px;'
+            f'font-family:{FONT_STACK};">Email Response Quality &amp; Manager Review</td></tr></table></td></tr></table>')
+    replied, reviewed = q["replied"], q["reviewed"]
+    line = (f'Overall Review: <b style="font-size:16px;">{_num(reviewed)}</b> out of <b style="font-size:16px;">'
+            f'{_num(replied)}</b> replied e-mails were reviewed by managers &nbsp;<b style="background:#f6edd3;padding:1px 8px;">'
+            f'{_share(reviewed, replied)}%</b> Review Rate' if replied else "No replied e-mails yet today.")
+    overall = (f'<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
+               f'<td bgcolor="{SOFT}" style="background:{SOFT};border:1px solid #cfe0d5;padding:9px 12px;font-size:13px;'
+               f'color:{DARK};font-family:{FONT_STACK};">{line}</td></tr></table>')
+    pies = {cid: (team, rev, rep) for cid, team, rev, rep in _quality_pies(data)}
+    cells = []
+    for cid, (team, rev, rep) in pies.items():
+        img = (f'<img src="cid:{cid}" width="{TEAM_RING_PX}" height="{TEAM_RING_PX}" alt="{esc(team)}" '
+               f'style="display:block;border:0;margin:0 auto;">' if cid in (images or {}) else "")
+        if not img:
+            img = (f'<div style="font-size:20px;font-weight:700;color:{DARK};padding-bottom:4px;">'
+                   f'{f"{_share(rev, rep)}%" if rep else "N/A"}</div>' + (_bar(_share(rev, rep), GOOD) if rep else ""))
+        words = f"{rev} of {rep}<br>Reviewed" if rep else "0 of 0<br>(No replies)"
+        cells.append(f'<td width="20%" align="center" valign="top" dir="auto" style="padding:10px 4px;'
+                     f'border-right:1px solid #e6e9e8;font-size:11px;color:{er.MUTED};font-family:{FONT_STACK};">{img}'
+                     f'<div style="font-size:12px;font-weight:700;color:{er.INK};margin-top:4px;">{esc(team)}</div>{words}</td>')
+    rows = []
+    for i in range(0, len(cells), 5):
+        chunk = cells[i:i + 5]
+        chunk += ['<td width="20%">&nbsp;</td>'] * (5 - len(chunk))
+        rows.append("<tr>" + "".join(chunk) + "</tr>")
+    grid = (f'<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" role="presentation" '
+            f'style="background:#ffffff;border:1px solid {BORDER};">{"".join(rows)}</table>')
+    return _gap(10) + head + _gap(8) + overall + _gap(8) + grid
 
 
 def build_compact_html(data, cfg, slot, now, images, next_slot=None):
-    """The checkpoint mail of EVERY team (owner's rule): the four headline tiles and the rings only - the details are in
-    each team's own summary."""
-    inner = _tiles(data) + _rings(data, images)
-    inner += _foot(slot, now, next_slot)
-    return er._page(cfg.get("subject_prefix") or "Daily Operations Summary", _subtitle(data, slot, now), inner)
+    """The checkpoint mail of EVERY team (owner's rule): the four headline tiles, the pies and the Email Quality Review
+    only - the details are in each team's own summary."""
+    inner = _tiles(data) + _rings(data, images) + _quality(data, images)
+    return _summary_page(cfg.get("subject_prefix") or "Daily Operations Summary", data, slot, now, inner,
+                         _foot(slot, now, next_slot))
 
 
 def _team_rows(data):
@@ -768,11 +932,7 @@ def _run(ctx):
             continue
         label = team or "every team"
         data = collect(ctx, now, team)
-        try:                                               # the rings: in both mails
-            extra = pie_charts(data, os.path.join(tempfile.gettempdir(), "ias-portal-charts"), slot)
-        except Exception as exc:                            # noqa: BLE001 - a chart never stops the summary
-            ctx.log(f"daily summary ({label}): the charts could not be drawn ({exc}); sent without them")
-            extra = {}
+        extra = draw_pies(ctx, data, slot, label)          # the pies: in both mails (bars when they cannot be drawn)
         if team:                                           # a team's own summary: every detail of its numbers
             html = build_html(data, cfg, slot, now, _next_slot_text(cfg, slot, now), extra)
         else:                                              # every team together: the tiles and the rings only

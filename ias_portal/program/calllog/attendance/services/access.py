@@ -30,11 +30,16 @@ def emp_teams(emp):
     return list(emp.get("teams") or ([emp["team"]] if emp.get("team") else []))
 
 
-def shift_teams(teams, mark):
-    """The teams a planned shift counts for. A name written «محمد صلاح (MFA)» in the schedule counts for the MFA team only; any other
-    name counts for every team of the person (a column «OPEN + MFA» is both)."""
+def shift_teams(teams, mark, known=()):
+    """The team a planned shift counts for. A person is in ONE Workforce team (v5.17), but a name written «محمد صلاح (MFA)» in the schedule
+    counts for the MFA team for that shift - whatever the person's own team is (``known`` = the team names of the roster, to find it)."""
     if (mark or "").strip().upper() == "MFA":
-        return [t for t in teams if "mfa" in t.lower()] or list(teams)
+        mine = [t for t in teams if "mfa" in t.lower()]
+        if mine:
+            return mine
+        found = sorted(t for t in known if "mfa" in str(t).lower())
+        if found:
+            return found[:1]
     return list(teams)
 
 

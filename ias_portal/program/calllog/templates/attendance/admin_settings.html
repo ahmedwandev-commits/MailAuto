@@ -38,7 +38,7 @@
     </div>
   </div>
   <div class="tbl-wrap flat"><table class="tbl" id="allowance-rules">
-    <thead><tr><th>Kind of day</th><th>Count it</th><th>Check-in at (HH:MM)</th><th class="num">Minutes before</th><th class="num">Minutes after</th><th class="num">Stay at least (hours)</th><th>Hours required</th><th class="num">Amount per day ({{ st.allowance_currency }})</th></tr></thead>
+    <thead><tr><th>Kind of day</th><th>Count it</th><th>Check-in at (HH:MM)</th><th class="num">Minutes before</th><th class="num">Minutes after</th><th class="num">Stay at least (hours)</th><th>Hours required</th></tr></thead>
     <tbody>
     {% for k, label, is_shift in allowance_kinds if k != 'holiday' %}{% set r = allowance_rules[k] %}
       <tr><td><b>{{ label }}</b></td>
@@ -54,22 +54,21 @@
         <td class="num"><input name="{{ k }}_hours" value="{{ '%g'|format(r.hours) }}" size="4" aria-label="{{ label }} hours"></td>
         <td><label class="check"><input type="checkbox" name="{{ k }}_needs_hours" value="1" {{ 'checked' if r.needs_hours }}> yes</label></td>
         {% endif %}
-        <td class="num"><input name="{{ k }}_rate" value="{{ '%g'|format(r.rate or 0) }}" size="7" inputmode="decimal" aria-label="{{ label }} amount per day"></td></tr>
+      </tr>
     {% endfor %}
     </tbody></table></div>
-  <p class="small muted">“Check-in at” with the minutes before / after is used only when the schedule has no shift for the day. When two shifts fit a check-in, the nearest start wins. A night shift that starts at 22:00 ends on the next day. The amount per day is shown on the allowance pages and in the confirmation e-mails (days × amount).</p>
+  <p class="small muted">“Check-in at” with the minutes before / after is used only when the schedule has no shift for the day. When two shifts fit a check-in, the nearest start wins. A night shift that starts at 22:00 ends on the next day. The sheet, the confirmation and the e-mails are counts only - no money.</p>
   <h3>Monthly confirmation</h3>
   <div class="form-grid">
     <label class="check"><input type="checkbox" name="reminders" value="1" {{ 'checked' if st.allowance_reminders }}> <b>Daily reminder e-mail</b> <span class="hint">every working day, to whoever has not confirmed the open month yet</span></label>
     <label class="field">Reminder time (HH:MM)<input name="reminder_time" value="{{ st.allowance_reminder_time }}" size="6"></label>
-    <label class="field">Currency<input name="currency" value="{{ st.allowance_currency }}" size="6"></label>
   </div>
   <div><button class="btn btn-primary" type="submit">{{ icon('check') }}Save allowance settings</button></div>
 </form>
 
-{# v5.17: overtime and meals - the numbers of My attendance (the transport allowance per day is the "Amount per day" above) #}
+{# v5.17: overtime and meals - the numbers of My attendance (counts and hours only - no money) #}
 <form method="post" class="card stack" id="overtime">{{ csrf() }}<input type="hidden" name="action" value="overtime">
-  <div class="card-head"><h2>{{ icon('bars') }}Overtime &amp; meals</h2><span class="hint">Used by My attendance. The transport allowance of each day is the “Amount per day” of the Shift allowance above.</span></div>
+  <div class="card-head"><h2>{{ icon('bars') }}Overtime &amp; meals</h2><span class="hint">Used by My attendance: hours and counts only - no money.</span></div>
   <h3>Overtime of a working day</h3>
   <div class="form-grid">
     <label class="field">Overtime starts after (hours of work)<input name="ot_base_hours" value="{{ ot.base_hours|num(2) }}" inputmode="decimal" size="5"></label>
@@ -90,12 +89,8 @@
   </div>
   <p class="small muted">A comp day counts only on a working day after the rest day or holiday worked, in the same week or the following week (the weekly rest days and the official holidays are not working days).</p>
   <p class="small muted">With these values a normal month is {{ (ot.base_days * ot.base_hours)|num }} h and the overtime is capped at {{ (ot.base_days * ot.base_hours * ot.cap_pct / 100)|num }} h.</p>
-  <h3>Meals ({{ st.allowance_currency }})</h3>
+  <h3>Meals</h3>
   <div class="form-grid">
-    <label class="field">Breakfast (morning shift)<input name="ot_meal_breakfast" value="{{ ot.meal_breakfast|num(2) }}" inputmode="decimal" size="6"></label>
-    <label class="field">Lunch (evening shift)<input name="ot_meal_evening_meal" value="{{ ot.meal_evening_meal|num(2) }}" inputmode="decimal" size="6"></label>
-    <label class="field">Dinner (night shift)<input name="ot_meal_dinner" value="{{ ot.meal_dinner|num(2) }}" inputmode="decimal" size="6"></label>
-    <label class="field">Extra meal (a long day)<input name="ot_meal_lunch" value="{{ ot.meal_lunch|num(2) }}" inputmode="decimal" size="6"></label>
     <label class="field">A long day is (hours of work)<input name="ot_long_day_hours" value="{{ ot.long_day_hours|num(2) }}" inputmode="decimal" size="5"></label>
   </div>
   <p class="small muted">A supervisor (manager) gets the breakfast of a morning shift only; anybody who works a long day gets the extra meal too.</p>

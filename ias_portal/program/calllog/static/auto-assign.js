@@ -130,7 +130,7 @@
     }
     const applyBtn = kind === "email"
       ? h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: distributeNow }, I("refresh"), "Distribute now")
-      : h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: () => runTicketing(team, (info.ticketing || {}).interval_minutes || 10, (info.ticketing || {}).max_per_run || 0) }, I("refresh"), "Run now");
+      : h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: () => runTicketing(team, (info.ticketing || {}).interval_minutes || 10, (info.ticketing || {}).max_per_run || 0, { saved: info.ticketing || {}, current: block, members }) }, I("refresh"), "Run now");
     const note = kind === "ticketing"
       ? h("p", { class: "op-note op-t-info op-block" }, I("info"),
         h("span", {}, "These rules drive the portal. Press Run now and type your own portal login to assign new requests to your team — once, or again every “Run every” minutes until you press Stop (your password is kept only in the server's memory, never saved). “Max per run” caps how many requests each run assigns (0 = no limit); the rest wait for the next run — save it before Run now. Each employee needs a “Number in the security portal” set in Admin › Users."))
@@ -157,7 +157,24 @@
   const runHost = h("div", {});                 // a persistent panel: survives render(), updated live while a run polls
   let polling = false;
 
-  async function runTicketing(team, every, maxPerRun) {
+  // what a rule means, in the same form for the saved rules and the ones on the screen (so an unsaved change is seen)
+  function ruleSig(b) {
+    return JSON.stringify({ e: !!(b || {}).enabled, i: +((b || {}).interval_minutes || 0), m: +((b || {}).max_per_run || 0),
+      r: ((b || {}).rules || []).map((r) => ({ p: [...(r.employees || [])].sort(), a: [...(r.applications || [])].sort(), f: r.from || "", t: r.to || "" })) });
+  }
+
+  async function runTicketing(team, every, maxPerRun, rules) {
+    // Run now works with the SAVED rules: a change that is only on the screen would be ignored and the work would go to somebody else
+    if (rules && ruleSig(rules.saved) !== ruleSig(rules.current)) {
+      toast("The rules on the screen are not saved. Press Save first - Run now assigns only by the saved rules.", "error");
+      return;
+    }
+    const who = new Map(((rules && rules.members) || []).map((m) => [m.email, m.name]));
+    const saved = ((rules && rules.saved && rules.saved.rules) || []);
+    const plan = saved.length ? h("ul", { class: "aa-plan" }, ...saved.map((r, i) => h("li", { dir: "auto" },
+      h("b", {}, `Rule ${i + 1}: `), (r.applications || []).length ? r.applications.join(", ") : "every application", " → ",
+      h("b", {}, (r.employees || []).map((e) => who.get(e) || e).join("، ")),
+      r.from || r.to ? ` (${r.from || "00:00"}–${r.to || "24:00"})` : ""))) : null;
     const user = h("input", { type: "text", autocomplete: "off", spellcheck: "false", dir: "ltr", maxlength: "60", "aria-label": "Portal username" });
     const pass = h("input", { type: "password", autocomplete: "off", dir: "ltr", maxlength: "200", "aria-label": "Portal password" });
     const dry = h("input", { type: "checkbox" });
@@ -165,6 +182,7 @@
     dry.addEventListener("change", () => { keep.disabled = dry.checked; if (dry.checked) keep.checked = false; });
     const body = h("div", { class: "dlg-body" },
       h("p", { class: "muted", dir: "auto" }, `Assign new portal requests for “${team}” by your saved rules. Type your OWN portal login — it is kept only in the server's memory while it runs, never stored.`),
+      plan ? h("div", {}, h("p", { class: "muted" }, "Requests go ONLY to the people named in the rule that covers them (nobody else of the team); a request no rule covers is left alone:"), plan) : null,
       h("label", { class: "field" }, "Portal username", user),
       h("label", { class: "field" }, "Portal password", pass),
       h("p", { class: "muted" }, maxPerRun ? `Each run assigns at most ${maxPerRun} request(s); the rest wait for the next run.`
@@ -183,8 +201,12 @@
     if (ok) { toast(keep.checked && !dry.checked ? "Ticketing auto-assign is running until you stop it." : "Ticketing auto-assign started."); pollTicketing(); }
   }
 
-  function drawRun(d) {
-    if (!d || (!d.running && !d.done)) { runHost.replaceChildren(); return; }
+  function drawRuns(list) {                    // one card for every team's run (two teams can run at the same time)
+    const shown = (list || []).filter((d) => d && (d.running || d.done));
+    runHost.replaceChildren(...shown.map(runCard));
+  }
+
+  function runCard(d) {
     const rows = (d.log || []).map((ln) => h("div", { class: "aa-logline", dir: "auto" }, ln));
     const loop = d.repeat && d.running
       ? ` — run ${d.runs || 0}${d.runs ? " done" : ""}, ${d.assigned || 0} assigned so far${d.next_run_at ? `, next at ${d.next_run_at.slice(11, 16)}` : ""}${d.stopping ? " (stopping after this run)" : ""}`
@@ -192,17 +214,17 @@
     const head = (d.running ? `Running for “${d.team}”…` : (d.error && !d.repeat ? `Failed for “${d.team}”` : `Finished for “${d.team}”`)) + loop;
     const tone = d.running ? "op-t-info" : (d.error ? "op-t-danger" : "op-t-ok");
     const summary = d.error ? d.error : (d.summary || (d.done ? "Done." : ""));
-    runHost.replaceChildren(OPS.card("Ticketing auto-assign", { hint: d.started_at ? `started ${d.started_at.replace('T', ' ')}` : "" },
+    return OPS.card("Ticketing auto-assign", { hint: d.started_at ? `started ${d.started_at.replace('T', ' ')}` : "" },
       h("p", { class: "op-note op-block " + tone }, I(d.running ? "refresh" : (d.error ? "alert" : "check")),
         h("span", { dir: "auto" }, head + (summary ? " — " + summary : ""))),
       d.running && d.repeat && !d.stopping
-        ? h("div", { class: "op-toolbar" }, h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: stopTicketing }, I("x"), "Stop"))
+        ? h("div", { class: "op-toolbar" }, h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: () => stopTicketing(d.team) }, I("x"), "Stop"))
         : null,
-      rows.length ? h("div", { class: "aa-log" }, ...rows) : null));
+      rows.length ? h("div", { class: "aa-log" }, ...rows) : null);
   }
 
-  async function stopTicketing() {
-    try { await api("POST", "/api/ops/auto-assign/run-ticketing/stop", {}); toast("Stopping after the current run."); }
+  async function stopTicketing(team) {
+    try { await api("POST", "/api/ops/auto-assign/run-ticketing/stop", { team }); toast("Stopping after the current run."); }
     catch (e) { toast(e.message, "error"); }
     pollTicketing();
   }
@@ -214,8 +236,8 @@
       for (;;) {
         let d;
         try { d = await api("GET", "/api/ops/auto-assign/run-ticketing"); }
-        catch (e) { drawRun({ done: true, error: e.message, team: "" }); break; }
-        drawRun(d);
+        catch (e) { drawRuns([{ done: true, error: e.message, team: "" }]); break; }
+        drawRuns(d.runs);
         if (!d.running) break;
         await new Promise((r) => setTimeout(r, 2000));
       }

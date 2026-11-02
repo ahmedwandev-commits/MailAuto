@@ -11,7 +11,7 @@ bp = Blueprint("att_gm", __name__)
 
 REPORT_GROUPS = [
     ("Month-end", "check-circle", ["review", "approvals", "summary", "scores", "score_details", "ranking"]),
-    ("Attendance", "user-check", ["lateness", "permits", "hours", "punches", "planned_actual", "rest", "daily"]),
+    ("Attendance", "user-check", ["lateness", "permits", "hours", "short_hours", "short_hours_days", "punches", "planned_actual", "rest", "daily"]),
     ("Teams & coverage", "users", ["teams", "departments", "coverage"]),
     ("Leave & time off", "plane", ["leave", "comp"]),
     ("Changes & trends", "history", ["changes", "trends"]),

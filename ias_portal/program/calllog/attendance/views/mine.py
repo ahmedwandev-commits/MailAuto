@@ -59,7 +59,7 @@ def _allowance_cards(repo, emp):
         out.append({"month": m, "label": ac.label(m), "figures": nums.get(emp["id"]), "rates": rates, "currency": currency,
                     "status": rec.get("status", "pending"), "note": rec.get("note", ""), "at": rec.get("at"), "on_behalf": rec.get("on_behalf"),
                     "by_name": rec.get("by_name"), "team_done": team_done, "not_counted": not_counted.get(emp["id"], []),
-                    "kinds": [(k, ac.al.ENGLISH[k]) for k in ac.al.KINDS]})
+                    "kinds": [(k, ac.al.ENGLISH[k]) for k in ac.al.KINDS], "days": ac.days_of(repo, m, emp)})
     return out
 
 

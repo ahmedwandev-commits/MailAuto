@@ -474,16 +474,29 @@ class JsonRepository(Repository):
         return sorted(out, key=lambda c: -c["id"])
 
     # ------------------------------------------------------------------ attendance records
-    def commit_attendance_rows_atomic(self, import_id, rows):
+    def commit_attendance_rows_atomic(self, import_id, rows, update=False):
+        """Store the rows of an HR file. A day already stored is kept as it is - unless ``update``: then the newer file completes /
+        corrects it (a check-in / check-out it has replaces the stored one; a blank never erases a stored punch). The days that
+        changed are returned as ``changes`` (employee, date, before, after) for the audit."""
         for r in rows:                                                   # validate everything first: all or nothing
             if self.directory.get_employee(r["employee_id"]) is None:
                 raise ConflictError(f"Unknown employee {r['employee_id']}.")
         ins = ex = 0
+        changes = []
         with self.transaction():
             for r in rows:
                 month = self._mut(f"attendance_records/{_ym(r['work_date'])}.json", {})
                 key = f"{r['employee_id']}|{r['work_date']}"
                 if key in month:
+                    if update:
+                        old = month[key]
+                        new = {f: (r.get(f) or old.get(f) or ("" if f not in ("in_time", "out_time") else None))
+                               for f in ("day_type", "in_time", "in_source", "out_time", "out_source", "leave_text", "permit_text", "mission_text")}
+                        if any(new[f] != old.get(f) for f in new):
+                            changes.append({"employee_id": r["employee_id"], "date": r["work_date"],
+                                            "before": {f: old.get(f) for f in new if new[f] != old.get(f)}, "after": {f: new[f] for f in new if new[f] != old.get(f)}})
+                            month[key] = {**old, **new, "import_id": import_id}
+                            continue
                     ex += 1
                     continue
                 month[key] = {"employee_id": r["employee_id"], "work_date": r["work_date"], "day_type": r.get("day_type", ""),
@@ -491,7 +504,7 @@ class JsonRepository(Repository):
                               "out_source": r.get("out_source", ""), "leave_text": r.get("leave_text", ""),
                               "permit_text": r.get("permit_text", ""), "mission_text": r.get("mission_text", ""), "import_id": import_id}
                 ins += 1
-        return {"inserted": ins, "existing": ex}
+        return {"inserted": ins, "existing": ex, "updated": len(changes), "changes": changes}
 
     def attendance_records(self, date_from, date_to, employee_ids=None):
         if employee_ids is not None and not employee_ids:

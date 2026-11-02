@@ -26,7 +26,7 @@ def import_upload():
         flash("The file was read but its columns need your attention before it can be imported.", "warn")
         return redirect(url_for("att_attendance.import_preview", import_id=import_id))
     skipped = res["rejected_unknown_employee"]
-    flash(f"Imported at once: {res['inserted']} new day-records; {res['existing_kept']} already existed (kept unchanged); "
+    flash(f"Imported at once: {res['inserted']} new day-records; {res.get('updated', 0)} stored days completed / corrected by this file; {res['existing_kept']} already existed (unchanged); "
           f"{res['rejected']} rejected rows" + (f"; {skipped} row(s) skipped because {len(res['unknown_numbers'])} employee number(s) have no portal account "
                                                 f"({', '.join(map(str, res['unknown_numbers'][:8]))}{' …' if len(res['unknown_numbers']) > 8 else ''})" if skipped else "") + "."
           + (f" {res['missing_punch_people']} employee(s) with a forgotten check-in / check-out and their managers were told."
@@ -83,7 +83,7 @@ def import_confirm(import_id):
         if key.startswith("link:") and value and value != "none":
             ats.link_hr_number(repo, g.att_user, int(key[5:]), value)
     res = ats.confirm_import(repo, g.att_user, import_id, bool(request.form.get("create_unknown")))
-    flash(f"Imported {res['inserted']} new day-records; {res['existing_kept']} already existed (kept unchanged); "
+    flash(f"Imported {res['inserted']} new day-records; {res.get('updated', 0)} stored days completed / corrected by this file; {res['existing_kept']} already existed (unchanged); "
           f"{res['rejected'] + res['rejected_unknown_employee']} rejected."
           + (f" {res['missing_punch_people']} employee(s) with a forgotten check-in / check-out and their managers were told."
              if res.get("missing_punch_people") else ""), "ok")

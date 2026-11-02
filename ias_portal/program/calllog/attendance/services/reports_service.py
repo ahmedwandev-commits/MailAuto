@@ -29,6 +29,8 @@ KINDS = {
     "planned_actual": "Planned schedule vs actual attendance",
     "trends": "Monthly trends",
     "daily": "Daily attendance detail",
+    "short_hours": "Short days: who does not complete 8 hours (per employee)",
+    "short_hours_days": "Short days: every day under 8 hours (per day)",
     "changes": "Schedule changes: who changed which shift",
 }
 
@@ -52,10 +54,13 @@ DESC = {
     "permits": "Every late arrival / early departure that needs (or has) a permit, and its review.",
     "planned_actual": "What was planned for each employee against what happened.",
     "trends": "Month by month: attendance %, lateness, absences, leave and score.",
+    "short_hours": "Every employee who stayed less than 8 hours on a day with a check-in and a check-out: how many days, how many hours are missing in all, and the worst day.",
+    "short_hours_days": "The days behind the previous report: check-in, check-out, the hours stayed and the hours missing. A day with only one punch is listed as «one punch» - its hours cannot be known.",
     "daily": "Every employee, every day: the planned shift, the punches and the status - to check a single day.",
     "changes": "Every shift a manager changed in the portal, with the reason - these shifts decide the shift allowance.",
 }
-TOTAL_KINDS = {"score_details", "summary", "ranking", "planned_actual", "teams", "departments", "lateness", "hours", "punches", "leave", "comp", "permits"}
+SHORT_HOURS = 8.0
+TOTAL_KINDS = {"short_hours", "score_details", "summary", "ranking", "planned_actual", "teams", "departments", "lateness", "hours", "punches", "leave", "comp", "permits"}
 
 
 def _months(d1, d2):
@@ -151,6 +156,46 @@ def _build_new(repo, user, kind, d1, d2, now, team):
                          fmt(det.get("previous")), fmt(det.get("new")), det.get("reason", "")])
         notes.append("A shift changed in the portal (Modification, weekly plan) is the shift counted in the allowance sheet; the reason is mandatory.")
         return {"title": title, "columns": ["When", "Changed by", "ID", "Employee", "Team", "Day changed", "From", "To", "Reason"], "rows": body, "emp_col": 2, "notes": notes}
+    if kind in ("short_hours", "short_hours_days"):
+        ev = an.evaluate_range(repo, list(by), d1, d2, now)
+        away = {"on_leave", "rest_day", "holiday", "rest_day_worked", "on_mission", "excused_absence"}      # leave, rest days, holidays, missions: never short
+        days, per = [], {}
+        for emp in sorted(ev, key=lambda i: (by[i]["name"], i)):
+            e = by[emp]
+            for d in ev[emp]:
+                if d["status"] in away or not (d.get("actual_in") or d.get("actual_out")):
+                    continue
+                s = per.setdefault(emp, {"days": 0, "short": 0, "one": 0, "missing": 0.0, "hours": 0.0, "worst": None})
+                if d.get("actual_hours") is None:                                       # one punch only
+                    s["one"] += 1
+                    days.append([d["date"], date.fromisoformat(d["date"]).strftime("%a"), emp, e["name"], e["team"], "+".join(d["planned_codes"]) or "—",
+                                 (d.get("actual_in") or "")[:5], (d.get("actual_out") or "")[:5], "", "", "one punch"])
+                    continue
+                s["days"] += 1
+                s["hours"] += d["actual_hours"]
+                if d["actual_hours"] < SHORT_HOURS:
+                    gap = round(SHORT_HOURS - d["actual_hours"], 2)
+                    s["short"] += 1
+                    s["missing"] += gap
+                    s["worst"] = max(s["worst"] or (0, ""), (gap, d["date"]))
+                    days.append([d["date"], date.fromisoformat(d["date"]).strftime("%a"), emp, e["name"], e["team"], "+".join(d["planned_codes"]) or "—",
+                                 (d.get("actual_in") or "")[:5], (d.get("actual_out") or "")[:5], round(d["actual_hours"], 2), gap, "short"])
+        notes.append(f"Short = less than {SHORT_HOURS:g} hours between the check-in and the check-out. Leave, rest days, holidays and missions are left out; "
+                     "shift days are included (any day with a check-in or a check-out).")
+        if kind == "short_hours_days":
+            days.sort(key=lambda r: (r[0], r[3]))
+            return {"title": title, "columns": ["Date", "Day", "ID", "Employee", "Team", "Shift", "Check-in", "Check-out", "Hours", "Missing hours", "Note"],
+                    "rows": days, "emp_col": 2, "notes": notes}
+        body = []
+        for emp, s in per.items():
+            if not s["short"]:
+                continue
+            e = by[emp]
+            body.append([emp, e["name"], e["team"], s["days"], s["short"], round(s["missing"], 1), round(s["hours"] / s["days"], 2) if s["days"] else "",
+                         (f"{s['worst'][1]} (−{s['worst'][0]:g} h)" if s["worst"] else ""), s["one"]])
+        body.sort(key=lambda r: (-r[5], r[1]))
+        return {"title": title, "columns": ["ID", "Employee", "Team", "Days with both punches", "Days under 8 h", "Hours missing in all", "Avg hours / day",
+                                            "Worst day", "Days with one punch"], "rows": body, "emp_col": 0, "notes": notes}
     if kind in ("scores", "score_details"):
         rows, rules, ver = an.team_rows(repo, user, d1, d2, now, team)
         rows.sort(key=lambda r: (r["score"]["insufficient_data"], r["score"]["score"], r["employee"]["id"]))     # the lowest scores first: they need the explanation
@@ -200,7 +245,7 @@ def _build_new(repo, user, kind, d1, d2, now, team):
 
 
 def _build(repo, user, kind, d1, d2, now, team=None):
-    if kind in ("review", "daily", "changes", "approvals", "scores", "score_details"):
+    if kind in ("review", "daily", "changes", "approvals", "scores", "score_details", "short_hours", "short_hours_days"):
         return _build_new(repo, user, kind, d1, d2, now, team)
     title = KINDS.get(kind, kind)
     notes = []
