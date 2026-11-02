@@ -62,6 +62,8 @@ D. E-MAIL: A MAIL FOR SEVERAL TEAMS - EACH TEAM ANSWERS ITS OWN PART
    - Now: the mail goes to every team it concerns, one line per team. A team's line is Replied only when somebody of
      THAT team answers (its own response time and SLA); a team that has not answered stays Pending (its SLA keeps
      running), whatever the other teams did. A reply from an address that belongs to no team still answers every team.
+   - "ALL TEAMS" in E-mail > Change the team: a manager can send any e-mail to every team at once; each team answers its
+     own part and stays Pending until it does. Choosing one team again makes it a normal one-team e-mail.
 
 C. BUGS FIXED (whole application, 41 fixes - each has an automatic test)
    - Schedule import: a name matching several employees gave the shifts to the first of them (now: skipped and listed).

@@ -673,7 +673,11 @@ def classify(cfg, customer, team_override=None):
         classified_by = "default_team"
         team, all_teams = cfg.unclassified_team, [cfg.unclassified_team]
     hint = "; ".join(systems) if systems else "; ".join(candidate_words(customer.get("subject", "")))
-    if team_override:
+    if isinstance(team_override, (list, tuple)) and len(team_override) >= 2:
+        classified_by = "override"                     # "Assign to all teams" (v5.17): every team answers its own part
+        all_teams = [str(t) for t in team_override]
+        team = all_teams[0]
+    elif team_override:
         classified_by = "override"
         team, all_teams = str(team_override), [str(team_override)]
     return {"systems": systems, "team": team, "all_teams": all_teams or [team], "classified_by": classified_by,
@@ -911,7 +915,9 @@ def _rows_for_customer(cfg, customer, indexes, team_replies, ovr, now, late=None
     by_conversation, by_root, by_subject = indexes
     replies, match_method = find_team_replies(customer, by_conversation, by_root, by_subject)
     key = customer.get("message_id", "")
-    override = (ovr["team"].get(key) or {}).get("team") if key else None
+    chosen = (ovr["team"].get(key) or {}) if key else {}
+    several = [str(t) for t in chosen.get("teams") or [] if str(t).strip()] if isinstance(chosen.get("teams"), list) else []
+    override = several if len(several) >= 2 else chosen.get("team")
     cls = classify(cfg, customer, override)
     teams_replied, unattributed = _attribute_replies(cfg.directory, replies, cls["all_teams"])
     split_teams = [t for t in cls["all_teams"] if t and t != UNCLASSIFIED]

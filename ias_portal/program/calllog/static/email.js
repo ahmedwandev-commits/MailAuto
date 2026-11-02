@@ -132,15 +132,19 @@
 
   async function changeTeamDialog(row) {
     const choices = teams();          // any manager / admin may re-file a mail to ANY team (not only their own)
+    const ALL = "__every_team__";        // "Assign to all teams": each team answers its own part (v5.17)
     const select = h("select", { "aria-label": "Team", required: true },
-      choices.map((t) => h("option", { value: t, selected: t === row.team }, t)));
+      [h("option", { value: ALL }, "All teams - each team answers its own part")]
+        .concat(choices.filter((t) => t !== "Unclassified").map((t) => h("option", { value: t, selected: t === row.team }, t))));
     await OPS.modal({
       title: "Change the team", submitLabel: "Change team",
       body: h("div", {}, h("p", { class: "muted", dir: "auto" }, bidi(row.subject || "(no subject)")),
-        h("label", { class: "em-field" }, h("span", {}, "Team"), select)),
+        h("label", { class: "em-field" }, h("span", {}, "Team"), select),
+        h("p", { class: "muted small" }, "All teams: the e-mail goes to every team; a team that has not answered its part stays Pending.")),
       onSubmit: async () => {
-        await api("POST", "/api/ops/email/team", { message_id: rowKey(row), team: select.value });
-        await afterAction("Team changed.");
+        const every = select.value === ALL;
+        await api("POST", "/api/ops/email/team", every ? { message_id: rowKey(row), all: true } : { message_id: rowKey(row), team: select.value });
+        await afterAction(every ? "Sent to every team." : "Team changed.");
       },
     });
   }

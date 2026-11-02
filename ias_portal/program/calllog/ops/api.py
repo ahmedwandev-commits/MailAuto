@@ -1937,7 +1937,22 @@ def email_team():
     can route it on). The destination is any real team."""
     body = json_body()
     message_id = clean_message_id(body.get("message_id"))
-    team = _clean_team(body.get("team"))
+    # "Assign to all teams" (owner, v5.17): {"all": true} or {"teams": [...]} sends the mail to several teams; each team
+    # answers its own part and stays Pending until it does
+    teams = []
+    if body.get("all") is True:
+        teams = [t for t in hub_cfg()["email"]["teams"] if str(t).strip() and str(t).casefold() != overlay.UNCLASSIFIED.casefold()]
+    elif isinstance(body.get("teams"), list):
+        for t in body["teams"]:
+            t = _clean_team(t)
+            if t.casefold() != overlay.UNCLASSIFIED.casefold() and t not in teams:
+                teams.append(t)
+    if body.get("all") is True or isinstance(body.get("teams"), list):
+        if len(teams) < 2:
+            raise ApiError("Choose at least two teams (or one team with the normal Change team).")
+        team = teams[0]
+    else:
+        team = _clean_team(body.get("team"))
     if team.casefold() == overlay.UNCLASSIFIED.casefold():
         raise ApiError("Pick a real team to file this e-mail under, not Unclassified.")
     if g.user["role"] in auth.OPS_ROLES:
@@ -1950,11 +1965,13 @@ def email_team():
         via = "assignee" if is_assignee(g.user, entry) else "team member"
         _notify(schemas.NOTIFY_REASSIGNED, entry, rows, message_id, entry, detail=f"moved to {team}")
     previous = rows[0].get("team", "")
-    entry = ops().set_override("team", message_id, {
-        "team": team, "marked_by": _who(), "marked_by_id": g.user["user_id"], "marked_at": _stamp(),
-        "subject": _subject(rows)})
-    auth.audit("ops_team", target=message_id, details={"from": previous, "to": team, "by": via,
-                                                       "subject": _subject(rows)[:80]})
+    record = {"team": team, "marked_by": _who(), "marked_by_id": g.user["user_id"], "marked_at": _stamp(),
+              "subject": _subject(rows)}
+    if len(teams) >= 2:
+        record["teams"] = teams
+    entry = ops().set_override("team", message_id, record)
+    auth.audit("ops_team", target=message_id, details={"from": previous, "to": ", ".join(teams) if len(teams) >= 2 else team,
+                                                       "by": via, "subject": _subject(rows)[:80]})
     return jsonify(ok=True, team=entry, rev=overrides_rev(read_overrides()))
 
 

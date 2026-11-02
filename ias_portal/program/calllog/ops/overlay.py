@@ -278,12 +278,63 @@ def _better_sibling(current, other):
     return current
 
 
+_NO_REPLY = {"first_reply_by": "", "first_reply_email": "", "first_reply_time": None, "first_response_time": "",
+             "response_minutes": None, "last_reply_by": "", "last_reply_email": "", "last_reply_time": None,
+             "reply_body_preview": "", "reply_count": 0, "reply_by_manager": False, "quality_rating": "", "quality_note": "",
+             "quality_reasons": "", "quality_appeal": "", "appeal_decision": "", "rating_withdrawn": False,
+             "quality_reviewed_by": "", "quality_reviewed_at": ""}
+
+
+def chosen_teams(entry):
+    """The teams of an "Assign to all teams" override (two or more), else []."""
+    teams = (entry or {}).get("teams")
+    return [str(t) for t in teams if str(t).strip()] if isinstance(teams, list) and len(teams) >= 2 else []
+
+
+def _spread_to_teams(rows, team_overrides, now=None):
+    """"Assign to all teams" (owner, v5.17): an e-mail sent to several teams shows one row per team at once. A team that
+    already has its own row keeps it; every other team gets a Pending row (it has not answered its part). The next scan
+    recomputes each team's status from the replies."""
+    out, done = [], set()
+    by_key = {}
+    for row in rows:
+        by_key.setdefault(message_key(row), []).append(row)
+    for row in rows:
+        key = message_key(row)
+        teams = chosen_teams(team_overrides.get(key)) if key else []
+        if not teams:
+            out.append(row)
+            continue
+        if key in done:
+            continue
+        done.add(key)
+        mine = by_key[key]
+        have = {_key(r.get("team")): r for r in mine}
+        for team in teams:
+            got = have.get(_key(team))
+            if got is not None:
+                child = got
+            else:
+                child = dict(mine[0])
+                if child.get("status") == schemas.EMAIL_REPLIED:
+                    child.update(_NO_REPLY)
+                    _unmark_no_action(child, now)            # this team has not answered: pending, its SLA running
+                child["teams_replied"] = []
+            child.update(team=team, all_teams=[team], is_split_child=True, split_sibling_teams=list(teams),
+                         row_id=f"{key}|{team}")
+            child["teams_pending"] = [team] if child.get("status") == schemas.EMAIL_PENDING else []
+            out.append(child)
+    return out
+
+
 def _collapse_and_retag(rows, team_overrides):
     """Team overrides win over everything. An e-mail the collector split into one row per team becomes a single
     row for the chosen team again (as the collector does when only one team is left)."""
     def chosen_team(row):
         key = message_key(row)
-        return str((team_overrides.get(key) or {}).get("team") or "").strip() if key else ""
+        if not key or chosen_teams(team_overrides.get(key)):   # several teams: _spread_to_teams handles it
+            return ""
+        return str((team_overrides.get(key) or {}).get("team") or "").strip()
 
     out, at_index = [], {}
     for row in rows:
@@ -448,6 +499,7 @@ def apply_overrides(rows, overrides, now=None):
     quality = overrides.get("quality") or {}
 
     rows = _collapse_and_retag([_clone(r) for r in rows or []], team_ov)
+    rows = _spread_to_teams(rows, team_ov, now)
     rows = _collapse_no_action(rows, no_action)
     out = []
     for row in rows:
