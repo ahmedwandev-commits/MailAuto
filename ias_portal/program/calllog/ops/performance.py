@@ -244,7 +244,9 @@ def team_day(store, calls_store, hub, users, day, now, people=None, numbers=None
     answered 200 - the work is counted PER PERSON - and a team that keeps its SLA beats one that does not:
 
     * ``work`` = the team's score in security requests (the same as Best performers: requests handled + 2 per call
-      answered + 3 per e-mail replied), ``manpower`` = the team's active employees, ``per_person`` = work / manpower;
+      answered + 3 per e-mail replied); ``manpower`` = the team's employees who WORKED that day (at least one call, e-mail
+      reply or request - somebody on leave, off or on another task is not counted, owner v5.18), ``team_size`` = all its
+      active employees; ``per_person`` = work / manpower;
     * ``sla_pct`` = the share of the team's e-mails (``email_team_sla_of``) and requests (executed inside the target)
       of the day that kept their SLA; None when the team had neither;
     * ``score`` = per_person × sla_pct / 100 (per_person alone when nothing of the team had an SLA that day).
@@ -260,9 +262,10 @@ def team_day(store, calls_store, hub, users, day, now, people=None, numbers=None
         if mine:
             size[mine[0]] = size.get(mine[0], 0) + 1
     work = {}
-    for p in people:
-        if p.get("team") in size:
-            w = work.setdefault(p["team"], {"calls": 0, "emails": 0, "tickets": 0, "work": 0})
+    for p in people:                                       # people_day lists only the employees who did something that day
+        if p.get("team") in size and p.get("total"):
+            w = work.setdefault(p["team"], {"calls": 0, "emails": 0, "tickets": 0, "work": 0, "worked": 0})
+            w["worked"] += 1
             w["calls"] += p["calls"]
             w["emails"] += p.get("emails") or 0
             w["tickets"] += p["tickets"]
@@ -272,17 +275,18 @@ def team_day(store, calls_store, hub, users, day, now, people=None, numbers=None
     mail = {key(t): v for t, v in mail.items()}
     tick = {key(t): v for t, v in tick.items()}
     rows = []
-    for team, n in size.items():
-        w = work.get(team) or {"calls": 0, "emails": 0, "tickets": 0, "work": 0}
+    for team, size_n in size.items():
+        w = dict(work.get(team) or {"calls": 0, "emails": 0, "tickets": 0, "work": 0, "worked": 0})
         if not w["work"]:
             continue
+        n = w.pop("worked")
         m = mail.get(key(team)) or {"ok": 0, "breached": 0}
         t = tick.get(key(team)) or {"within": 0, "timed": 0, "median": None}
         measured = m["ok"] + m["breached"] + t["timed"]
         sla_pct = round(100.0 * (m["ok"] + t["within"]) / measured, 1) if measured else None
         per_person = round(w["work"] / n, 1)
         score = round(per_person * (sla_pct / 100.0 if sla_pct is not None else 1.0), 1)
-        rows.append({"team": team, "manpower": n, **w, "per_person": per_person,
+        rows.append({"team": team, "manpower": n, "team_size": size_n, **w, "per_person": per_person,
                      "email_sla_pct": round(100.0 * m["ok"] / (m["ok"] + m["breached"]), 1) if m["ok"] + m["breached"] else None,
                      "ticket_sla_pct": round(100.0 * t["within"] / t["timed"], 1) if t["timed"] else None,
                      "exec_median_minutes": t["median"], "sla_pct": sla_pct, "score": score})

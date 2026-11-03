@@ -221,13 +221,13 @@
     const best = rows[0];
     const banner = h("div", { class: "op-banner op-t-ok", "data-best-team": "" }, OPS.icon("check"),
       h("span", {}, h("strong", {}, "Team of the day: "), h("strong", { dir: "auto" }, best.team),
-        ` · ${fmtNum(best.manpower)} people · ${fmtNum(best.per_person)} per person · SLA ${best.sla_pct == null ? "—" : fmtNum(best.sla_pct) + "%"} · team score ${fmtNum(best.score)}`));
+        ` · ${fmtNum(best.manpower)} worked · ${fmtNum(best.per_person)} per person · SLA ${best.sla_pct == null ? "—" : fmtNum(best.sla_pct) + "%"} · team score ${fmtNum(best.score)}`));
     const table = OPS.table({
       copy: true, caption: "Best team", sort: { key: "rank", desc: false },
       columns: [
         { key: "rank", label: "#", num: true, sort: true, render: (r) => (r.rank === 1 ? OPS.chip("#1", "ok") : h("span", {}, `#${r.rank}`)), text: (r) => String(r.rank) },
         { key: "team", label: "Team", sort: true, render: (r) => h("span", { dir: "auto" }, r.team), text: (r) => r.team },
-        { key: "manpower", label: "People", num: true, sort: true, render: (r) => fmtNum(r.manpower) },
+        { key: "manpower", label: "Worked today", num: true, sort: true, render: (r) => h("span", { title: `${fmtNum(r.manpower)} of the ${fmtNum(r.team_size)} people of the team had work this day` }, `${fmtNum(r.manpower)} / ${fmtNum(r.team_size)}`), text: (r) => String(r.manpower) },
         { key: "calls", label: "Calls answered", num: true, sort: true, render: (r) => fmtNum(r.calls) },
         { key: "emails", label: "E-mails replied", num: true, sort: true, render: (r) => fmtNum(r.emails) },
         { key: "tickets", label: "Tickets handled", num: true, sort: true, render: (r) => fmtNum(r.tickets) },
@@ -239,7 +239,7 @@
     }).el;
     return h("div", { class: "op-stack", "data-teams": "" },
       h("h3", {}, "Best team"),
-      h("p", { class: "hint" }, "Team score = score per person (the team's score ÷ its people) × the share of its e-mails and tickets that kept their SLA. A small team that does more per person and keeps its SLA beats a big one."),
+      h("p", { class: "hint" }, "Team score = score per person (the team's score ÷ the people who worked that day: at least one call, e-mail or ticket - leave, rest days and other tasks are not counted) × the share of its e-mails and tickets that kept their SLA. A small team that does more per person and keeps its SLA beats a big one."),
       banner, table, h("h3", {}, "Best employees"));
   }
   function performersCard() {

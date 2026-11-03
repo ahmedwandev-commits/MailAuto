@@ -92,11 +92,11 @@ def team_block(best):
         f'<div style="font-size:44px;line-height:52px;">&#127941;</div>'
         f'<div style="font-size:15px;color:{er.MUTED};margin-top:4px;letter-spacing:0.5px;">TEAM OF THE DAY</div>'
         f'<div style="font-size:24px;font-weight:700;color:{NBE_GREEN};margin-top:6px;" dir="auto">{esc(best["team"])}</div>'
-        f'<div style="font-size:14px;color:{er.MUTED};margin-top:6px;">{best["manpower"]} people &nbsp;&bull;&nbsp; '
+        f'<div style="font-size:14px;color:{er.MUTED};margin-top:6px;">{best["manpower"]} people worked &nbsp;&bull;&nbsp; '
         f'{best["per_person"]:g} per person &nbsp;&bull;&nbsp; {esc(sla)}</div></td></tr></table>')
-    work = er._table(["Team", "People", "Calls answered", "E-mails replied", "Requests handled", "Per person", "E-mails in SLA",
+    work = er._table(["Team", "Worked today", "Calls answered", "E-mails replied", "Requests handled", "Per person", "E-mails in SLA",
                       "Requests in SLA", "Team score"],
-                     [er._tr(er._td(best["team"], bold=True), er._td(best["manpower"], align="right"), er._td(best["calls"], align="right"),
+                     [er._tr(er._td(best["team"], bold=True), er._td(f'{best["manpower"]} of {best.get("team_size", best["manpower"])}', align="right"), er._td(best["calls"], align="right"),
                              er._td(best["emails"], align="right"), er._td(best["tickets"], align="right"),
                              er._td(f'{best["per_person"]:g}', align="right"), er._td(_pct(best.get("email_sla_pct")), align="right"),
                              er._td(_pct(best.get("ticket_sla_pct")), align="right"), er._td(f'{best["score"]:g}', bold=True, align="right"))])
@@ -130,8 +130,8 @@ def build_html(stars, now, words, best_team=None):
              + er._footer(f"Counted by the IAS Portal up to {now:%H:%M} of {now:%A %d/%m/%Y} from today's calls logged, "
                           "e-mails replied and security requests executed, not executed or rejected. Score in security "
                           "requests: a call counts as 2, an e-mail replied as 3, a request handled as 1."
-                          + (" Team of the day: the team's score per person (its score / its people) x the share of its "
-                             "e-mails and requests that kept their SLA." if best_team else "")
+                          + (" Team of the day: the team's score per person (its score / the people who worked today - at least "
+                             "one call, e-mail or request) x the share of its e-mails and requests that kept their SLA." if best_team else "")
                           + " With the whole team's congratulations."))
     return er._page("Best Performance", f"{er._subtitle(now.date())} &nbsp;&bull;&nbsp; &#127881;", inner)
 
