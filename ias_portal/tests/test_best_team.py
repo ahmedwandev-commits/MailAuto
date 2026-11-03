@@ -129,7 +129,65 @@ def test_the_page_lists_the_teams_and_a_manager_sees_every_team_but_only_their_p
     assert (by["Open System"]["manpower"], by["Open System"]["team_size"]) == (1, 2)                # b2 did nothing that day
     assert by["Open System"]["per_person"] == 3.0
     assert d["teams"][0]["team"] == "Flex Cube" and d["teams"][0]["rank"] == 1
+    assert [(x["user_id"], x["emails"]) for x in d["managers"]] == [("m1", 1)]                    # the Best manager
     m = mgr.get(f"/api/ops/performance?day={DAY}").get_json()
     assert {t["team"] for t in m["teams"]} == {"Flex Cube", "Open System"}                        # where my team stands
     assert {r["user_id"] for r in m["rows"]} == {"a1"}                                             # my people only (employees)
     assert {r["user_id"] for r in d["rows"]} == {"a1", "b1"} and [r["rank"] for r in d["rows"]] == [1, 2]   # no manager
+
+
+# ------------------------------------------------------------------------------------- the Best manager (owner, v5.18)
+class _Store:
+    def __init__(self, quality):
+        self.quality = quality
+
+    def overrides(self, name):
+        return self.quality if name == "quality" else {}
+
+
+def _rating(rid, by, team, received=DAY, at=f"{DAY}T12:00:00", withdrawn=False):
+    return {f"q{rid}": {"rating": "Good", "reviewed_by_id": by, "reviewed_at": at, "received": f"{received}T08:00:00",
+                        "reply_team": team, "team": team, "rating_withdrawn": withdrawn}}
+
+
+def test_the_best_manager_replies_and_rates_and_leaves_the_fewest_replies_unrated(monkeypatch):
+    users = {"m1": {"user_id": "m1", "name": "Mona", "role": "manager", "active": True, "teams": ["Flex Cube"]},
+             "m2": {"user_id": "m2", "name": "Omar", "role": "manager", "active": True, "teams": ["Open System"]},
+             "m3": {"user_id": "m3", "name": "Idle", "role": "manager", "active": True, "teams": ["Open System"]}}
+    quality = {}
+    for i in range(8):
+        quality.update(_rating(i, "m1", "Flex Cube"))                    # Mona rated 8 of Flex Cube's 10 replies
+    for i in range(8, 12):
+        quality.update(_rating(i, "m2", "Open System"))                  # Omar rated 4 of Open System's 20
+    quality.update(_rating(99, "m2", "Open System", withdrawn=True))      # withdrawn after an appeal: not counted
+    quality.update(_rating(98, "m2", "Open System", at="2026-10-10T12:00:00", received="2026-10-10"))   # another day
+    monkeypatch.setattr(perf, "_team_reviewable", lambda store, day, now: {"Flex Cube": 10, "Open System": 20})
+    people = [_person("m1", "Flex Cube", emails=5, calls=3, role="manager"), _person("m2", "Open System", emails=10, role="manager")]
+    omar, mona = perf.manager_day(_Store(quality), users, DAY, NOW, people)
+    # replying is a manager's choice: whoever replies keeps every point of it (owner, v5.18) - only the rating part
+    # carries the team's unrated replies
+    assert (omar["name"], omar["rank"], omar["emails"], omar["ratings"], omar["team_unrated"], omar["rated_pct"]) == ("Omar", 1, 10, 4, 16, 20.0)
+    assert (omar["reply_points"], omar["rating_points"], omar["score"]) == (30, 0.8, 30.8)
+    assert (mona["emails"], mona["ratings"], mona["team_reviewable"], mona["team_unrated"], mona["rated_pct"]) == (5, 8, 10, 2, 80.0)
+    assert (mona["reply_points"], mona["rating_points"], mona["score"]) == (15, 6.4, 21.4)
+    rater = {"m4": {"user_id": "m4", "name": "Rater", "role": "manager", "active": True, "teams": ["Flex Cube"]}}
+    only = perf.manager_day(_Store(_rating(1, "m4", "Flex Cube")), rater, DAY, NOW, [])
+    assert [(r["name"], r["emails"], r["ratings"]) for r in only] == [("Rater", 0, 1)]          # a manager who only rates is listed
+    assert all(r["user_id"] != "m3" for r in perf.manager_day(_Store(quality), users, DAY, NOW, people))   # nothing done
+
+
+def test_the_reviewable_replies_of_a_team():
+    rows = [{"team": "A", "status": "Replied", "received_time": f"{DAY}T08:00:00"},
+            {"team": "A", "status": "Replied", "received_time": f"{DAY}T09:00:00", "reply_by_manager": True},   # never rated
+            {"team": "A", "status": "Pending Reply", "received_time": f"{DAY}T09:00:00"},
+            {"team": "A", "status": "Replied", "received_time": "2026-10-10T09:00:00"},
+            {"team": "Unclassified", "status": "Replied", "received_time": f"{DAY}T08:00:00"}]
+    assert perf.team_reviewable_of(rows, DAY) == {"A": 1}
+
+
+def test_the_mail_celebrates_the_manager_of_the_day():
+    star = {**_person("u1", "Small Team", calls=60, emails=10), "rank": 1}
+    best = {"user_id": "m1", "name": "Mona Manager", "team": "Flex Cube", "emails": 5, "ratings": 8, "points": 23,
+            "team_reviewable": 10, "team_rated": 8, "team_unrated": 2, "rated_pct": 80.0, "score": 21.4, "rank": 1}
+    html = bp.build_html([star], NOW, "Bravo", None, best)
+    assert "MANAGER OF THE DAY" in html and "Mona Manager" in html and "80%" in html and "21.4" in html

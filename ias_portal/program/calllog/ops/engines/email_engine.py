@@ -1302,9 +1302,10 @@ def save_today_stats_history(store, day, stats):
 
 def save_today_reply_history(store, day, rows):
     """Write the day's replies per replier address (``replies``): what "Best performers" reads for a past day."""
-    from ..performance import email_replies_of, email_team_sla_of
+    from ..performance import email_replies_of, email_team_sla_of, team_reviewable_of
     _set_history_key(store, day, "replies", email_replies_of(rows, _day_key(day)))
     _set_history_key(store, day, "team_sla", email_team_sla_of(rows, _day_key(day)))     # the Best team of a past day
+    _set_history_key(store, day, "team_reviewable", team_reviewable_of(rows, _day_key(day)))   # the Best manager of a past day
 
 
 def save_today_quality_history(store, day, scorecard):

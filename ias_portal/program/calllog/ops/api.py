@@ -1283,8 +1283,10 @@ def performance_get():
     rows = performance.employees_only([r for r in everyone if r["user_id"] in mine])   # a manager: their own team(s) only
     # the Best team: every team (only its totals - never a person), so a manager sees where their team stands
     team_rows = performance.team_day(ops(), auth.store(), hub_cfg(), users, day, now, people=everyone, numbers=numbers)
+    manager_rows = performance.manager_day(ops(), users, day, now, everyone)    # the Best manager (every manager)
     return jsonify(day=day, server_time=now.isoformat(timespec="seconds"), scope=overlay.scope_label(scope),
-                   rows=rows, teams=team_rows, emails_known=any(r["emails"] is not None for r in rows) or not rows)
+                   rows=rows, teams=team_rows, managers=manager_rows,
+                   emails_known=any(r["emails"] is not None for r in rows) or not rows)
 
 
 @bp.get("/sla-analysis/request")

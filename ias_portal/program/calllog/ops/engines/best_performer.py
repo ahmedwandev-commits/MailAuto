@@ -103,7 +103,28 @@ def team_block(best):
     return card + work
 
 
-def build_html(stars, now, words, best_team=None):
+def manager_block(best):
+    """The Manager of the day (the first ``performance.manager_day`` row)."""
+    rated = "nothing of the team to rate today" if best.get("rated_pct") is None else f"{_pct(best['rated_pct'])} of the team's replies rated"
+    card = (
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="margin:14px 0 6px 0;">'
+        f'<tr><td align="center" bgcolor="#F3F1FA" style="background:#F3F1FA;border:2px solid {er.PURPLE};padding:18px 16px;'
+        f'font-family:{FONT_STACK};">'
+        f'<div style="font-size:44px;line-height:52px;">&#11088;</div>'
+        f'<div style="font-size:15px;color:{er.MUTED};margin-top:4px;letter-spacing:0.5px;">MANAGER OF THE DAY</div>'
+        f'<div style="font-size:24px;font-weight:700;color:{NBE_GREEN};margin-top:6px;" dir="auto">{esc(best["name"])}</div>'
+        f'<div style="font-size:14px;color:{er.MUTED};margin-top:6px;" dir="auto">{esc(best.get("team") or "")} &nbsp;&bull;&nbsp; '
+        f'{best["emails"]} e-mails replied &nbsp;&bull;&nbsp; {best["ratings"]} replies rated &nbsp;&bull;&nbsp; {esc(rated)}</div>'
+        f'</td></tr></table>')
+    work = er._table(["Manager", "Team", "E-mails replied", "Replies rated", "Team replies not rated", "Team rated", "Score"],
+                     [er._tr(er._td(best["name"], bold=True), er._td(best.get("team") or "-"), er._td(best["emails"], align="right"),
+                             er._td(best["ratings"], align="right"),
+                             er._td(best["team_unrated"] if best.get("team_reviewable") else "-", align="right"),
+                             er._td(_pct(best.get("rated_pct")), align="right"), er._td(f'{best["score"]:g}', bold=True, align="right"))])
+    return card + work
+
+
+def build_html(stars, now, words, best_team=None, best_manager=None):
     """The Best Performance mail of ``stars`` (the first ``performance.people_day`` rows, best first) and, when given,
     the Team of the day (``best_team``: the first ``performance.team_day`` row)."""
     title = "TODAY'S TOP 3" if len(stars) == 3 else f"TODAY'S TOP {len(stars)}" if len(stars) > 1 else "TODAY'S BEST"
@@ -125,6 +146,8 @@ def build_html(stars, now, words, best_team=None):
                     f'<div style="font-size:15px;line-height:1.6;" dir="auto">{esc(words)}</div>',
                     color=NBE_GOLD, background="#FFFBF0")
     team = (er._heading("Team of the day") + team_block(best_team)) if best_team else ""
+    if best_manager:
+        team += er._heading("Manager of the day") + manager_block(best_manager)
     inner = (_confetti() + trophy + er._heading("Today's work") + work + team + note
              + '<div style="height:16px;line-height:16px;">&nbsp;</div>' + _confetti()
              + er._footer(f"Counted by the IAS Portal up to {now:%H:%M} of {now:%A %d/%m/%Y} from today's calls logged, "
@@ -132,6 +155,8 @@ def build_html(stars, now, words, best_team=None):
                           "requests: a call counts as 2, an e-mail replied as 3, a request handled as 1."
                           + (" Team of the day: the team's score per person (its score / the people who worked today - at least "
                              "one call, e-mail or request) x the share of its e-mails and requests that kept their SLA." if best_team else "")
+                          + (" Manager of the day: 3 per e-mail replied (always in full) + 1 per reply rated x the share of the "
+                             "team's replies of the day that were rated." if best_manager else "")
                           + " With the whole team's congratulations."))
     return er._page("Best Performance", f"{er._subtitle(now.date())} &nbsp;&bull;&nbsp; &#127881;", inner)
 
@@ -165,10 +190,18 @@ def _run(ctx):
             best_team = (performance.team_day(ctx.store, calls, ctx.hub or {}, users, day, now, people=everyone, numbers=numbers) or [None])[0]
         except Exception as exc:                            # noqa: BLE001 - the people are still celebrated
             ctx.log(f"best performance e-mail: the team of the day could not be counted: {type(exc).__name__}: {exc}")
+    best_manager = None
+    if cfg.get("manager", True):
+        try:
+            best_manager = (performance.manager_day(ctx.store, users, day, now, everyone) or [None])[0]
+        except Exception as exc:                            # noqa: BLE001 - the people are still celebrated
+            ctx.log(f"best performance e-mail: the manager of the day could not be counted: {type(exc).__name__}: {exc}")
     names = names_of(stars)
-    html = build_html(stars, now, message_of(cfg, day, names), best_team)
+    html = build_html(stars, now, message_of(cfg, day, names), best_team, best_manager)
     counts = "; ".join(f"#{s['rank']} {s['name']}: calls {s['calls']}, e-mails {'-' if s['emails'] is None else s['emails']}, "
                        f"requests {s['tickets']} = score {s['total']}" for s in stars)
+    if best_manager:
+        counts += f"; manager of the day {best_manager['name']} ({best_manager['emails']} replies, {best_manager['ratings']} rated)"
     if best_team:
         counts += f"; team of the day {best_team['team']} ({best_team['per_person']:g} per person, SLA {_pct(best_team['sla_pct'])})"
     if not ctx.can_email():
@@ -180,6 +213,10 @@ def _run(ctx):
             to.append(address)
         elif not address:
             missing.append(s["name"])
+    if best_manager:                                       # the Manager of the day is celebrated too
+        address = str((users.get(str(best_manager["user_id"])) or {}).get("email") or "").strip()
+        if address and address.lower() not in {a.lower() for a in to}:
+            to.append(address)
     cc = [a for a in cfg.get("cc") or [] if a and a.lower() not in {t.lower() for t in to}]
     if not (to or cc):
         return JobResult(ok=False, error=f"{names}: no e-mail address in their accounts and no Cc is set - add one "

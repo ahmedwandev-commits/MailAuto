@@ -313,6 +313,90 @@ def team_day(store, calls_store, hub, users, day, now, people=None, numbers=None
     return rows
 
 
+# ------------------------------------------------------------------------- the best manager of the day (owner, v5.18)
+MANAGER_WEIGHTS = {"emails": 3, "ratings": 1}            # an e-mail replied = 3 (as everywhere), a reply rated = 1
+RATED = ("Excellent", "Very Good", "Good", "Needs Improvement")
+
+
+def team_reviewable_of(rows, day):
+    """{team: replies that can be rated} - the team's e-mails received on ``day`` that an employee replied to (a
+    manager's own reply is never rated): what the team's managers should rate."""
+    out = {}
+    for r in rows or []:
+        team = str(r.get("team") or "").strip()
+        if (not teams._real_team(team) or r.get("status") != schemas.EMAIL_REPLIED or r.get("reply_by_manager")
+                or str(r.get("received_time") or "")[:10] != day):
+            continue
+        out[team] = out.get(team, 0) + 1
+    return out
+
+
+def _team_reviewable(store, day, now):
+    """``team_reviewable_of`` for ``day``: today from the live e-mail view, an earlier day as the e-mail report kept it."""
+    snap = store.read_snapshot("email")
+    if snap and str(snap.get("date") or "")[:10] == day:
+        ovr = {name: store.overrides(name) for name in schemas.OVERRIDES}
+        view = overlay.view_email_data(snap.get("data") or {}, ovr, None, now)
+        return team_reviewable_of(view.get("rows"), day)
+    kept = (store.read_history("email", day) or {}).get("team_reviewable")
+    return dict(kept) if isinstance(kept, dict) else {}
+
+
+def manager_day(store, users, day, now, people):
+    """The managers of ``day``, best first (owner, v5.18): who replied to the most e-mails and rated the most replies,
+    and whose team left the fewest replies unrated.
+
+    * ``emails`` = their e-mail replies of the day (``people`` = ``people_day(..., roles=TEAM_ROLES)`` rows), ``ratings``
+      = the replies they rated that day (a rating withdrawn after an appeal does not count);
+    * ``points`` = 3 per e-mail replied + 1 per reply rated (``MANAGER_WEIGHTS``);
+    * ``rated_pct`` = of their team's replies of the day that can be rated (``team_reviewable_of``: received that day,
+      replied by an employee), the share rated so far - the fewer left unrated, the better the team's managers work;
+      None when the team had none (a manager of every team: all the teams together);
+    * ``score`` = 3 per e-mail replied, always in full (replying is a manager's choice - whoever replies keeps every
+      point of it, owner v5.18) + 1 per reply rated × rated_pct / 100 (the rating part alone carries the team's
+      unrated replies; in full when the team had nothing to rate).
+    A manager with no reply and no rating that day is not listed."""
+    mgrs = {str(uid): u for uid, u in (users or {}).items() if u.get("active", True) and u.get("role") == "manager"}
+    if not mgrs:
+        return []
+    replies = {p["user_id"]: p.get("emails") or 0 for p in people or [] if p.get("role") == "manager"}
+    rated_by, rated_team = {}, {}
+    for entry in (store.overrides("quality") or {}).values():
+        if not isinstance(entry, dict) or entry.get("rating") not in RATED or entry.get("rating_withdrawn"):
+            continue
+        if str(entry.get("reviewed_at") or "")[:10] == day:
+            rid = str(entry.get("reviewed_by_id") or "")
+            rated_by[rid] = rated_by.get(rid, 0) + 1
+        if str(entry.get("received") or "")[:10] == day:
+            t = str(entry.get("reply_team") or entry.get("team") or "").strip().casefold()
+            rated_team[t] = rated_team.get(t, 0) + 1
+    reviewable = {str(t).strip().casefold(): int(n or 0) for t, n in _team_reviewable(store, day, now).items()}
+    rows = []
+    for uid, u in mgrs.items():
+        e, k = int(replies.get(uid, 0)), int(rated_by.get(uid, 0))
+        if not (e or k):
+            continue
+        mine = [t for t in overlay.user_teams(u) if teams._real_team(t)]
+        team = mine[0] if mine else ""
+        if team:
+            can, done = reviewable.get(team.casefold(), 0), rated_team.get(team.casefold(), 0)
+        else:                                              # a manager of every team: all the teams together
+            can, done = sum(reviewable.values()), sum(rated_team.values())
+        rated_pct = round(min(100.0, 100.0 * done / can), 1) if can else None
+        points = e * MANAGER_WEIGHTS["emails"] + k * MANAGER_WEIGHTS["ratings"]
+        rows.append({"user_id": uid, "name": u.get("name") or uid, "team": team or "All teams", "emails": e, "ratings": k,
+                     "points": points, "team_reviewable": can, "team_rated": min(done, can) if can else done,
+                     "team_unrated": max(0, can - done), "rated_pct": rated_pct,
+                     "reply_points": e * MANAGER_WEIGHTS["emails"],
+                     "rating_points": round(k * MANAGER_WEIGHTS["ratings"] * (rated_pct / 100.0 if rated_pct is not None else 1.0), 1),
+                     "score": round(e * MANAGER_WEIGHTS["emails"]
+                                    + k * MANAGER_WEIGHTS["ratings"] * (rated_pct / 100.0 if rated_pct is not None else 1.0), 1)})
+    rows.sort(key=lambda r: (-r["score"], -r["ratings"], -r["emails"], r["name"].casefold()))
+    for i, r in enumerate(rows, 1):
+        r["rank"] = i
+    return rows
+
+
 # ------------------------------------------------------------------------- the day-by-day log (kept for good)
 COUNT_KEYS = ("came", "open", "awaiting_executed", "awaiting_not", "confirmed_executed", "confirmed_not", "rejected",
               "executed", "not_executed", "waiting", "confirmed")

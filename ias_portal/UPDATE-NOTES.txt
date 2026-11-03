@@ -37,6 +37,15 @@ F. NEW IN v5.18
      So a team of 2 that answered 100 calls and 20 e-mails beats a team of 100 that answered 200 calls and 50 e-mails, and
      with the same work per person the team that kept its SLA wins. A manager sees every team's totals (never its people).
      The e-mails' SLA of a past day is kept from this version on (earlier days count the requests' SLA only).
+   - BEST MANAGER (owner): next to the Best team, Insights > Analysis > Best performers ranks the managers of the day, and
+     the Best Performance e-mail has a "Manager of the day" part sent to them too (Settings > Daily summary > "Also the
+     Manager of the day", on by default):
+       manager score = 3 per e-mail the manager replied (always in full: replying is a manager's choice and whoever
+                       replies keeps every point of it)
+                     + 1 per reply the manager rated that day x the share of the team's replies of the day that were rated
+     So the fewer replies a team leaves unrated, the more its managers' ratings are worth. A rating withdrawn after an
+     appeal does not count; a manager with no reply and no rating that day is not listed. The replies that can be rated
+     (received that day, replied by an employee) are kept per day from this version on.
    - ADMIN > USERS: MANAGER PRIVILEGES (owner): editing a manager now asks "Manager only" (E-mail, Calls and the rest; in
      Workforce only their own schedule and attendance) or "Manager + the team's schedule" (makes and publishes the team's
      schedule, approves its shifts and leave, confirms its allowance). One OR SEVERAL managers of a team may have it (the

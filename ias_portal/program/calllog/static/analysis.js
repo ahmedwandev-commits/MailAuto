@@ -242,6 +242,32 @@
       h("p", { class: "hint" }, "Team score = score per person (the team's score ÷ the people who worked that day: an employee with at least one call, e-mail or ticket, a manager with at least one e-mail replied - leave, rest days and other tasks are not counted; of a manager only the e-mail replies count) × the share of its e-mails and tickets that kept their SLA. A small team that does more per person and keeps its SLA beats a big one."),
       banner, table, h("h3", {}, "Best employees"));
   }
+  // the Best manager (owner, v5.18): e-mails replied (3) + replies rated (1), x the share of the team's replies that were rated
+  function managersTable(d) {
+    const rows = d.managers || [];
+    if (!rows.length) return null;
+    const best = rows[0];
+    const banner = h("div", { class: "op-banner op-t-ok", "data-best-manager": "" }, OPS.icon("check"),
+      h("span", {}, h("strong", {}, "Manager of the day: "), h("strong", { dir: "auto" }, best.name),
+        ` · ${fmtNum(best.emails)} e-mails replied · ${fmtNum(best.ratings)} replies rated · team rated ${best.rated_pct == null ? "—" : fmtNum(best.rated_pct) + "%"} · score ${fmtNum(best.score)}`));
+    const table = OPS.table({
+      copy: true, caption: "Best manager", sort: { key: "rank", desc: false },
+      columns: [
+        { key: "rank", label: "#", num: true, sort: true, render: (r) => (r.rank === 1 ? OPS.chip("#1", "ok") : h("span", {}, `#${r.rank}`)), text: (r) => String(r.rank) },
+        { key: "name", label: "Manager", sort: true, render: (r) => h("span", { dir: "auto" }, r.name), text: (r) => r.name },
+        { key: "team", label: "Team", sort: true, render: (r) => h("span", { dir: "auto" }, r.team), text: (r) => r.team },
+        { key: "emails", label: "E-mails replied", num: true, sort: true, render: (r) => fmtNum(r.emails) },
+        { key: "ratings", label: "Replies rated", num: true, sort: true, render: (r) => fmtNum(r.ratings) },
+        { key: "team_unrated", label: "Team replies not rated", num: true, sort: true, render: (r) => (r.team_reviewable ? h("span", { title: `${fmtNum(r.team_rated)} of ${fmtNum(r.team_reviewable)} rated` }, fmtNum(r.team_unrated)) : h("span", { class: "hint" }, "—")) },
+        { key: "rated_pct", label: "Team rated", num: true, sort: true, render: (r) => pctOr(r.rated_pct) },
+        { key: "score", label: "Manager score", num: true, sort: true, render: (r) => h("strong", {}, fmtNum(r.score)) },
+      ], rows,
+    }).el;
+    return h("div", { class: "op-stack", "data-managers": "" },
+      h("h3", {}, "Best manager"),
+      h("p", { class: "hint" }, "Manager score = 3 per e-mail replied (always in full: whoever replies keeps every point) + 1 per reply rated × the share of the team's replies of the day that were rated. The fewer replies a team leaves unrated, the more its managers' ratings are worth."),
+      banner, table);
+  }
   function performersCard() {
     const body = h("div", { "data-perf": "" }, h("p", { class: "hint" }, "Loading…"));
     const dayI = h("input", { type: "date", "aria-label": "Day", "data-perf-day": "", value: perf.day || state.to || "" });
@@ -253,7 +279,10 @@
       if (seq !== perf.seq) return;
       perf.day = d.day;
       dayI.value = d.day;
-      body.replaceChildren(...[teamsTable(d), performersTable(d)].filter(Boolean));
+      const teamsPart = teamsTable(d), people = performersTable(d);
+      const heading = teamsPart ? teamsPart.lastChild : null;            // "Best employees" goes after the managers
+      if (heading) heading.remove();
+      body.replaceChildren(...[teamsPart, managersTable(d), heading, people].filter(Boolean));
     }
     dayI.addEventListener("change", load);
     load();
