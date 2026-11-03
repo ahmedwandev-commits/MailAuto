@@ -1,0 +1,33 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, tone_chip, csrf with context %}
+{% block att_title %}Roles & permissions{% endblock %}
+{% block content %}
+{# Every permission of an account is set on the portal's Admin › Users page (owner's rule): the role (Employee, Manager,
+   Administrator, Attendance admin) and the attendance ticks (General Manager, shift allowance export). This page only
+   shows who holds what, and what each role may do. #}
+{% call head('Roles & permissions', 'Who holds each attendance role, and what each role can do. Roles are given on Admin › Users.', 'shield') %}
+  {% if portal_admin %}<a class="btn btn-primary btn-sm" href="/admin#employees">{{ icon('users') }}Manage on Admin › Users</a>{% endif %}
+{% endcall %}
+<div class="grid g4 roles-grid">
+{% set groups = [('Administrator', 'admin', users|selectattr('role', 'equalto', 'admin')|rejectattr('att_admin')|list, summary['admin']),
+                 ('Attendance admin', 'att_admin', att_admins, 'Everything in Attendance for every team - and nothing else of the portal.'),
+                 ('General Manager', 'gm', users|selectattr('role', 'equalto', 'gm')|list, summary['gm']),
+                 ('Manager', 'manager', users|selectattr('role', 'equalto', 'manager')|list, summary['manager'])] %}
+{% for label, key, people, text in groups %}
+  <section class="card"><div class="card-head"><h2>{{ icon('user-check') }}{{ label }}</h2><span class="count">{{ people|length }}</span></div>
+    <p class="small muted">{{ text }}</p>
+    <ul class="person-list">{% for u in people %}<li><span class="grow"><b dir="auto" class="bidi">{{ u.name }}</b> <span class="small muted">{{ u.user_id }}{% if u.teams %} · {{ u.teams|join(', ') }}{% endif %}</span></span>
+      {{ tone_chip('Active', 't-ok') if u.active else tone_chip('Disabled', 't-danger') }}</li>{% else %}<li class="muted">Nobody holds this role.</li>{% endfor %}</ul></section>
+{% endfor %}
+</div>
+<section class="card"><div class="card-head"><h2>{{ icon('download') }}Shift allowance export</h2><span class="count">{{ allowance_holders|length }}</span></div>
+  <p class="small muted">Accounts that may export the HR attendance as shifts («نموذج ورديات»), besides the administrators and the Attendance admins. Ticked on Admin › Users.</p>
+  <ul class="person-list">{% for u in allowance_holders %}<li><span class="grow"><b dir="auto" class="bidi">{{ u.name }}</b> <span class="small muted">{{ u.user_id }}</span></span></li>{% else %}<li class="muted">Nobody was given it.</li>{% endfor %}</ul>
+</section>
+<section class="card flush"><div class="tbl-wrap flat"><table class="tbl">
+  <thead><tr><th>Capability</th><th>Administrator / Attendance admin</th><th>General Manager</th><th>Manager</th></tr></thead><tbody>
+  {% for cap, a, g, m in matrix %}<tr><td>{{ cap }}</td>
+    {% for v in (a, g, m) %}<td>{% if v is sameas true %}{{ tone_chip('Yes', 't-ok', 'check') }}{% elif v is sameas false %}{{ tone_chip('No', 't-na', 'x') }}{% else %}{{ tone_chip(v, 't-info', 'check') }}{% endif %}</td>{% endfor %}</tr>{% endfor %}
+  </tbody></table></div></section>
+<p class="small muted">“Own teams” = the teams listed on the manager's portal account (<code>__all__</code> = every team; a manager with no team sees nobody). The General Manager role has no write access anywhere: even a crafted request is refused by the server.</p>
+{% endblock %}

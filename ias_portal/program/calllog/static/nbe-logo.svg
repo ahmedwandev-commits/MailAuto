@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="56 56 780 780" role="img" aria-label="NBE">
+  <defs>
+    <linearGradient id="nbe-gold" gradientUnits="userSpaceOnUse" x1="283" y1="255" x2="610" y2="800">
+      <stop offset="0" stop-color="#f9c600"/>
+      <stop offset="1" stop-color="#e8650f"/>
+    </linearGradient>
+  </defs>
+  <path d="M218 718V176H676V718Q756 712 756 630V176Q756 92 672 92H220Q136 92 136 176V630Q136 712 218 718Z" fill="#006847"/>
+  <g fill="url(#nbe-gold)">
+    <path d="M283 255H610A163.5 192 0 0 1 283 255Z"/>
+    <path d="M283 502H357V800H323Q283 800 283 760Z"/>
+    <path d="M409 502H484V800H409Z"/>
+    <path d="M536 502H610V760Q610 800 570 800H536Z"/>
+  </g>
+</svg>

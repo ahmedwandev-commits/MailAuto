@@ -1,0 +1,141 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, kpi, banner, chip, tone_chip, shift, csrf, empty, crumbs with context %}
+{% from "attendance/_att_parts.html" import permit_chips with context %}
+{% block att_title %}{{ rep.employee.name|short_name(3) }}{% endblock %}
+{% block content %}
+{% set e = rep.employee %}{% set s = rep.summary %}{% set sc = rep.score %}
+{# Dashboard 3 of 3 - ONE PERSON: their schedule, attendance, permits and score over a period #}
+{{ crumbs([('Today', url_for('att_planning.day', date=d2))]
+          + ([(e.team, url_for('att_planning.team', team=e.team, date=d2))] if e.team else [])
+          + [(e.name|short_name(3), '')]) }}
+
+<section class="card">
+  <div class="row">
+    {{ avatar_for(e.id, e.name, 'avatar-lg') }}
+    <div class="grow"><h1 dir="auto" class="bidi">{{ e.name }}</h1>
+      <p class="muted">#{{ e.id }} · <span dir="auto" class="bidi">{{ e.department }}</span> · team <b dir="auto" class="bidi">{{ e.team or 'unassigned' }}</b>{% if manager %} · manager <span dir="auto" class="bidi">{{ manager }}</span>{% endif %}</p></div>
+    <div class="actions">
+      <a class="btn btn-ghost btn-sm" href="{{ url_for('att_people.score', emp_id=e.id, **{'from': d1, 'to': d2}) }}">{{ icon('award') }}Score explanation</a>
+      <a class="btn btn-ghost btn-sm" href="{{ url_for('att_schedule.month', year=d2[:4]|int, month=d2[5:7]|int) }}">{{ icon('calendar') }}Calendar</a>
+    </div>
+  </div>
+  <form class="toolbar mt" method="get">
+    <label class="field">From<input type="date" name="from" value="{{ d1 }}"></label><label class="field">To<input type="date" name="to" value="{{ d2 }}"></label>
+    <button class="btn btn-primary" type="submit">Apply</button>
+    <span class="sp"></span>
+    <span class="seg">{% for label, a, b in presets %}<a href="{{ url_for('att_people.profile', emp_id=e.id, **{'from': a, 'to': b}) }}" {% if a == d1 and b == d2 %}aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}</span>
+  </form>
+</section>
+
+{% for n in sc.notes %}{% call banner('t-warn' if 'not configured' in n or 'Insufficient' in n or 'not complete' in n else 't-info', 'info') %}{{ n }}{% endcall %}{% endfor %}
+
+<div class="grid g-side">
+  <section class="card" aria-labelledby="sc-h">
+    <div class="card-head"><h2 id="sc-h">{{ icon('award') }}Attendance score</h2></div>
+    <div class="scorecard">
+      {{ donut([('Score', sc.score, 't-ok'), ('Deducted', sc.start - sc.score, 't-danger')], 130, sc.score|num, 'of ' ~ sc.start) }}
+      <div class="stack">
+        {% if sc.category %}{{ tone_chip(sc.category, sc.category_tone or 't-ok', 'award') }}{% else %}{{ tone_chip('No category — rules not configured' if not sc.configured else 'No category', 't-na') }}{% endif %}
+        <p class="eq">{{ sc.start }} − {{ sc.total_deduction|num }} = <b>{{ sc.score|num }}</b></p>
+        <p class="small muted">{% for d in sc.deductions if d.total %}{{ d.label }} −{{ d.total|num(2) }}{{ ' · ' if not loop.last }}{% else %}no deductions{% endfor %}</p>
+        <p class="small muted">{{ sc.total_deduction|num }} point(s) deducted · rules {% if rep.rules_version %}v{{ rep.rules_version }}{% else %}not set{% endif %}</p>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('att_people.score', emp_id=e.id, **{'from': d1, 'to': d2}) }}">Open the scorecard{{ icon('arrow-right') }}</a>
+      </div>
+    </div>
+  </section>
+  <div class="stack">
+    <section class="kpis">
+      {{ kpi('Scheduled days', s.scheduled_days, s.judged_days ~ ' evaluated', 's0', 'calendar') }}
+      {{ kpi('Present days', s.present_days, 'attendance ' ~ (s.attendance_pct|num ~ '%' if s.attendance_pct is not none else 'n/a'), 't-ok', 'user-check') }}
+      {{ kpi('Absent (unverified)', s.absent_days, s.verified_unexcused_days ~ ' verified unexcused · ' ~ s.excused_absence_days ~ ' excused', 't-danger' if s.absent_days else 't-na', 'user-x') }}
+      {{ kpi('Hours', s.actual_hours|num ~ ' / ' ~ s.scheduled_hours|num, 'actual / scheduled (' ~ ('%+.1f'|format(s.hours_diff)) ~ ')', 's2', 'clock') }}
+    </section>
+    <section class="kpis">
+      {{ kpi('Late arrivals', s.late_count, s.late_minutes ~ ' min · avg ' ~ s.avg_late_minutes ~ (' · repeated' if s.repeated_lateness else '') ~ ((' · ' ~ s.late_excused ~ ' excused') if s.late_excused else ''), 't-warn' if s.late_count else 't-na', 'clock') }}
+      {{ kpi('Early departures', s.early_count, s.early_minutes ~ ' min', 't-warn' if s.early_count else 't-na', 'arrow-left') }}
+      {{ kpi('Missing IN · OUT · both', s.missing_in ~ ' · ' ~ s.missing_out ~ ' · ' ~ s.missing_both, 'not penalised', 't-warn' if (s.missing_in + s.missing_out + s.missing_both) else 't-na', 'alert-circle') }}
+      {{ kpi('Exceptions', s.exceptions, 'to review', 't-warn' if s.exceptions else 't-na', 'alert-triangle') }}
+      {{ kpi('اذن حضور · اذن انصراف needed', s.late_permit_required ~ ' · ' ~ s.early_permit_required, s.permits_reviewed ~ ' reviewed', 't-warn' if (s.late_permit_required + s.early_permit_required) else 't-na', 'file') }}
+    </section>
+  </div>
+</div>
+
+<div class="grid g3">
+  <section class="card"><div class="card-head"><h2>{{ icon('coffee') }}Weekly rest days</h2></div>
+    <dl class="facts"><div class="fact"><dt>Planned days off</dt><dd>{{ rest.planned_off }}</dd></div>
+      <div class="fact {{ 't-warn' if rest.worked_on_off }}"><dt>Worked on a day off</dt><dd>{{ rest.worked_on_off }}</dd></div>
+      <div class="fact"><dt>Replacement days taken</dt><dd>{{ rest.comp_taken|num }}</dd></div></dl>
+    <p class="small muted mt">Compliance = planned rest days actually rested. Days worked on a rest day are exceptions for review.</p></section>
+  <section class="card"><div class="card-head"><h2>{{ icon('plane') }}Leave</h2></div>
+    <p><b>{{ leave.total|num }}</b> day(s) in the period{% if leave.by_type %}: {% for t, n in leave.by_type.items() %}{{ t }} {{ n|num }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}</p>
+    <p class="small muted">Requests — approved {{ leave.status.approved }}, pending {{ leave.status.pending }}, rejected {{ leave.status.rejected }}</p>
+    <table class="tbl mt"><thead><tr><th>{{ year }}</th><th class="num">Entitled</th><th class="num">Taken</th><th class="num">Left</th></tr></thead><tbody>
+      {% for t in types %}{% set b = bal[t.code] %}<tr><td>{{ t.name }}</td><td class="num">{{ b.entitlement|num }}</td><td class="num">{{ b.taken|num }}</td><td class="num">{{ b.remaining|num }}</td></tr>{% endfor %}</tbody></table>
+    <p class="small muted">“—” = no entitlement entered yet.</p></section>
+  <section class="card"><div class="card-head"><h2>{{ icon('repeat') }}Compensatory days</h2></div>
+    <dl class="facts"><div class="fact"><dt>Earned</dt><dd>{{ comp.earned|num }}</dd></div><div class="fact"><dt>Taken</dt><dd>{{ comp.taken|num }}</dd></div>
+      <div class="fact"><dt>Remaining</dt><dd>{{ comp.remaining|num }}</dd></div><div class="fact"><dt>Planned</dt><dd>{{ comp.planned_open|num }}</dd></div></dl>
+    <h3 class="mt">Forgotten-punch reports</h3>
+    {% for r in punch_reports %}<div class="row small"><span>{{ r.work_date|dm }} · {{ r.kind }}</span>{{ tone_chip(r.status, {'verified': 't-ok', 'rejected': 't-danger'}.get(r.status, 't-info')) }}
+      {% if can_edit and r.status == 'pending' %}<form method="post" action="{{ url_for('att_attendance.punch_decide', report_id=r.id, decision='verified') }}" class="inline-form">{{ csrf() }}<input type="hidden" name="emp" value="{{ e.id }}"><input type="hidden" name="back_from" value="{{ d1 }}"><input type="hidden" name="back_to" value="{{ d2 }}"><button class="btn btn-ghost btn-sm">Verify</button></form>{% endif %}</div>
+    {% else %}<p class="small muted">None in this period.</p>{% endfor %}</section>
+</div>
+
+<section class="card flush" aria-labelledby="days-h">
+  <div class="card-head"><h2 id="days-h">{{ icon('calendar-check') }}Planned vs actual, day by day</h2>
+    <span class="grow"></span><label class="check small"><input type="checkbox" data-exceptions-only> Exceptions only</label></div>
+  <div class="card-head daystrip" aria-label="Period overview">
+    {% for d in rep.days %}<span class="ds {{ d.status|status_class }} {{ 'we' if d.date|dayname in ('Fri', 'Sat') }}" title="{{ d.date|dmy }} · {{ d.status|status_label }}{% if d.late_minutes %} · late {{ d.late_minutes }} min{% endif %}">{{ d.date[8:] }}</span>{% endfor %}
+  </div>
+  <div class="tbl-wrap"><table class="tbl" id="daytable">
+    <thead><tr><th>Date</th><th>Planned</th><th>Expected</th><th>IN</th><th>OUT</th><th class="num">Late</th><th class="num">Early</th><th class="num">Sched. h</th><th class="num">Actual h</th><th>Status</th><th>Notes</th>{% if can_edit %}<th></th>{% endif %}</tr></thead>
+    <tbody>
+    {% for d in rep.days %}{% set ex = d.status in ('absent', 'missing_punch', 'rest_day_worked', 'late') or d.flags or d.early_minutes %}
+      <tr data-ex="{{ 1 if ex else 0 }}"><td class="nowrap">{{ d.date|dm }} <span class="muted">{{ d.date|dayname }}</span></td>
+        <td>{% for c in d.planned_codes %}{{ shift(c) }} {% else %}<span class="muted">—</span>{% endfor %}</td>
+        <td class="nowrap">{% if d.expected_start %}{{ d.expected_start }}–{{ d.expected_end }}{% endif %}</td>
+        <td>{{ d.actual_in|hm }}</td><td>{{ d.actual_out|hm }}</td><td class="num">{{ d.late_minutes or '' }}</td><td class="num">{{ d.early_minutes or '' }}</td>
+        <td class="num">{{ d.scheduled_hours|num if d.scheduled_hours else '' }}</td><td class="num">{{ d.actual_hours|num if d.actual_hours is not none else '' }}</td>
+        <td>{{ chip(d.status) }}{% if d.leave_type %} <span class="chip t-info plain">{{ d.leave_type }}</span>{% endif %}{{ permit_chips(d) }}</td>
+        <td class="small muted">{{ d.flags|join(', ')|replace('_', ' ') }}</td>
+        {% if can_edit %}<td class="actions">{% if d.status in ('absent', 'missing_punch', 'late') or d.flags %}<button class="btn btn-ghost btn-sm" type="button" data-dialog="actDlg" data-emp="{{ e.id }}" data-date="{{ d.date }}" data-label="{{ d.date|dmy }}" data-tab="{{ 'permit' if (d.late_permit == 'required' or d.early_permit == 'required') else ('review' if d.status == 'absent' else 'fix') }}" data-kind="{{ 'early' if (d.early_permit == 'required' and d.late_permit != 'required') else 'late' }}">{{ icon('pencil') }}Review</button>{% endif %}</td>{% endif %}</tr>
+    {% endfor %}
+    </tbody></table></div>
+</section>
+
+{% if can_edit %}
+<dialog class="dlg" id="actDlg" aria-labelledby="dlgTitle">
+  <div class="dlg-head"><h2 id="dlgTitle">Review <span data-fill="label"></span></h2><span class="grow"></span><button class="iconbtn" type="button" data-close aria-label="Close">{{ icon('x') }}</button></div>
+  <div class="dlg-body">
+    <div class="tabs-in" role="tablist"><button type="button" data-tabbtn="fix" aria-selected="true">Correct a punch</button><button type="button" data-tabbtn="permit" aria-selected="false">Permit review</button><button type="button" data-tabbtn="review" aria-selected="false">Absence review</button><button type="button" data-tabbtn="report" aria-selected="false">Forgotten-punch report</button></div>
+    <form method="post" action="{{ url_for('att_attendance.correct') }}" class="stack" data-tabpane="fix">
+      {{ csrf() }}<input type="hidden" name="emp" data-fill="emp"><input type="hidden" name="date" data-fill="date"><input type="hidden" name="back_from" value="{{ d1 }}"><input type="hidden" name="back_to" value="{{ d2 }}">
+      <div class="form-grid"><label class="field">Punch<select name="field"><option value="in_time">Check-in</option><option value="out_time">Check-out</option></select></label><label class="field">Correct time<input name="value" placeholder="HH:MM" required></label></div>
+      <label class="field">Reason (kept in the audit trail)<textarea name="reason" required></textarea></label>
+      <div class="dlg-foot"><button class="btn btn-primary" type="submit">Save correction</button></div>
+    </form>
+    <form method="post" action="{{ url_for('att_attendance.absence_review') }}" class="stack" data-tabpane="review" hidden>
+      {{ csrf() }}<input type="hidden" name="emp" data-fill="emp"><input type="hidden" name="date" data-fill="date"><input type="hidden" name="back_from" value="{{ d1 }}"><input type="hidden" name="back_to" value="{{ d2 }}">
+      <label class="field">Decision<select name="decision"><option value="unexcused">Verified unexcused absence</option><option value="excused">Excused</option></select></label>
+      <label class="field">Reason<textarea name="reason" required></textarea></label>
+      <p class="small muted">Only a verified unexcused absence can lower the attendance score.</p>
+      <div class="dlg-foot"><button class="btn btn-primary" type="submit">Save review</button></div>
+    </form>
+    <form method="post" action="{{ url_for('att_attendance.permit_review') }}" class="stack" data-tabpane="permit" hidden>
+      {{ csrf() }}<input type="hidden" name="emp" data-fill="emp"><input type="hidden" name="date" data-fill="date"><input type="hidden" name="back_from" value="{{ d1 }}"><input type="hidden" name="back_to" value="{{ d2 }}">
+      <div class="form-grid"><label class="field">Permit<select name="kind" data-fill-select="kind"><option value="late">اذن حضور (late arrival)</option><option value="early">اذن انصراف (early departure)</option></select></label>
+        <label class="field">Review result<select name="decision"><option value="provided">Permit provided</option><option value="excused">Excused by management</option><option value="rejected">Not excused</option></select></label></div>
+      <label class="field">Reason<textarea name="reason" required></textarea></label>
+      <p class="small muted">A missing permit never makes the employee absent and never lowers the score by itself; it stays visible as an exception until you record the review. “Permit provided” and “Excused” clear the lateness penalty basis; “Not excused” keeps it.</p>
+      <div class="dlg-foot"><button class="btn btn-primary" type="submit">Save review</button></div>
+    </form>
+    <form method="post" action="{{ url_for('att_attendance.punch_report') }}" class="stack" data-tabpane="report" hidden>
+      {{ csrf() }}<input type="hidden" name="emp" data-fill="emp"><input type="hidden" name="date" data-fill="date"><input type="hidden" name="back_from" value="{{ d1 }}"><input type="hidden" name="back_to" value="{{ d2 }}">
+      <label class="field">The employee says they forgot<select name="kind"><option value="in">to punch in</option><option value="out">to punch out</option><option value="both">both</option></select></label>
+      <label class="field">Employee's reason<textarea name="reason"></textarea></label>
+      <div class="dlg-foot"><button class="btn btn-primary" type="submit">Record report</button></div>
+    </form>
+  </div>
+</dialog>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,302 @@
+<!doctype html>
+{# The user guide (v5.17): every section is shown only to the roles it concerns (``who`` from views/guide.py). Arabic, own page. #}
+{% set IMG = 'attendance/guide/img/' %}
+{% macro img(name, alt) %}<img src="{{ url_for('static', filename=IMG ~ name) }}" alt="{{ alt }}" loading="lazy">{% endmacro %}
+{% macro num(v) %}{{ ('%g' % v) if v is number else v }}{% endmacro %}
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>دليل القوى العاملة · بوابة IAS</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='attendance/guide/guide.css') }}">
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>دليل القوى العاملة</h1>
+  <p>بوابة IAS · الأجزاء اللي تخصك انت بس
+    ({% if who.admin %}الأدمن{% elif who.affairs %}الشئون الإدارية{% elif who.gm %}المدير العام{% elif who.manager %}مدير فريق{% else %}موظف{% endif %}).</p>
+</header>
+
+{# ------------------------------------------------------------------------------------------------ contents: only what is shown #}
+<nav class="toc" aria-label="المحتويات">
+  {% if who.admin %}<a href="#roles">مين يعمل إيه</a>{% endif %}
+  {% if who.lead or who.affairs %}<a href="#today">اليوم</a><a href="#plan">الجدول</a>{% endif %}
+  {% if who.writer or who.affairs or who.gm %}<a href="#leave">الإجازات وبدل الراحة</a>{% endif %}
+  {% if who.manager or who.gm or who.office %}<a href="#team">جدول الفريق</a>{% endif %}
+  {% if who.employee %}<a href="#myatt">حضوري (الأوفر تايم والبدل)</a><a href="#mine">جدولي</a>{% endif %}
+  {% if who.lead or who.affairs or who.employee or who.exporter %}<a href="#allow">بدل الورديات وتعزيزه</a>{% endif %}
+  {% if who.office %}<a href="#hr">الاستيراد</a>{% endif %}
+  {% if who.lead or who.affairs %}<a href="#analysis">التحليل</a>{% endif %}
+  {% if who.office %}<a href="#settings">الإعدادات</a>{% endif %}
+</nav>
+
+{% if who.admin %}
+<section id="roles" aria-labelledby="roles-h">
+  <h2 id="roles-h">مين يعمل إيه</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>الجزء</th><th>الموظف</th><th>مدير الفريق</th><th>المدير العام</th><th>الشئون الإدارية</th><th>الأدمن</th></tr></thead>
+    <tbody>
+      <tr><td>اليوم والجدول</td><td class="n">—</td><td class="y">فريقه</td><td>عرض فقط</td><td class="y">✓</td><td class="y">✓</td></tr>
+      <tr><td>الإجازات وبدل الراحة</td><td class="n">—</td><td class="y">يسجّل لفريقه</td><td>عرض فقط</td><td class="y">✓</td><td class="y">✓</td></tr>
+      <tr><td>جدول الفريق</td><td class="n">—</td><td class="y">يبني ويبعت</td><td class="y">يعتمد / يرجّع</td><td class="y">الليلي والعطلات والإيميل</td><td class="y">✓</td></tr>
+      <tr><td>تعديل الورديات</td><td class="n">—</td><td class="y">فريقه</td><td class="n">—</td><td class="y">✓</td><td class="y">✓</td></tr>
+      <tr><td>حضوري (الأوفر تايم والبدل)</td><td class="y">✓</td><td class="y">✓ + تبويب الفريق</td><td>تبويب الفريق</td><td class="y">✓</td><td>تبويب الفريق</td></tr>
+      <tr><td>تعزيز بدل الورديات</td><td class="y">يعزز / يعترض</td><td class="y">يعزز الفريق</td><td class="y">يعزز القطاع</td><td>يوصله الإيميل</td><td class="y">يبدأ الإرسال</td></tr>
+      <tr><td>كشف البدل (التصدير)</td><td class="n">—</td><td>بصلاحية</td><td>بصلاحية</td><td class="y">✓</td><td class="y">✓</td></tr>
+      <tr><td>الاستيراد (الحضور والجدول)</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="y">✓</td><td class="y">✓</td></tr>
+      <tr><td>التحليل</td><td class="n">—</td><td class="y">فريقه</td><td class="y">كل الفرق</td><td class="y">✓</td><td class="y">✓</td></tr>
+      <tr><td>الإعدادات</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="y">إعدادات الحضور</td><td class="y">✓ + المستخدمين</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note"><b>مدير واحد لكل فريق</b> بيدير الفريق في القوى العاملة: اللي تختاره من الإعدادات › مديرو الفرق (الفريق اللي فيه مدير واحد بياخده تلقائيًا). أي مدير تاني في الفريق بيشوف حضوره وجدوله بس هنا، وبيفضل له البريد والمكالمات.<br>
+  كل شخص (موظف أو مدير أو شئون إدارية) في <b>فريق واحد</b> في القوى العاملة. لو حسابه عليه أكتر من فريق (علشان البريد) بيتحسب في أول فريق، أو اللي تختاره من الإعدادات › الموظفون والفرق. «غير مصنف» للبريد بس.
+    الشئون الإدارية بتشوف القوى العاملة بس: لا بريد ولا طلبات ولا أي حاجة تانية.</p>
+</section>
+{% endif %}
+
+<div class="codes" aria-label="رموز الورديات">
+  <span><b>M</b>صباحي 7-3</span><span><b>D</b>عادي 8-4</span><span><b>E</b>مسائي 2-10</span><span><b>N</b>ليلي 10-7</span>
+  <span><b>OFF</b>راحة / إجازة</span><span><b>CD</b>بدل راحة</span><span><b>SB</b>احتياطي</span>
+</div>
+
+{% if who.lead or who.affairs %}
+<section id="today" aria-labelledby="today-h">
+  <h2 id="today-h">اليوم <small>القوى العاملة › اليوم</small></h2>
+  <div class="row">
+    <figure>{{ img('today.jpg', 'شاشة اليوم') }}<figcaption>اليوم: متوقع عمله، وصل، لم يصل، في إجازة، والورديات.</figcaption></figure>
+    <ul>
+      <li>اختار اليوم{% if not who.manager %} والفريق{% endif %} من فوق.</li>
+      <li>الكروت بتوضح مين متوقع، مين وصل، ومين لسه. اضغط فريق لتفاصيله، أو اسم موظف للوحته.</li>
+      <li>«محتاج انتباه»: اللي ما وصلش واللي محتاج إذن.</li>
+      {% if who.writer or who.affairs %}<li><b class="k">تعديل الورديات</b> من الزرار فوق لتعديل يوم موظف بسرعة.</li>{% endif %}
+      <li>قبل رفع شيت الموارد البشرية لليوم، اللي فتح البوابة بيظهر «وصل» كعلامة إنه بدأ شغل بس؛ الحساب الرسمي من الشيت.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="plan" aria-labelledby="plan-h">
+  <h2 id="plan-h">الجدول <small>القوى العاملة › الجدول</small></h2>
+  <p class="where">التبويبات: الجدول الشهري · الخطة الأسبوعية · جدول الفريق{% if who.writer or who.affairs %} · تعديل الورديات{% endif %}</p>
+  <div class="row">
+    <figure>{{ img('monthly.jpg', 'الجدول الشهري') }}<figcaption>الجدول الشهري الرسمي لكل موظف.</figcaption></figure>
+    <ul>
+      <li><b class="k">الجدول الشهري</b> هو الجدول الرسمي (بعد اعتماد جدول الفريق أو رفع الإكسل).</li>
+      {% if who.writer or who.affairs %}<li>اضغط على أي خانة لتغيير وردية اليوم{% if who.manager %} (لفريقك){% endif %} واكتب السبب.</li>{% endif %}
+      <li>«حسب الموظف» أو «حسب اليوم»{% if not who.manager %}، والفلتر بالفريق{% endif %}.</li>
+    </ul>
+  </div>
+  <div class="row">
+    <figure>{{ img('week.jpg', 'الخطة الأسبوعية') }}<figcaption>الخطة الأسبوعية: توافر كل وردية لكل يوم.</figcaption></figure>
+    <ul>
+      <li><b class="k">الخطة الأسبوعية</b>: توافر كل وردية لكل يوم{% if who.writer or who.affairs %}، وتقدر تغيّر وردية أي يوم - كل تغيير بيتسجل بسببه{% endif %}.</li>
+      {% if who.writer or who.affairs %}<li><b class="k">تعديل الورديات</b>: غيّر وردية موظف أو سجّل له إجازة في يوم معيّن. كل تغيير بيتسجل بالقيمة القديمة والجديدة والسبب.</li>{% endif %}
+    </ul>
+  </div>
+  {% if who.writer or who.affairs %}
+  <div class="row">
+    <figure>{{ img('changes.jpg', 'تعديل الورديات') }}<figcaption>تعديل الورديات: كل موظف ووردية اليوم وحالته.</figcaption></figure>
+    <ul>
+      <li>اختار اليوم{% if not who.manager %} والفريق{% endif %}، ودوس <b class="k">تغيير الوردية</b> أو <b class="k">إضافة إجازة</b> قدام الموظف.</li>
+      <li>الوردية اللي تحطها هنا هي اللي بتتحسب في البدل والأوفر تايم.</li>
+    </ul>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if who.writer or who.affairs or who.gm %}
+<section id="leave" aria-labelledby="leave-h">
+  <h2 id="leave-h">الإجازات وبدل الراحة <small>القوى العاملة › إجازة</small></h2>
+  <div class="row">
+    <figure>{{ img('leave.jpg', 'الإجازات') }}<figcaption>تقويم الإجازات والأرصدة.</figcaption></figure>
+    <ol>
+      {% if who.writer or who.affairs %}<li>دوس <b class="k">تسجيل إجازة</b> لأي فرد{% if who.manager %} في فريقك{% endif %}: النوع والتاريخ والسبب.</li>{% endif %}
+      <li>الإجازة بتتحسب على طول، وبتظهر في اليوم وجدول الفريق والجدول الشهري.</li>
+      <li>الموظف اللي في إجازة مش بيتحسب غايب، ومش بيتحط في وردية يومها.</li>
+      <li>تبويب <b class="k">بدل الراحة</b> لأيام بدل الراحة.</li>
+    </ol>
+  </div>
+  {% if who.admin %}<p class="note">رصيد الإجازات السنوي: زرار <b>تحديد الاستحقاق</b> في كارت الأرصدة (الأدمن بس).</p>{% endif %}
+</section>
+{% endif %}
+
+{% if who.manager or who.gm or who.office %}
+<section id="team" aria-labelledby="team-h">
+  <h2 id="team-h">جدول الفريق <small>القوى العاملة › الجدول › جدول الفريق</small></h2>
+  <div class="flow" aria-label="المسار">
+    <span>المدير يبني الشهر</span><i>←</i><span>المدير العام يعتمد = رسمي فورًا</span><i>←</i><span>الشئون الإدارية: الليلي والعطلات + الإيميل</span>
+  </div>
+  {% if who.manager or who.admin %}
+  <h3>مدير الفريق</h3>
+  <div class="row">
+    <figure>{{ img('manager.jpg', 'جدول الفريق للمدير') }}<figcaption>الشهر أسبوع تحت أسبوع: صباحي · عادي 8-4 · مسائي · بدل راحة لكل يوم شغل.</figcaption></figure>
+    <ol>
+      <li>اسحب اسم الموظف للوردية (على الموبايل: دوس الاسم ثم الوردية). تقدر تحط نفسك كمان.</li>
+      <li><b class="k">باقي الأسبوع</b> ينسخ اليوم لباقي الأسبوع، و<b class="k">انسخ الأسبوع الأول لكل الأسابيع</b> للشهر كله.</li>
+      <li><b class="k">حفظ</b> ثم <b class="k">إرسال للمدير العام</b>. لو اترجع لك، الملاحظة بتظهر فوق: عدّل وابعته تاني.</li>
+    </ol>
+  </div>
+  {% endif %}
+  {% if who.gm or who.admin %}
+  <h3>المدير العام</h3>
+  <div class="row">
+    <figure>{{ img('review.jpg', 'مراجعة جدول الفريق') }}<figcaption>مربع «مراجعة» بيظهر لما المدير يبعت.</figcaption></figure>
+    <ol>
+      <li>افتح الفريق من جدول الفريق. تقدر تنقل الموظفين وتدوس <b class="k">حفظ</b>.</li>
+      <li><b class="k">اعتماد</b>: الجدول يبقى رسمي على طول. أو اكتب ملاحظة ودوس <b class="k">إرجاع</b>.</li>
+    </ol>
+  </div>
+  {% endif %}
+  {% if who.office %}
+  <h3>الشئون الإدارية</h3>
+  <div class="row">
+    <figure>{{ img('overview.jpg', 'كل الفرق') }}<figcaption>حالة كل فريق والعطلات الرسمية وزرار الإيميل.</figcaption></figure>
+    <ol>
+      <li>أضف <b class="k">العطلات الرسمية</b> للشهر (محدش بيتحط فيها).</li>
+      <li>افتح أي فريق وحط <b class="k">الليلي</b> و<b class="k">الإجازة</b> (الخانتين دول ليك انت بس).</li>
+      <li>بعد اعتماد كل الفرق: <b class="k">إرسال إيميل الجدول</b> (العناوين من الإعدادات).</li>
+      <li>النشر من جديد بيحل محل الشهر كله.</li>
+    </ol>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if who.employee %}
+<section id="myatt" aria-labelledby="myatt-h">
+  <h2 id="myatt-h">حضوري: الأوفر تايم والبدل المتوقع <small>القوى العاملة › حضوري</small></h2>
+  <div class="row">
+    <figure>{{ img('myatt.jpg', 'حضوري') }}<figcaption>تبويب الحضور: الدخول والخروج والساعات والأوفر تايم لكل يوم.</figcaption></figure>
+    <ul>
+      <li>بتشوف شهرك انت بس، في 3 تبويبات: <b class="k">الحضور</b> · <b class="k">بدل الورديات</b> · <b class="k">الوقت الإضافي</b>.</li>
+      <li>كل الأرقام من شيت الموارد البشرية اللي بيرفعه الأدمن. اليوم اللي شيته لسه ما اترفعش بيظهر «في انتظار شيت الموارد البشرية» ويتحسب متوقع من جدولك لحد ما يترفع.</li>
+    </ul>
+  </div>
+  <div class="row">
+    <figure>{{ img('myatt-allowance.jpg', 'البدل المتوقع') }}<figcaption>البدل المتوقع بالجنيه (الانتقال + الوجبات): حتى الآن + المتبقي من جدولك.</figcaption></figure>
+    <ul>
+      <li><b class="k">بدل الانتقال</b> لكل وردية: صباحي {{ num(rates.morning.rate) }} · مسائي {{ num(rates.evening.rate) }} · ليلي {{ num(rates.night.rate) }} · عطلة {{ num(rates.rest_day.rate) }} {{ currency }}.</li>
+      <li><b class="k">الوجبات</b> ({{ num(ot.meal_breakfast) }} {{ currency }}): الصباحي فطار، المسائي غدا، الليلي عشا - من أول {{ num(ot.base_hours) }} ساعات. ولو قعدت {{ num(ot.long_day_hours) }} ساعات أو أكتر وجبة إضافية.</li>
+      <li>يوم الإجازة لو اشتغلت فيه: وجبة حسب وقت حضورك.</li>
+      {% if who.manager %}<li>المشرف: الوردية الصباحية بس (والعطلات) مع الفطار، والوجبة الإضافية لو قعد {{ num(ot.long_day_hours) }} ساعات.</li>{% endif %}
+      <li>ده تقدير؛ البدل الرسمي هو اللي بيتعزز آخر الشهر.</li>
+    </ul>
+  </div>
+  <div class="row">
+    <figure>{{ img('myatt-overtime.jpg', 'الوقت الإضافي') }}<figcaption>الوقت الإضافي: أسبوع بأسبوع والنسبة من الشهر العادي.</figcaption></figure>
+    <ul>
+      <li>بيبدأ بعد {{ num(ot.base_hours) }} ساعات شغل. قبل {{ ot.evening_from }} ×{{ num(ot.day_rate) }}، من {{ ot.evening_from }} لـ {{ ot.night_from }} ×{{ num(ot.evening_rate) }}، بعد {{ ot.night_from }} ×{{ num(ot.night_rate) }} (لحد {{ ot.night_until }}، ولحد {{ ot.night_until_rest }} صباح الجمعة والسبت).</li>
+      <li>يوم راحة أو عطلة اشتغلت فيه: لو أخدت بدل راحة في يوم شغل (الأحد للخميس) بعده في نفس الأسبوع أو الأسبوع اللي بعده = مفيش أوفر تايم، بدل الانتقال بس. لو لأ = كل ساعة ×{{ num(ot.holiday_rate) }}. الجمعة أو السبت اللي بعدها مش بدل راحة.</li>
+      <li>بيتخصم {{ num(ot.weekly_deduction_hours) }} ساعة كل أسبوع، والحد الأقصى {{ num(ot.cap_pct) }}% من {{ num(ot.base_days) }} يوم × {{ num(ot.base_hours) }} ساعات ({{ num(ot.base_days * ot.base_hours * ot.cap_pct / 100) }} ساعة).</li>
+    </ul>
+  </div>
+  {% if who.manager %}
+  <div class="row">
+    <figure>{{ img('myatt-team.jpg', 'تبويب الفريق') }}<figcaption>تبويب الفريق: الأوفر تايم وعدد الورديات المتوقعة لكل فرد في فريقك.</figcaption></figure>
+    <ul><li>تبويب <b class="k">الفريق</b>: الأوفر تايم وعدد الورديات لكل فرد في فريقك، مرتبة بالأوفر تايم.</li>
+      <li>مبالغ البدل بتاعة الموظفين مش بتظهر لمدير الفريق، لا هنا ولا في تعزيز بدل الورديات. انت بتشوف مبالغك انت بس في تبويب بدل الورديات.</li></ul>
+  </div>
+  {% endif %}
+</section>
+
+<section id="mine" aria-labelledby="mine-h">
+  <h2 id="mine-h">جدولي <small>القوى العاملة › جدولي</small></h2>
+  <div class="row">
+    <figure>{{ img('mine.jpg', 'جدولي') }}<figcaption>الأيام السبعة الجاية والشهر بالحضور والانصراف.</figcaption></figure>
+    <ol>
+      <li>شوف ورديات الأيام الجاية والشهر.</li>
+      <li>آخر الشهر: <b class="k">تعزيز بدل ورديتي</b> أو <b class="k">اعتراض</b> مع كتابة السبب.</li>
+      <li>نسيت بصمة؟ هيوصلك تنبيه وإيميل. لو حاجة غلط كلّم مديرك.</li>
+    </ol>
+  </div>
+</section>
+{% endif %}
+
+{% if who.lead or who.affairs or who.employee or who.exporter %}
+<section id="allow" aria-labelledby="allow-h">
+  <h2 id="allow-h">بدل الورديات وتعزيزه <small>القوى العاملة › البدل</small></h2>
+  <div class="flow" aria-label="مسار التعزيز">
+    <span>الأدمن: إرسال للتعزيز</span><i>←</i><span>الموظف يعزز أو يعترض</span><i>←</i><span>المدير يعزز الفريق</span><i>←</i><span>المدير العام يعزز القطاع</span><i>←</i><span>إيميل للشئون الإدارية</span>
+  </div>
+  {% if who.lead or who.affairs %}
+  <p class="where">التبويبات: الورديات الشهرية (المدير يعتمد) · التعزيز{% if who.exporter %} · كشف البدل{% endif %}</p>
+  <div class="row">
+    <figure>{{ img('confirm.jpg', 'تعزيز بدل الورديات') }}<figcaption>صفحة التعزيز: أيام كل موظف وحالته.</figcaption></figure>
+    <ul>
+      {% if who.manager %}<li><b class="k">الورديات الشهرية</b>: راجع ورديات فريقك واعتمد الشهر. اضغط اسم أي حد لأيامه.</li>
+      <li>في <b class="k">التعزيز</b>: عزز فريقك، أو عزز بالنيابة عن موظف، وشوف الاعتراضات.</li>{% endif %}
+      {% if who.gm %}<li>بعد ما كل مديري الفرق يعززوا: <b class="k">تعزيز القطاع</b>.</li>{% endif %}
+      {% if who.admin %}<li>آخر الشهر: <b class="k">إرسال للتعزيز</b> (إيميل وتنبيه لكل موظف ومدير).</li>{% endif %}
+      <li>الموظف: كل الورديات + العطلات. المدير: الصباحي + العطلات.</li>
+      <li>تذكير بالإيميل كل يوم شغل للي ما عززش.</li>
+      {% if who.exporter %}<li><b class="k">كشف البدل</b>: تصدير Excel للفترة.</li>{% endif %}
+    </ul>
+  </div>
+  {% else %}
+  <ul>
+    <li>آخر الشهر هيوصلك إيميل: افتح <b class="k">جدولي</b> و<b class="k">عزز</b> بدل ورديتك أو <b class="k">اعترض</b> مع السبب.</li>
+    {% if who.exporter %}<li><b class="k">كشف البدل</b>: تصدير Excel للفترة.</li>{% endif %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if who.office %}
+<section id="hr" aria-labelledby="hr-h">
+  <h2 id="hr-h">الاستيراد <small>القوى العاملة › الاستيراد</small></h2>
+  <div class="row">
+    <figure>{{ img('hrimport.jpg', 'استيراد حضور الموارد البشرية') }}<figcaption>رفع ملف الحضور والانصراف.</figcaption></figure>
+    <ol>
+      <li><b class="k">الحضور (الموارد البشرية)</b>: ارفع ملف الإكسل - يوم أو يومين أو أسبوع مرة واحدة - وبيتستورد على طول، وكل الحسابات بتتحدث.</li>
+      <li>اللي ناسي بصمة حضور أو انصراف يوصله تنبيه وإيميل، ومديره يوصله إيميل بأسماء فريقه.</li>
+      <li><b class="k">أرقام الموارد البشرية</b>: لو رقم في الملف مش مربوط بحساب، اربطه مرة واحدة.</li>
+      <li><b class="k">الجدول الشهري</b> (رفع الإكسل) و<b class="k">ربط الأسماء</b> و<b class="k">سجل الاستيراد</b>.</li>
+    </ol>
+  </div>
+</section>
+{% endif %}
+
+{% if who.lead or who.affairs %}
+<section id="analysis" aria-labelledby="analysis-h">
+  <h2 id="analysis-h">التحليل <small>{% if who.office or who.gm %}القوى العاملة › تحليل الحضور{% else %}الرؤى › التحليل{% endif %}</small></h2>
+  <div class="row">
+    <figure>{{ img('analytics.jpg', 'التحليلات') }}<figcaption>نظرة عامة على الفترة.</figcaption></figure>
+    <ul>
+      <li><b class="k">نظرة عامة</b>: نسبة الحضور، التأخير، الغياب، البصمات الناقصة{% if who.manager %} لفريقك{% endif %}.</li>
+      <li><b class="k">الموظفون</b> و<b class="k">التقارير</b>: الجداول التفصيلية (Excel، أو طباعة / حفظ PDF من المتصفح).</li>
+    </ul>
+  </div>
+  <div class="row">
+    <figure>{{ img('profile.jpg', 'لوحة الموظف') }}<figcaption>لوحة الموظف: اضغط على اسم أي موظف.</figcaption></figure>
+    <ul>
+      <li>أيام الحضور والتأخير والغياب لكل موظف، و<b class="k">شرح الدرجة</b>.</li>
+    </ul>
+  </div>
+</section>
+{% endif %}
+
+{% if who.office %}
+<section id="settings" aria-labelledby="settings-h">
+  <h2 id="settings-h">الإعدادات <small>{% if who.admin %}الإدارة › الإعدادات{% else %}إعدادات الحضور{% endif %}</small></h2>
+  <div class="row">
+    <figure>{{ img('settings.jpg', 'إعدادات الحضور') }}<figcaption>الإعدادات، وفوقها روابط لكل جزء.</figcaption></figure>
+    <ul>
+      <li><b class="k">صلاحية الجدول</b>: من الإدارة › المستخدمين، المدير يا إما «مدير بس» (جدوله وحضوره هو بس) يا إما «مدير + جدول الفريق». ممكن مدير واحد أو أكتر في نفس الفريق ياخدها.</li>
+      <li><b class="k">القواعد والبدل</b>: مديرو الفرق، بدل الورديات (المبلغ لليوم)، <b>الوقت الإضافي والوجبات</b>، إيميل جدول الفريق، قواعد الحضور، أنواع الورديات، العطلات، أنواع الإجازات.</li>
+      <li><b class="k">الموظفون والفرق</b>: فريق كل شخص في القوى العاملة (فريق واحد)، واللي مالوش فريق بيظهر فوق.</li>
+      <li><b class="k">قواعد التقييم</b>، <b class="k">الأدوار والصلاحيات</b>، وسجل التدقيق.</li>
+      {% if who.admin %}<li>من <b class="k">الإدارة › المستخدمين</b>: الدور (موظف / مدير / شئون إدارية / أدمن) والفريق - مفيش حساب من غير فريق.</li>{% endif %}
+    </ul>
+  </div>
+  <div class="row">
+    <figure>{{ img('staff.jpg', 'الموظفون والفرق') }}<figcaption>الموظفون والفرق: فريق القوى العاملة لكل شخص.</figcaption></figure>
+    <ul><li>لو حساب عليه فريقين (للبريد)، اختار فريقه في القوى العاملة من القائمة.</li></ul>
+  </div>
+</section>
+{% endif %}
+
+<footer>الصور من نسخة تجريبية ببيانات وهمية · بوابة IAS - البنك الأهلي المصري</footer>
+</div>
+</body>
+</html>

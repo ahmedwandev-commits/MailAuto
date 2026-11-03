@@ -1,0 +1,11 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head with context %}
+{% block att_title %}{{ title }}{% endblock %}
+{% block content %}
+{% set bad = title in ('Cannot do that', 'Not allowed', 'Session expired') %}
+<div class="card tone {{ 't-danger' if bad else 't-info' }}">
+  <div class="card-head"><h2>{{ icon('alert-circle' if bad else 'info', 'ic-lg') }}{{ title }}</h2></div>
+  <p>{{ message }}</p>
+  <p class="row"><button class="btn btn-ghost" type="button" data-back>{{ icon('arrow-left') }}Back</button><a class="btn btn-primary" href="{{ url_for('att_gm.index') }}">Attendance home</a></p>
+</div>
+{% endblock %}

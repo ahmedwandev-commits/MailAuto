@@ -1,0 +1,41 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, kpi, tone_chip, csrf, empty with context %}
+{% block att_title %}Compensatory days{% endblock %}
+{% block content %}
+{% call head('Compensatory days off', 'Record a day earned, why it was earned, when the replacement day is planned and when it is actually taken.', 'coffee') %}
+  {% if can_edit %}<button class="btn btn-primary btn-sm" type="button" data-dialog="compDlg">{{ icon('plus') }}Record an earned day</button>{% endif %}
+{% endcall %}
+{% set tot = {'earned': 0, 'taken': 0, 'remaining': 0, 'planned_open': 0} %}
+{% for id, b in bal.items() %}{% for k in tot %}{% set _ = tot.update({k: tot[k] + b[k]}) %}{% endfor %}{% endfor %}
+<section class="kpis">
+  {{ kpi('Earned', tot.earned|num, 'days in total', 's0', 'plus') }}{{ kpi('Taken', tot.taken|num, 'replacement days used', 't-ok', 'check-circle') }}
+  {{ kpi('Remaining', tot.remaining|num, 'earned − taken', 't-info', 'coffee') }}{{ kpi('Planned, not taken', tot.planned_open|num, 'scheduled replacement days', 't-warn' if tot.planned_open else 't-na', 'calendar') }}
+</section>
+<div class="grid g-main">
+<section class="card flush"><div class="card-head"><h2>{{ icon('list') }}Records</h2></div>
+  <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Employee</th><th>Earned</th><th class="num">Days</th><th>Reason</th><th>Planned</th><th>Taken</th>{% if can_edit %}<th></th>{% endif %}</tr></thead><tbody>
+  {% for r in rows %}{% set em = emps.get(r.employee_id) %}
+    <tr><td class="name">{% if em %}<a class="person" href="{{ url_for('att_people.profile', emp_id=r.employee_id) }}">{{ avatar_for(r.employee_id, em.name) }}<b dir="auto" class="bidi">{{ em.name|short_name(3) }}</b></a>{% endif %}</td>
+      <td class="nowrap">{{ r.earned_date|dmy }}</td><td class="num">{{ r.days|num }}</td><td dir="auto" class="bidi">{{ r.reason }}</td>
+      <td>{{ r.planned_take_date|dmy if r.planned_take_date else '—' }}</td><td>{% if r.taken_date %}{{ tone_chip(r.taken_date|dmy, 't-ok', 'check-circle') }}{% else %}—{% endif %}</td>
+      {% if can_edit %}<td class="actions"><form method="post" action="{{ url_for('att_people.comp_update', comp_id=r.id) }}" class="inline-form">{{ csrf() }}<input type="date" name="planned" value="{{ r.planned_take_date or '' }}" aria-label="Planned"><input type="date" name="taken" value="{{ r.taken_date or '' }}" aria-label="Taken"><button class="btn btn-ghost btn-sm">Update</button></form></td>{% endif %}</tr>
+  {% else %}<tr><td colspan="7">{% call empty('coffee', 'Nothing recorded yet', 'Record a day when an employee works on a rest day or holiday.') %}{% endcall %}</td></tr>{% endfor %}</tbody></table></div></section>
+<section class="card flush"><div class="card-head"><h2>{{ icon('users') }}Balances</h2></div>
+  <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Employee</th><th class="num">Earned</th><th class="num">Taken</th><th class="num">Left</th></tr></thead><tbody>
+  {% for id, b in bal.items() if b.earned %}<tr><td class="name"><b dir="auto" class="bidi">{{ emps[id].name|short_name(3) }}</b></td><td class="num">{{ b.earned|num }}</td><td class="num">{{ b.taken|num }}</td><td class="num">{{ b.remaining|num }}</td></tr>
+  {% else %}<tr><td colspan="4" class="muted">No balances yet.</td></tr>{% endfor %}</tbody></table></div></section>
+</div>
+{% if can_edit %}
+<dialog class="dlg" id="compDlg" aria-labelledby="cdTitle">
+  <form method="post" action="{{ url_for('att_people.comp_new') }}">{{ csrf() }}
+    <div class="dlg-head"><h2 id="cdTitle">{{ icon('coffee') }}Record an earned day</h2><span class="grow"></span><button class="iconbtn" type="button" data-close aria-label="Close">{{ icon('x') }}</button></div>
+    <div class="dlg-body"><div class="form-grid">
+      <label class="field wide">Employee<select name="emp" required>{% for id, e in emps.items() %}<option value="{{ id }}">{{ e.name|short_name(4) }} ({{ id }})</option>{% endfor %}</select></label>
+      <label class="field">Date earned<input type="date" name="earned" required></label><label class="field">Days<input name="days" value="1" size="3"></label>
+      <label class="field wide">Reason it was earned<input name="reason" required placeholder="e.g. worked Friday duty"></label>
+      <label class="field">Planned day off<input type="date" name="planned"></label></div></div>
+    <div class="dlg-foot"><button class="btn btn-ghost" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Record</button></div>
+  </form>
+</dialog>
+{% endif %}
+{% endblock %}

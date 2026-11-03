@@ -1,0 +1,12 @@
+ATTENDANCE UPDATE - IAS Portal v5.15 + Attendance module, WITH the data of the uploaded v5.15 package
+=====================================================================================================
+program\data, .secret_key and collector_config.json are byte-for-byte those of IAS-Portal-v5.15-ready-to-run.zip (nothing imported, nothing changed).
+Only 5 portal files differ from that package: program\calllog\app.py, templates\base.html, templates\_topbar.html, ops\views.py and static\my.js.
+New: program\calllog\attendance, templates\attendance, static\attendance, program\docs\ATTENDANCE.md, tests\ (optional).
+
+ON A NEW PC: install Python 3.9+ (tick "Add python.exe to PATH"), copy the CONTENTS of "program" to the folder the portal runs from,
+run run.py, sign in with your existing accounts. The first start creates program\data\attendance (empty): as administrator import the
+HR attendance report and the monthly schedule from Attendance -> Imports. Employees = portal accounts whose User ID is the HR employee
+number; tick Attendance settings -> "Include portal managers in the attendance roster" if managers must be tracked too.
+On an EXISTING installation do not use this package for the data: use the clean zip (code only).
+This package holds real accounts and credentials: handle it like the live portal.

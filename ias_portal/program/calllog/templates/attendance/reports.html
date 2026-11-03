@@ -1,0 +1,47 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, banner, empty with context %}
+{% block att_title %}Reports{% endblock %}
+{% block content %}
+{% call head('Reports', 'Filter by period and team, then export to Excel or PDF. Everything respects your team access.', 'file') %}{% endcall %}
+<div class="grid g-side">
+  <aside class="card tight stack" aria-label="Report types">
+    {% for gname, gic, ks in groups %}
+      <div><h3 class="row">{{ icon(gic) }}{{ gname }}</h3>
+        <ul class="menu-list">{% for k in ks %}<li><a href="{{ url_for('att_gm.reports', kind=k, team=team, **{'from': d1, 'to': d2}) }}" {% if k == kind %}aria-current="page"{% endif %}>{{ kinds[k] }}</a></li>{% endfor %}</ul></div>
+    {% endfor %}
+  </aside>
+  <div class="stack">
+    <section class="card tight toolbar">
+      <form method="get">
+        <input type="hidden" name="kind" value="{{ kind }}">
+        <label class="field">From<input type="date" name="from" value="{{ d1 }}"></label><label class="field">To<input type="date" name="to" value="{{ d2 }}"></label>
+        <label class="field">Team<select name="team"><option value="">All teams</option>{% for t in teams %}<option {{ 'selected' if t == team }}>{{ t }}</option>{% endfor %}</select></label>
+        <button class="btn btn-primary" type="submit">{{ icon('filter') }}Apply</button>
+      </form>
+      <span class="seg">{% for label, a, b in presets %}<a href="{{ url_for('att_gm.reports', kind=kind, team=team, **{'from': a, 'to': b}) }}" {% if a == d1 and b == d2 %}aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}</span>
+    </section>
+    <section class="card flush">
+      <div class="card-head"><h2>{{ rep.title }}</h2><span class="hint">{{ d1|dmy }} – {{ d2|dmy }}{% if team %} · {{ team }}{% endif %} · {{ rep.rows|length }} row(s)</span><span class="grow"></span>
+        <span class="search no-print">{{ icon('search') }}<input type="search" placeholder="Filter rows…" data-table-filter="rep-table" aria-label="Filter rows"></span>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('att_gm.export_report', kind=kind, team=team, **{'from': d1, 'to': d2}) }}">{{ icon('download') }}Excel</a>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('att_gm.export_report_pdf', kind=kind, team=team, **{'from': d1, 'to': d2}) }}" {% if not pdf_ok %}title="Optional PDF packages not installed — this will explain how"{% endif %}>{{ icon('file') }}PDF</a>
+        <button class="btn btn-ghost btn-sm" type="button" data-print>{{ icon('printer') }}Print</button></div>
+      {% if rep.description %}<p class="pad small muted">{{ rep.description }}</p>{% endif %}
+      {% for n in rep.notes %}<div class="pad"><div class="banner t-info">{{ icon('info') }}<div class="grow">{{ n }}</div></div></div>{% endfor %}
+      <div class="tbl-wrap">
+      <table class="tbl" id="rep-table">
+        <thead><tr>{% for c in rep.columns %}<th class="sortable{{ ' num' if loop.index0 > 2 and rep.emp_col is not none }}">{{ c }}</th>{% endfor %}</tr></thead>
+        <tbody>
+        {% for row in rep.rows %}<tr>{% for v in row %}
+          {% if loop.index0 == rep.emp_col and rep.emp_col is not none %}<td><a href="{{ url_for('att_people.profile', emp_id=v, **{'from': d1, 'to': d2}) }}">{{ v }}</a></td>
+          {% else %}<td class="{{ 'num' if v is number else 'clipr' }}" {% if v is string %}dir="auto" title="{{ v }}"{% endif %}>{{ v|num if v is number or v is none else v }}</td>{% endif %}
+        {% endfor %}</tr>
+        {% else %}<tr><td colspan="{{ rep.columns|length }}">{% call empty('file', 'No data for this selection', 'Try a different period or team.') %}{% endcall %}</td></tr>{% endfor %}
+        </tbody>
+        {% if rep.totals %}<tfoot><tr>{% for v in rep.totals %}<td class="{{ 'num' if v is number else '' }}"><b>{{ v|num if v is number else v }}</b></td>{% endfor %}</tr></tfoot>{% endif %}
+      </table>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

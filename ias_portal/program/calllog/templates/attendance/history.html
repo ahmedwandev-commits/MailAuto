@@ -1,0 +1,34 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, tone_chip, empty with context %}
+{% block att_title %}Import history{% endblock %}
+{% block content %}
+{% call head('Import history', 'Every upload with its uploader, time, filename and result. Superseded schedule versions are kept.', 'history') %}
+  {% if att_user.role == 'admin' %}<a class="btn btn-primary btn-sm" href="{{ url_for('att_schedule.import_upload') }}">{{ icon('upload') }}Import schedule</a>{% endif %}
+  {% if att_user.role == 'admin' %}<a class="btn btn-ghost btn-sm" href="{{ url_for('att_attendance.import_upload') }}">{{ icon('upload') }}Import HR attendance</a>{% endif %}
+{% endcall %}
+
+<section class="card flush">
+  <div class="card-head"><h2>{{ icon('calendar') }}Monthly shift schedules</h2><span class="count">{{ schedule|length }}</span></div>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>#</th><th>Month</th><th>File</th><th>Uploaded</th><th>By</th><th>Status</th><th>Result</th></tr></thead><tbody>
+    {% for i in schedule %}<tr><td>{{ i.id }}</td><td class="nowrap"><a href="{{ url_for('att_schedule.month', year=i.year, month=i.month) }}">{{ i.year }}-{{ '%02d' % i.month }}</a></td><td dir="auto" class="bidi">{{ i.filename }}</td>
+      <td class="nowrap">{{ i.uploaded_at|ts }}</td><td>{{ i.uploaded_by }}</td>
+      <td>{% if i.status == 'completed' %}{{ tone_chip('Imported', 't-ok', 'check-circle') }}{% elif i.status == 'preview' %}{{ tone_chip('Awaiting confirmation', 't-info', 'clock') }}{% else %}{{ tone_chip('Cancelled', 't-na', 'x') }}{% endif %}
+        {% if i.status == 'preview' and att_user.role != 'gm' %} <a href="{{ url_for('att_schedule.import_preview', import_id=i.id) }}">continue</a>{% endif %}</td>
+      <td class="small">{% if i.result %}version {{ i.result.version_no }} · {{ i.result.entries }} assignments · {{ i.result.employees }} staff{% if i.result.inferred_rest_days %} · {{ i.result.inferred_rest_days }} inferred rest days{% endif %} · {{ i.result.dropped|length }} dropped · {{ i.result.conflicts }} warning(s){% endif %}</td></tr>
+    {% else %}<tr><td colspan="7">{% call empty('upload', 'No schedule imports yet') %}{% endcall %}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+{% if att_user.role == 'admin' %}
+<section class="card flush">
+  <div class="card-head"><h2>{{ icon('file') }}HR attendance files</h2><span class="count">{{ attendance|length }}</span></div>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>#</th><th>File</th><th>Uploaded</th><th>By</th><th>Status</th><th>Period</th><th class="num">Inserted</th><th class="num">Kept existing</th><th class="num">Rejected</th><th class="num">Duplicates in file</th></tr></thead><tbody>
+    {% for i in attendance %}<tr><td>{{ i.id }}</td><td dir="auto" class="bidi">{{ i.filename }}</td><td class="nowrap">{{ i.uploaded_at|ts }}</td><td>{{ i.uploaded_by }}</td>
+      <td>{% if i.status == 'completed' %}{{ tone_chip('Imported', 't-ok', 'check-circle') }}{% elif i.status == 'preview' %}{{ tone_chip('Awaiting confirmation', 't-info', 'clock') }} <a href="{{ url_for('att_attendance.import_preview', import_id=i.id) }}">continue</a>{% else %}{{ tone_chip('Cancelled', 't-na', 'x') }}{% endif %}</td>
+      {% if i.result %}<td class="nowrap">{{ i.result.period[0] }} → {{ i.result.period[1] }}</td><td class="num">{{ i.result.inserted }}</td><td class="num">{{ i.result.existing_kept }}</td><td class="num">{{ i.result.rejected + i.result.rejected_unknown_employee }}</td><td class="num">{{ i.result.duplicates_in_file }}</td>{% else %}<td colspan="5"></td>{% endif %}</tr>
+    {% else %}<tr><td colspan="10">{% call empty('file', 'No HR attendance files yet') %}{% endcall %}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>{% endif %}
+{% endblock %}

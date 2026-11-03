@@ -1,0 +1,52 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, tone_chip, csrf, empty with context %}
+{% block att_title %}Team schedule{% endblock %}
+{% block content %}
+{% call head('Team schedule', 'Build the ' ~ ov.label[0] ~ ' schedule of a team by drag and drop. The manager sends it to the General Manager; once approved it is the official schedule at once. The administrative affairs add nights, days off and official holidays, then send the e-mail. Uploading the Excel schedule still works too.', 'calendar') %}
+  <form method="get" class="inline-form"><input type="month" name="month" value="{{ ov.month }}" data-autosubmit aria-label="Month"><button class="btn btn-ghost btn-sm" type="submit">Show</button></form>
+{% endcall %}
+
+<ol class="ac-steps" aria-label="Steps">
+  {% set used = ov.teams|rejectattr('status', 'equalto', 'new')|list %}
+  {% set approved = used|selectattr('status', 'equalto', 'approved')|list %}
+  <li class="{{ 'done' if used else 'now' }}"><b>1</b><span>Managers build their team · {{ used|length }}/{{ ov.teams|length }}</span></li>
+  <li class="{{ 'done' if ov.ready else ('now' if used else '') }}"><b>2</b><span>General Manager approves = official · {{ approved|length }}/{{ used|length }}</span></li>
+  <li class="{{ 'done' if ov.published.at else ('now' if ov.ready else '') }}"><b>3</b><span>Administrative affairs send the e-mail{% if ov.published.at %} · {{ ov.published.at[:10]|dmy }}{% endif %}</span></li>
+</ol>
+
+<div class="tp-ways card">
+  <div class="grow"><b>Two ways to make the schedule</b>
+    <span class="hint">Build it here by drag and drop, or upload the Excel file as before.</span></div>
+  {% if me.role == 'admin' %}<a class="btn btn-ghost btn-sm" href="{{ url_for('att_schedule.import_upload') }}">{{ icon('upload') }}Upload the Excel schedule</a>{% endif %}
+</div>
+
+{% if affairs %}
+<section class="card" aria-labelledby="hol">
+  <div class="card-head"><h2 id="hol">{{ icon('sun') }}Official holidays of {{ ov.label[0] }}</h2><span class="hint">Administrative affairs only. Nobody is placed on an official holiday.</span></div>
+  {% if holidays %}<ul class="tp-hols">{% for d, n in holidays|dictsort %}<li><b>{{ d|dmy }}</b> <span dir="auto">{{ n }}</span>
+    <form method="post" action="{{ url_for('att_plan.holiday') }}" class="inline">{{ csrf() }}<input type="hidden" name="month" value="{{ ov.month }}"><input type="hidden" name="date" value="{{ d }}"><input type="hidden" name="on" value="0"><button class="btn btn-ghost btn-sm" type="submit">Remove</button></form></li>{% endfor %}</ul>
+  {% else %}<p class="hint">No official holiday in this month yet.</p>{% endif %}
+  <form method="post" action="{{ url_for('att_plan.holiday') }}" class="inline-form">{{ csrf() }}<input type="hidden" name="month" value="{{ ov.month }}"><input type="hidden" name="on" value="1">
+    <label class="field">Date<select name="date" required>{% for d in days %}<option value="{{ d }}">{{ d|dmy }}</option>{% endfor %}</select></label>
+    <label class="field">Name<input name="name" maxlength="80" placeholder="e.g. 6 October"></label>
+    <button class="btn btn-sm" type="submit">{{ icon('plus') }}Add official holiday</button></form>
+</section>
+{% endif %}
+
+{% if ov.teams %}
+<section class="card flush" aria-labelledby="teams">
+  <div class="card-head"><h2 id="teams">{{ icon('users') }}Teams</h2><span class="grow"></span>
+    {% if affairs %}<form method="post" action="{{ url_for('att_plan.publish') }}">{{ csrf() }}<input type="hidden" name="month" value="{{ ov.month }}">
+      <button class="btn btn-primary btn-sm" type="submit" {{ 'disabled' if not ov.ready }} title="{{ 'Every team that built its schedule here is approved' if ov.ready else 'Waiting for the General Manager to approve every team' }}">{{ icon('arrow-right') }}{{ 'Send the e-mail again' if ov.published.at else 'Send the schedule e-mail' }}</button></form>{% endif %}</div>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>Team</th><th class="num">People</th><th>Status</th><th>Last change</th><th></th></tr></thead>
+    <tbody>{% for t in ov.teams %}
+      <tr><td><b dir="auto">{{ t.team }}</b>{% if t.note %}<div class="small ac-note" dir="auto">“{{ t.note }}”</div>{% endif %}</td>
+        <td class="num">{{ t.people }}</td>
+        <td>{% if t.status == 'approved' %}{{ tone_chip('Approved', 't-ok', 'check-circle') }}{% elif t.status == 'submitted' %}{{ tone_chip('Waiting for the GM', 't-info', 'clock') }}{% elif t.status == 'returned' %}{{ tone_chip('Sent back', 't-warn', 'alert-triangle') }}{% elif t.status == 'draft' %}{{ tone_chip('Draft', 't-na', 'pencil') }}{% else %}{{ tone_chip('Not started (Excel or not yet)', 't-na', 'clock') }}{% endif %}</td>
+        <td class="small">{% if t.at %}{{ t.at[:16]|replace('T', ' ') }} · <span dir="auto">{{ t.by_name }}</span>{% endif %}</td>
+        <td class="nowrap"><a class="btn btn-ghost btn-sm" href="{{ url_for('att_plan.index', month=ov.month, team=t.team) }}">{{ icon('calendar') }}{{ 'Review' if me.role in ('gm', 'admin') and t.status == 'submitted' else 'Open' }}</a></td></tr>
+    {% endfor %}</tbody></table></div>
+</section>
+{% else %}{{ empty('users', 'No team', 'There is no team with people to plan.') }}{% endif %}
+{% endblock %}

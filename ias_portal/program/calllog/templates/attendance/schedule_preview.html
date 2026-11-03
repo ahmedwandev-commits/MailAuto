@@ -1,0 +1,93 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, stepper, csrf, banner, tone_chip, kpi, shift with context %}
+{% block att_title %}Validate schedule import{% endblock %}
+{% block content %}
+{% set imp = pv.import %}{% set blocked = pv.blocking or pv.no_employees %}
+{% set mname = ['January','February','March','April','May','June','July','August','September','October','November','December'][imp.month - 1] %}
+<nav class="crumbs"><a href="{{ url_for('att_schedule.import_upload') }}">Monthly schedule import</a>{{ icon('chevron-right') }}<span>{{ mname }} {{ imp.year }}</span></nav>
+{% call head('Review ' ~ mname ~ ' ' ~ imp.year ~ ' schedule', imp.filename ~ ' · sheet “' ~ pv.parsed.sheet ~ '” · team ' ~ imp.team, 'clipboard-check') %}{% endcall %}
+{{ stepper(['Upload', 'Validate', 'Match employees', 'Confirm'], 2 if blocked else 3) }}
+
+{% if pv.no_employees %}{% call banner('t-danger', 'alert-circle') %}<b>There are no employee records yet.</b> Import an HR attendance file first (it creates the employee list) or run <code>python manage.py import-roster FILE</code>.{% endcall %}{% endif %}
+{% if pv.blocking %}{% call banner('t-danger', 'alert-circle') %}<b>Cannot import yet</b><ul>{% for b in pv.blocking %}<li>{{ b }}</li>{% endfor %}</ul>{% endcall %}{% endif %}
+{% if pv.warnings %}{% call banner('t-warn', 'alert-triangle') %}<b>{{ pv.warnings|length }} warning(s)</b><ul>{% for w in pv.warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endcall %}{% endif %}
+
+<section class="kpis">
+  {{ kpi('Dates found', pv.parsed.days|length, 'rows with a date', 's0', 'calendar') }}
+  {{ kpi('Morning', pv.counts.get('M', 0), 'assignments', 'sh-M', 'sun') }}
+  {{ kpi('Evening', pv.counts.get('E', 0), 'assignments', 'sh-E', 'sunset') }}
+  {{ kpi('Night', pv.counts.get('N', 0), 'assignments', 'sh-N', 'moon') }}
+  {{ kpi('Stand-by', pv.counts.get('SB', 0), 'on-call entries', 'sh-SB', 'shield') }}
+  {{ kpi('Names to confirm', pv.unresolved|length, 'of ' ~ pv.matches|length ~ ' distinct names', 't-warn' if pv.unresolved else 't-ok', 'link') }}
+  {{ kpi('Scheduling warnings', pv.conflicts|length, 'overlap / short rest', 't-warn' if pv.conflicts else 't-ok', 'alert-triangle') }}
+</section>
+
+<form method="post" action="{{ url_for('att_schedule.import_confirm', import_id=imp.id) }}" class="stack">
+  {{ csrf() }}
+  {% if pv.dates_corrected %}
+  <section class="card tone t-warn"><div class="card-head"><h2>{{ icon('calendar') }}Date correction proposed</h2></div>
+    <ul>{% for d in pv.dates_corrected %}<li>Row {{ d.row }}: <b>{{ d.date_raw }}</b> ({{ d.day_name }}) does not fit its position → proposed <b>{{ d.date }}</b></li>{% endfor %}</ul>
+    <label class="check"><input type="checkbox" name="accept_dates" value="1"> I confirm these date corrections</label></section>
+  {% endif %}
+
+  <section class="card flush" aria-labelledby="match-h">
+    <div class="card-head"><h2 id="match-h">{{ icon('link') }}Match names to HR employees</h2>
+      <span class="hint">The schedule has first names only. Automatic matches need every name word in exactly one HR record; everything else needs your choice. Confirmations are remembered for next month.</span>
+      <span class="grow"></span><span class="small"><b id="unresolvedCount">{{ pv.unresolved|length }}</b> to resolve</span>
+      <span class="progress" role="progressbar" aria-label="Matching progress"><svg viewBox="0 0 100 8" preserveAspectRatio="none"><rect class="tr" width="100" height="8"/><rect id="matchBar" class="fl" width="{{ 100 if not pv.matches else (100 * (pv.matches|length - pv.unresolved|length) / pv.matches|length)|round|int }}" height="8"/></svg></span></div>
+    <div class="tbl-wrap flat"><table class="tbl" id="matchTable">
+      <thead><tr><th>Name in the schedule</th><th class="num">Uses</th><th>Match</th><th>HR employee</th></tr></thead>
+      <tbody>
+      {% for n, m in pv.matches.items() %}
+        {% set auto = m.status in ('alias', 'auto') %}
+        <tr>
+          <td class="name"><b dir="auto" class="bidi">{{ m.display }}</b></td><td class="num">{{ m.count }}</td>
+          <td>{% if m.status == 'alias' %}{{ tone_chip('Remembered', 't-ok', 'check-circle') }}{% elif m.status == 'auto' %}{{ tone_chip('Automatic', 't-ok', 'check-circle') }}
+            {% elif m.status == 'suggested' %}{{ tone_chip('Suggestion — confirm', 't-warn', 'alert-triangle') }}{% elif m.status == 'ambiguous' %}{{ tone_chip('Several candidates', 't-warn', 'alert-triangle') }}{% else %}{{ tone_chip('No match', 't-danger', 'alert-circle') }}{% endif %}</td>
+          <td>
+            <select class="match" name="map:{{ n }}" data-auto="{{ 1 if auto else 0 }}" aria-label="Employee for {{ m.display }}">
+              {% if auto %}<option value="">✓ {{ (pv.employees|selectattr('id', 'equalto', m.employee_id)|first).name }} ({{ m.employee_id }})</option>
+              {% else %}<option value="">— choose an employee —</option>{% endif %}
+              {% for c in m.candidates %}<option value="{{ c.id }}">suggested: {{ c.name }} ({{ c.id }}){% if c.score < 1 %} · {{ (c.score * 100)|int }}%{% endif %}</option>{% endfor %}
+              <option value="skip">Skip this name (do not import its shifts)</option>
+              <optgroup label="All employees">{% for e in pv.employees %}<option value="{{ e.id }}">{{ e.name }} ({{ e.id }})</option>{% endfor %}</optgroup>
+            </select>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody></table></div>
+    {% if pv.unresolved %}<div class="tbl-tools"><label class="check"><input type="checkbox" id="skipUnresolved" name="skip_unresolved" value="1"> Skip every name I leave unresolved (their shifts are not imported)</label></div>{% endif %}
+  </section>
+
+  {% if pv.conflicts %}
+  <section class="card flush"><div class="card-head"><h2>{{ icon('alert-triangle') }}Scheduling warnings</h2><span class="hint">imported and flagged in the calendar; they never block the import</span></div>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Employee</th><th>Date</th><th>Shift</th><th>Issue</th><th>Detail</th></tr></thead><tbody>
+    {% for c in pv.conflicts %}<tr><td dir="auto" class="bidi">{{ c.employee_name|short_name(4) }}</td><td>{{ c.work_date|dmy }}</td><td>{{ shift(c.shift_code) }}</td><td>{{ tone_chip(c.type|replace('_', ' '), 't-warn') }}</td><td>{{ c.message }}</td></tr>{% endfor %}
+    </tbody></table></div></section>
+  {% endif %}
+
+  <div class="grid g2">
+    <section class="card {{ 'tone t-warn' if pv.rest_check and pv.rest_check.pct > 20 }}">
+      <div class="card-head"><h2>{{ icon('coffee') }}Rest days</h2></div>
+      <p>The template lists only who works each shift; it never marks rest days. You may record every roster employee who is <b>not listed</b> on a day as resting. That is an inference, so it is off by default.</p>
+      {% if pv.rest_check %}<p class="mt"><b>HR evidence:</b> {{ pv.rest_check.with_punches }} of {{ pv.rest_check.candidate_days }} such days ({{ pv.rest_check.pct }}%) have punches.
+        {% if pv.rest_check.pct > 20 %}<span class="chip t-warn plain">sheet probably lists only duty shifts — inference likely wrong</span>{% endif %}</p>
+      {% else %}<p class="small muted">No HR attendance data for this month yet, so the inference cannot be checked.</p>{% endif %}
+      <label class="check"><input type="checkbox" name="infer_rest" value="1"> Infer rest days for roster employees on days they are not listed</label>
+    </section>
+    <section class="card {{ 'tone t-danger' if pv.active_version }}">
+      <div class="card-head"><h2>{{ icon('layers') }}Schedule version</h2></div>
+      {% if pv.active_version %}
+        <p><b>A schedule for {{ mname }} {{ imp.year }} already exists (version {{ pv.active_version.version_no }}).</b> Importing this file creates version {{ pv.active_version.version_no + 1 }} and makes it the official plan. The previous version is kept, not deleted.</p>
+        <label class="check"><input type="checkbox" name="replace" value="1"> Yes, replace the current schedule with this file</label>
+      {% else %}<p>No schedule exists for this month yet. This file becomes <b>version 1</b>.</p>{% endif %}
+    </section>
+  </div>
+
+  <div class="sticky-bar">
+    <span class="grow small muted">{{ 'Fix the problems above to continue.' if blocked else 'Review the matches, then confirm.' }}</span>
+    <button class="btn btn-primary" id="confirmImport" type="submit" data-blocked="{{ 1 if blocked else 0 }}" {{ 'disabled' if blocked }}>{{ icon('check') }}Confirm and import</button>
+    <button class="btn btn-ghost" type="submit" formaction="{{ url_for('att_schedule.import_cancel', import_id=imp.id) }}" formnovalidate>Cancel import</button>
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Welcome · IAS Portal{% endblock %}
+{% block body_class %}welcome-page{% endblock %}
+{% block body %}
+<main class="welcome" id="welcome" data-next="{{ next_url }}" data-seconds="{{ seconds }}">
+  <img class="welcome-bg" src="{{ url_for('static', filename='login-tower.jpg') }}" alt="" aria-hidden="true">
+  <div class="welcome-veil" aria-hidden="true"></div>
+  <section class="welcome-card" aria-label="Welcome">
+    <img class="welcome-logo wl wl-1" src="{{ url_for('static', filename='nbe-logo.png') }}" alt="National Bank of Egypt" width="64" height="64">
+    <p class="welcome-hello wl wl-2"><span lang="ar" dir="rtl">{{ message.greeting_ar }}{% if message.name %}، {{ message.name }}{% endif %}</span>
+      <span class="welcome-hello-en">· {{ message.greeting_en }}{% if message.name %}, {{ message.name }}{% endif %}</span></p>
+    <p class="welcome-ar wl wl-3" lang="ar" dir="rtl">{{ message.ar }}</p>
+    <p class="welcome-en wl wl-4" lang="en">{{ message.en }}</p>
+    <p class="welcome-role wl wl-5"><span lang="ar" dir="rtl">{{ message.role_ar }}</span> · {{ message.role_en }}</p>
+    <a class="btn btn-primary welcome-go wl wl-5" id="welcomeGo" href="{{ next_url }}"><span lang="ar">متابعة</span> · Continue</a>
+    <div class="welcome-bar" aria-hidden="true"><i></i></div>
+  </section>
+</main>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='welcome.js') }}"></script>
+{% endblock %}

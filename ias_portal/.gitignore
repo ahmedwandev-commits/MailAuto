@@ -1,0 +1,8 @@
+# never commit live data, secrets or vendored libs
+program/data/
+program/libs/
+program/.secret_key
+program/collector_config.json
+program/config.json
+__pycache__/
+.pytest_cache/

@@ -1,0 +1,124 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, banner, tone_chip, csrf with context %}
+{% block head %}{{ super() }}<script defer src="{{ url_for('static', filename='attendance/scoring.js') }}"></script>{% endblock %}
+{% block att_title %}Scoring rules{% endblock %}
+
+{% macro repeat_box(k, label) -%}
+  <details class="sc-repeat"{{ ' open' if form[k ~ '_steps'] or form[k ~ '_consec_days'] }}>
+    <summary>{{ icon('repeat') }}If it keeps happening <span class="hint">- optional: charge more for repeats</span></summary>
+    <div class="stack">
+      <div class="form-grid">
+        <label class="field">Count the repeats<select name="{{ k }}_window">
+          <option value="period" {{ 'selected' if form[k ~ '_window'] == 'period' }}>over the whole period</option>
+          <option value="month" {{ 'selected' if form[k ~ '_window'] == 'month' }}>inside the same calendar month</option>
+          <option value="rolling" {{ 'selected' if form[k ~ '_window'] == 'rolling' }}>inside the last N days</option></select></label>
+        <label class="field">N days <span class="hint">(only for “last N days”)</span><input name="{{ k }}_rolling_days" value="{{ form[k ~ '_rolling_days'] }}" inputmode="numeric"></label>
+      </div>
+      <div class="field"><span class="lbl">From which time does it cost more?</span>
+        <div class="rows" data-kind="steps" data-target="{{ k }}_steps"></div>
+        <label class="field rawfield">As text <span class="hint">3-5=+1; 6-=+2 · 2-=x1.5 · 4-=x2+1</span><input name="{{ k }}_steps" value="{{ form[k ~ '_steps'] }}"></label></div>
+      <div class="form-grid">
+        <label class="field">Several days in a row: from how many days?<input name="{{ k }}_consec_days" value="{{ form[k ~ '_consec_days'] }}" inputmode="numeric" placeholder="e.g. 3"></label>
+        <label class="field">Extra % for each of those days<input name="{{ k }}_consec_extra" value="{{ form[k ~ '_consec_extra'] }}" inputmode="decimal" placeholder="e.g. 1"></label></div>
+    </div>
+  </details>
+{%- endmacro %}
+
+{% block content %}
+{% call head('Attendance score rules', 'Decide how many points each problem costs. Everyone starts with the start score; every problem takes a percentage of it. Nothing is saved until you press Save, and every save is a new version.', 'award') %}
+  {% if configured %}{{ tone_chip('Configured', 't-ok', 'check-circle') }}{% else %}{{ tone_chip('Not configured', 't-warn', 'alert-triangle') }}{% endif %}
+{% endcall %}
+{% if not configured %}{% call banner('t-warn', 'alert-triangle') %}<b>No rules yet.</b> Every employee scores the start value with no category until you enter rules. Pick a ready set below to start, then change what you want.{% endcall %}{% endif %}
+
+<div class="sc-layout">
+<form method="post" class="sc-form" id="scoringForm" data-preview-url="{{ url_for('att_admin.scoring_preview') }}">{{ csrf() }}
+
+  <section class="card sc-presets"><div class="card-head"><h2>{{ icon('layers') }}Start from a ready set</h2><span class="hint">fills every box - then change anything you like</span></div>
+    <div class="sc-preset-row">
+      {% for key, p in presets.items() %}<button type="button" class="btn btn-ghost sc-preset" data-preset="{{ p['values']|tojson|forceescape }}" data-name="{{ p.label }}"><b>{{ p.label }}</b><span class="small muted">{{ p.about }}</span></button>{% endfor %}
+    </div>
+    <p class="small muted sc-preset-note" id="scPresetNote" role="status"></p>
+    <label class="check sc-raw-toggle"><input type="checkbox" id="scShowRaw"> Show the text boxes too (advanced: type the rules as text)</label>
+  </section>
+
+  <section class="card"><div class="card-head"><h2>{{ icon('sliders') }}The basics</h2></div>
+    <div class="form-grid">
+      <label class="field">Start score<input name="start" value="{{ form.start }}" inputmode="numeric"></label>
+      <label class="field">Days needed before a category is given<input name="min_judged_days" value="{{ form.min_judged_days }}" inputmode="numeric"></label>
+      <label class="field">Most points anyone can lose, in total (%) <span class="hint">blank = no limit</span><input name="max_total" value="{{ form.max_total }}" inputmode="decimal"></label></div>
+    <p class="small muted">Leave a box empty for “none”; 0 means “costs nothing”. A person on leave, on a rest day or on a holiday never loses points.</p></section>
+
+  <section class="card sc-comp" data-kind="late"><div class="card-head"><h2>{{ icon('clock') }}Late arrivals</h2><span class="hint">checked in after the shift start</span></div>
+    <div class="field"><span class="lbl">How many points does a late arrival cost?</span>
+      <div class="rows" data-kind="tiers" data-target="late_tiers"></div>
+      <label class="field rawfield">As text <span class="hint">1-15=1; 16-30=3; 31-=5</span><input name="late_tiers" value="{{ form.late_tiers }}"></label></div>
+    <div class="form-grid">
+      <label class="field">Ignore lateness under (minutes)<input name="late_ignore" value="{{ form.late_ignore }}" inputmode="numeric"></label>
+      <label class="field">Flat % when no row matches<input name="late_flat" value="{{ form.late_flat }}" inputmode="decimal"></label>
+      <label class="field">Most this can cost (%)<input name="late_cap" value="{{ form.late_cap }}" inputmode="decimal"></label></div>
+    {{ repeat_box('late', 'lateness') }}</section>
+
+  <section class="card sc-comp" data-kind="early"><div class="card-head"><h2>{{ icon('arrow-left') }}Early departures</h2><span class="hint">left before the shift end</span></div>
+    <div class="field"><span class="lbl">How many points does an early departure cost?</span>
+      <div class="rows" data-kind="tiers" data-target="early_tiers"></div>
+      <label class="field rawfield">As text <span class="hint">1-15=1; 16-30=2; 31-=3</span><input name="early_tiers" value="{{ form.early_tiers }}"></label></div>
+    <div class="form-grid">
+      <label class="field">Ignore under (minutes)<input name="early_ignore" value="{{ form.early_ignore }}" inputmode="numeric"></label>
+      <label class="field">Flat % when no row matches<input name="early_flat" value="{{ form.early_flat }}" inputmode="decimal"></label>
+      <label class="field">Most this can cost (%)<input name="early_cap" value="{{ form.early_cap }}" inputmode="decimal"></label></div>
+    {{ repeat_box('early', 'early departures') }}</section>
+
+  <section class="card sc-comp" data-kind="absence"><div class="card-head"><h2>{{ icon('user-x') }}Absence without an excuse</h2><span class="hint">only days a manager reviewed as “unexcused”</span></div>
+    <div class="form-grid">
+      <label class="field">Points for each absence day (%)<input name="absence_penalty" value="{{ form.absence_penalty }}" inputmode="decimal"></label>
+      <label class="field">Most this can cost (%)<input name="absence_cap" value="{{ form.absence_cap }}" inputmode="decimal"></label></div>
+    {{ repeat_box('absence', 'absences') }}</section>
+
+  <section class="card sc-comp" data-kind="missing_punch"><div class="card-head"><h2>{{ icon('alert-circle') }}Missing punch</h2><span class="hint">a day with no check-in or no check-out</span></div>
+    <div class="form-grid">
+      <label class="field">Points for each such day (%)<input name="missing_punch_penalty" value="{{ form.missing_punch_penalty }}" inputmode="decimal"></label>
+      <label class="field">Most this can cost (%)<input name="missing_punch_cap" value="{{ form.missing_punch_cap }}" inputmode="decimal"></label></div>
+    {{ repeat_box('missing_punch', 'missing punches') }}</section>
+
+  <section class="card sc-comp" data-kind="rejected_permit"><div class="card-head"><h2>{{ icon('file') }}Permit refused</h2><span class="hint">اذن حضور / اذن انصراف a manager refused</span></div>
+    <div class="form-grid">
+      <label class="field">Points for each refused permit (%)<input name="rejected_permit_penalty" value="{{ form.rejected_permit_penalty }}" inputmode="decimal"></label>
+      <label class="field">Most this can cost (%)<input name="rejected_permit_cap" value="{{ form.rejected_permit_cap }}" inputmode="decimal"></label></div>
+    {{ repeat_box('rejected_permit', 'refused permits') }}
+    <p class="small muted">A permit that is missing or not reviewed yet never costs anything - only a manager's “not excused” does.</p></section>
+
+  <section class="card sc-comp" data-kind="categories"><div class="card-head"><h2>{{ icon('award') }}Categories</h2><span class="hint">the highest is green, the lowest red</span></div>
+    <div class="field"><span class="lbl">A person gets the highest category their score reaches</span>
+      <div class="rows" data-kind="categories" data-target="categories"></div>
+      <label class="field rawfield">As text <span class="hint">Excellent=90; Good=75; Critical=0</span><input name="categories" value="{{ form.categories }}"></label></div></section>
+
+  <section class="card sc-save"><div class="form-grid"><label class="field">Effective from<input type="date" name="effective_from" value="{{ today }}" required></label><label class="field wide">Why this change <span class="hint">(optional note)</span><input name="note"></label></div>
+    <div class="row"><button class="btn btn-primary" type="submit">{{ icon('check') }}Save as a new version</button><span class="small muted">Earlier versions stay in the history and still apply to periods before this date.</span></div></section>
+</form>
+
+<aside class="sc-side" aria-label="Try the rules">
+  <section class="card sc-try" id="scTry"><div class="card-head"><h2>{{ icon('bars') }}Try it</h2><span class="hint">an invented month - see the score change as you type</span></div>
+    <div class="stack">
+      <label class="field">Late arrivals, minutes of each <span class="hint">e.g. 10, 20, 40</span><input form="scoringForm" name="sample_late" value="10, 20, 40, 12" autocomplete="off"></label>
+      <label class="field">Early departures, minutes of each<input form="scoringForm" name="sample_early" value="15" autocomplete="off"></label>
+      <div class="form-grid">
+        <label class="field">Unexcused absences<input form="scoringForm" name="sample_absences" value="1" inputmode="numeric"></label>
+        <label class="field">Missing punches<input form="scoringForm" name="sample_missing" value="2" inputmode="numeric"></label>
+        <label class="field">Refused permits<input form="scoringForm" name="sample_rejected" value="0" inputmode="numeric"></label>
+        <label class="field">Working days<input form="scoringForm" name="sample_days" value="22" inputmode="numeric"></label></div>
+      <label class="check"><input form="scoringForm" type="checkbox" name="sample_consecutive" value="1"> the problems fall on days in a row</label>
+    </div>
+    <div class="sc-result" id="scPreview" aria-live="polite"><p class="muted small">The result appears here.</p></div>
+  </section>
+  <details class="card sc-inforce"><summary>{{ icon('info') }}The rules in force{% if version %} (version {{ version }}){% endif %}</summary>
+    <ul class="small stack">{% for x in rules_text %}<li><b>{{ x.label }}:</b> {{ x.text }}{% if x.repeat %} · <span class="muted">{{ x.repeat }}</span>{% endif %}{% if x.cap %} · <span class="muted">{{ x.cap }}</span>{% endif %}</li>{% endfor %}</ul></details>
+</aside>
+</div>
+
+<section class="card flush"><details class="sc-history"><summary class="card-head">{{ icon('history') }}Version history <span class="hint">({{ versions|length }})</span></summary>
+<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Version</th><th>Effective from</th><th>Saved</th><th>By</th><th>Note</th><th>Rules</th></tr></thead><tbody>
+{% for v in versions|reverse %}<tr><td>{{ v.version }}</td><td>{{ v.effective_from|dmy }}</td><td class="nowrap">{{ v.created_at|ts }}</td><td>{{ v.created_by }}</td><td dir="auto" class="bidi">{{ v.note }}</td>
+  <td class="small">{% for x in describe(v.rules) if x.text != 'no penalty' %}<div><b>{{ x.label }}:</b> {{ x.text }}{% if x.repeat %} · {{ x.repeat }}{% endif %}</div>{% else %}<span class="muted">no penalties</span>{% endfor %}
+    {% if v.rules.categories %}<div><b>Categories:</b> {% for c in v.rules.categories %}{{ c.name }} ≥ {{ c.min }}{{ '; ' if not loop.last }}{% endfor %}</div>{% endif %}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">No version saved yet.</td></tr>{% endfor %}</tbody></table></div></details></section>
+{% endblock %}

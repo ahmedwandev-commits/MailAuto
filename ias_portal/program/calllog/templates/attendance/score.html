@@ -1,0 +1,60 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, banner, tone_chip, empty with context %}
+{% block att_title %}Attendance scorecard{% endblock %}
+{% block content %}
+{% set sc = rep.score %}{% set e = rep.employee %}
+<nav class="crumbs"><a href="{{ url_for('att_people.employees') }}">Employees</a>{{ icon('chevron-right') }}<a href="{{ url_for('att_people.profile', emp_id=e.id, **{'from': d1, 'to': d2}) }}" dir="auto" class="bidi">{{ e.name|short_name(3) }}</a>{{ icon('chevron-right') }}<span>Scorecard</span></nav>
+{% call head('Attendance scorecard', (d1|dmy) ~ ' – ' ~ (d2|dmy) ~ ' · rule set ' ~ (('version ' ~ rep.rules_version) if rep.rules_version else 'not saved yet'), 'award') %}
+  <span class="seg">{% for label, a, b in presets %}<a href="{{ url_for('att_people.score', emp_id=e.id, **{'from': a, 'to': b}) }}" {% if a == d1 and b == d2 %}aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}</span>
+{% endcall %}
+{% for n in sc.notes %}{% call banner('t-warn' if ('not configured' in n or 'Insufficient' in n or 'not complete' in n) else 't-info', 'alert-triangle' if 'not configured' in n else 'info') %}{{ n }}{% endcall %}{% endfor %}
+
+<section class="card scoreboard {{ sc.category_tone or 't-na' }}" aria-label="Score">
+  <div class="sb-main">
+    <div class="sb-num"><span class="sb-val">{{ sc.score|num }}</span><span class="sb-of">/ {{ sc.start }}</span></div>
+    <div class="sb-meta">
+      {% if sc.category %}{{ tone_chip(sc.category, sc.category_tone, 'award') }}{% elif sc.insufficient_data %}{{ tone_chip('Not enough data to classify', 't-na', 'info') }}{% else %}{{ tone_chip('No category' if sc.configured else 'Rules not configured', 't-na') }}{% endif %}
+      <p class="eq">{{ sc.start }} − {{ sc.total_deduction|num }} = <b>{{ sc.score|num }}</b></p>
+      <p class="small muted"><span dir="auto" class="bidi">{{ e.name|short_name(4) }}</span> · #{{ e.id }} · {{ sc.judged_days }} evaluated working day(s)</p>
+      {% if sc.caps_applied %}<p class="small muted">Caps applied: {{ sc.caps_applied|join('; ') }}</p>{% endif %}
+    </div>
+    <div class="sb-ring">{{ donut([('Score', sc.score, 't-ok'), ('Deducted', sc.start - sc.score, 't-danger')], 140, sc.score|num, 'of ' ~ sc.start) }}</div>
+  </div>
+  <div class="bar" role="img" aria-label="Score {{ sc.score|num }} of {{ sc.start }}"><span class="fill" data-pct="{{ (100 * sc.score / sc.start)|round|int if sc.start else 0 }}"></span></div>
+</section>
+
+<section class="card flush" aria-labelledby="bd-h">
+  <div class="card-head"><h2 id="bd-h">{{ icon('bars') }}Where the points went</h2><span class="hint">every line is one rule of the configured rule set</span></div>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>Rule</th><th class="num">Occurrences</th><th class="num">Base penalty</th><th class="num">Added by the repeat rule</th><th class="num">Deducted</th><th>Cap</th></tr></thead>
+    <tbody>
+    {% for d in sc.deductions %}<tr class="{{ '' if d.active else 'muted' }}">
+      <td>{{ icon({'late': 'clock', 'early': 'arrow-left', 'absence': 'user-x', 'missing_punch': 'alert-circle', 'rejected_permit': 'file'}[d.kind]) }}{{ d.label }}{% if not d.active %} <span class="small">(no penalty configured)</span>{% endif %}</td>
+      <td class="num">{{ d.count }}</td><td class="num">{{ d.base_total|num(2) }}</td><td class="num">{{ ('+' ~ d.repeat_total|num(2)) if d.repeat_total else '—' }}</td>
+      <td class="num"><b>{{ ('−' ~ d.total|num(2)) if d.total else '0' }}</b></td><td class="small">{{ (d.cap|num ~ ' points') if d.cap is not none else '—' }}</td></tr>{% endfor %}
+    </tbody>
+    <tfoot><tr><td colspan="4"><b>Total deducted</b></td><td class="num"><b>−{{ sc.total_deduction|num(2) }}</b></td><td></td></tr></tfoot>
+  </table></div>
+</section>
+
+<div class="deduct">
+{% for d in sc.deductions if d['items'] %}
+  <section class="card flush">
+    <div class="card-head"><h2>{{ icon({'late': 'clock', 'early': 'arrow-left', 'absence': 'user-x', 'missing_punch': 'alert-circle', 'rejected_permit': 'file'}[d.kind]) }}{{ d.label }}</h2>
+      <span class="grow"></span>{{ tone_chip('−' ~ d.total|num(2) ~ ' point(s)', 't-danger' if d.total else 't-ok') }}</div>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>What happened</th><th class="num">Base</th><th class="num">Charged</th></tr></thead><tbody>
+      {% for i in d['items'] %}<tr><td>{{ i.date|dmy }}</td><td>{{ i.detail }}</td><td class="num">−{{ i.base|num(2) }}</td><td class="num">−{{ i.points|num(2) }}</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+{% endfor %}
+{% if not sc.total_deduction %}<section class="card"><p class="muted">No deductions in this period.</p></section>{% endif %}
+</div>
+
+<section class="card"><h3>The rules behind this score</h3>
+  <ul class="small stack">{% for x in sc.rules_text %}<li><b>{{ x.label }}:</b> {{ x.text }}{% if x.repeat %} · <span class="muted">{{ x.repeat }}</span>{% endif %}{% if x.cap %} · <span class="muted">{{ x.cap }}</span>{% endif %}</li>{% endfor %}</ul>
+  <ul class="small stack mt">
+    <li>Late arrivals and early departures are measured against the <b>assigned shift</b> (the default shift included), after any grace and permit excuse.</li>
+    <li>A <b>missing permit</b> never lowers the score by itself; leave, holidays and rest days never do.</li>
+    <li>This is an attendance score, separate from any performance evaluation.</li></ul>
+  {% if att_user.role == 'admin' %}<p class="mt"><a class="btn btn-ghost btn-sm" href="{{ url_for('att_admin.scoring_rules') }}">{{ icon('sliders') }}Change the rules</a></p>{% endif %}
+</section>
+{% endblock %}

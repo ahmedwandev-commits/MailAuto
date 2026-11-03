@@ -1,0 +1,79 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, banner, kpi, empty with context %}
+{% block att_title %}Shift allowance{% endblock %}
+{% block content %}
+{% set EN = {'morning': 'Morning', 'evening': 'Evening', 'night': 'Night', 'holiday': 'Holiday', 'rest_day': 'Weekly rest day', 'official_holiday': 'Official holiday'} %}
+{% set AR = {'morning': 'صباحية', 'evening': 'مسائية', 'night': 'ليلية', 'rest_day': 'عطلة', 'official_holiday': 'عطلة'} %}
+{% set IC = {'morning': 'sun', 'evening': 'sunset', 'night': 'moon', 'holiday': 'calendar'} %}
+{% set SRC = {'schedule': 'portal schedule', 'check-in': 'check-in time', 'time': 'time of the day', 'holiday': 'holiday'} %}
+{% set R = rep.rules %}
+{% call head('Shift allowance (بدل ورديات)', 'The shifts of the employees from the HR attendance and the portal schedule. Managers are counted for the morning shift and holidays only.', 'download') %}{% endcall %}
+<section class="card tight"><p class="small muted"><b>How a day is counted.</b>
+  {% if rep.use_schedule %}The shift is the one in the <b>portal schedule</b> for that day (imported, or changed by the manager), whatever time the person checked in.{% endif %}
+  Without a planned shift: a check-in at the start of a shift ({% for k in ['morning', 'evening', 'night'] if R[k].enabled %}{{ EN[k] }} {{ R[k].start }}{% if R[k].grace %} +{{ R[k].grace }} min{% endif %}{{ ', ' if not loop.last }}{% endfor %}), or - for somebody who has shifts that month - leaving at or after {{ rep.evening_after }} = Evening.
+  The person must stay the hours (Morning / Evening / Night: {{ '%g'|format(R.morning.hours) }} h). A weekly rest day or an official holiday worked = Holiday{% if R.rest_day.needs_hours and R.rest_day.hours %}, with {{ '%g'|format(R.rest_day.hours) }} h{% endif %}.
+  Anything else is listed below as “Not counted”. Rules: Settings → Rules &amp; allowance.</p></section>
+
+<form method="get" class="card row" aria-label="Period">
+  <label class="field">From<input type="date" name="from" value="{{ d1 }}" required></label>
+  <label class="field">To<input type="date" name="to" value="{{ d2 }}" required></label>
+  <label class="field">Team<select name="team"><option value="">All teams</option>{% for t in teams %}<option {{ 'selected' if t == team }}>{{ t }}</option>{% endfor %}</select></label>
+  <button class="btn btn-ghost" type="submit">{{ icon('refresh') }}Show</button>
+  {% for label, a, b in months %}<a class="btn btn-ghost" href="{{ url_for('att_allowance.index', **{'from': a, 'to': b, 'team': team}) }}" {% if a == d1 and b == d2 %}aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}
+  <a class="btn btn-primary" href="{{ url_for('att_allowance.export', **{'from': d1, 'to': d2, 'team': team}) }}">{{ icon('download') }}Export Excel</a>
+</form>
+
+{% if approvals %}
+<section class="card flush" aria-labelledby="ap-h">
+  <div class="card-head"><h2 id="ap-h">{{ icon('check-circle') }}Approval by the managers</h2><span class="hint">{% if can_pending %}You see every shift below, approved or not; the Days table marks which ones the manager has approved.{% else %}A team's shifts reach this sheet when its manager approves the month (Monthly shifts).{% endif %}</span></div>
+  <div class="tbl-wrap flat"><table class="tbl" id="allowance-approvals">
+    <thead><tr><th>Month</th><th>Team</th><th>Status</th><th>By</th><th>When</th></tr></thead><tbody>
+    {% for a in approvals %}<tr><td>{{ a.month }}</td><td dir="auto" class="bidi">{{ a.team }}</td>
+      <td>{% if a.status == 'approved' %}<span class="chip t-ok">{{ icon('check-circle') }}Approved</span>{% elif a.status == 'changed' %}<span class="chip t-warn">{{ icon('alert-triangle') }}Changed after approval</span>{% else %}<span class="chip t-na">{{ icon('clock') }}Waiting for the manager</span>{% endif %}</td>
+      <td dir="auto" class="bidi">{{ a.by or '—' }}</td><td>{{ a.at or '—' }}</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+{% endif %}
+
+{% if rep.hidden_days %}{% call banner('t-info', 'info') %}<b>{{ rep.hidden_days }} counted day(s) are not shown</b> because the manager of their team has not approved that month yet (Monthly shifts).{% endcall %}{% endif %}
+{% if not rep.data_loaded %}{% call banner('t-warn', 'alert-triangle') %}<b>No HR attendance is stored for this period.</b> Ask the administrator to import the HR attendance file.{% endcall %}{% endif %}
+{% if rep.skipped %}{% call banner('t-warn', 'alert-triangle') %}<b>{{ rep.skipped|length }} day(s) with punches were not counted</b> - open “Not counted” below (also the last sheet of the Excel file).{% endcall %}{% endif %}
+
+<section class="kpis" aria-label="Totals">
+  {% for k in rep.kinds %}{{ kpi(EN[k], rep.totals[k].count, 'days', 's0', IC[k]) }}{% endfor %}
+  {{ kpi('Total', rep.totals.total_count, 'days · ' ~ rep.rows|length ~ ' employees', 't-ok', 'check-circle') }}
+  {% if rep.has_amounts %}{{ kpi('Amount', '{:,.2f}'.format(rep.totals.amount), rep.currency, 't-ok', 'award') }}{% endif %}
+</section>
+
+<section class="card flush" aria-labelledby="al-h">
+  <div class="card-head"><h2 id="al-h">{{ icon('users') }}Per employee</h2><span class="hint">Counted days.</span></div>
+  <div class="tbl-wrap"><table class="tbl" id="allowance-table">
+    <thead><tr><th>ID</th><th>Employee</th>{% for k in rep.kinds %}<th class="num">{{ EN[k] }}</th>{% endfor %}<th class="num">Total</th>{% if rep.has_amounts %}<th class="num">Amount ({{ rep.currency }})</th>{% endif %}</tr></thead>
+    <tbody>
+    {% for r in rep.rows %}<tr><td>{{ r.employee_id }}</td><td dir="auto" class="bidi">{{ r.name }}</td>
+      {% for k in rep.kinds %}<td class="num">{{ r[k].count }}</td>{% endfor %}<td class="num"><b>{{ r.total_count }}</b></td>{% if rep.has_amounts %}<td class="num">{{ '{:,.2f}'.format(r.amount) }}</td>{% endif %}</tr>
+    {% else %}<tr><td colspan="{{ 3 + rep.kinds|length }}">{% call empty('users', 'No counted days in this period', 'Nobody has a day that qualifies in the chosen period and team.') %}{% endcall %}</td></tr>{% endfor %}
+    </tbody>
+    {% if rep.rows %}<tfoot><tr><td colspan="2"><b>Total</b></td>{% for k in rep.kinds %}<td class="num">{{ rep.totals[k].count }}</td>{% endfor %}<td class="num"><b>{{ rep.totals.total_count }}</b></td>{% if rep.has_amounts %}<td class="num"><b>{{ '{:,.2f}'.format(rep.totals.amount) }}</b></td>{% endif %}</tr></tfoot>{% endif %}
+  </table></div>
+</section>
+
+{% if rep.skipped %}
+<details class="card flush fold" aria-labelledby="skip-h">
+  <summary class="card-head"><h2 id="skip-h">{{ icon('alert-triangle') }}Not counted</h2><span class="hint">{{ rep.skipped|length }} day(s) with a punch that did not qualify{% if rep.skipped|length > 300 %} (the first 300 are shown){% endif %}</span></summary>
+  <div class="tbl-wrap"><table class="tbl" id="allowance-skipped">
+    <thead><tr><th>ID</th><th>Employee</th><th>Date</th><th>Check-in</th><th>Check-out</th><th>Reason</th></tr></thead><tbody>
+    {% for s in rep.skipped[:300] %}<tr><td>{{ s.employee_id }}</td><td dir="auto" class="bidi">{{ rep.names.get(s.employee_id, '') }}</td><td>{{ s.date|dmy }}</td><td>{{ (s.in_time or '—')[:5] }}</td><td>{{ (s.out_time or '—')[:5] }}</td><td>{{ s.reason }}</td></tr>{% endfor %}
+    </tbody></table></div>
+</details>
+{% endif %}
+
+<details class="card flush fold" aria-labelledby="days-h">
+  <summary class="card-head"><h2 id="days-h">{{ icon('calendar') }}Days</h2><span class="hint">{{ rep.days|length }} rows (the first 300 are shown here; the Excel file has all of them)</span></summary>
+  <div class="tbl-wrap"><table class="tbl" id="allowance-days">
+    <thead><tr><th>ID</th><th>Employee</th><th>Date</th><th>Check-in</th><th>Check-out</th><th>Counted as</th><th>Because</th>{% if can_pending %}<th>Manager</th>{% endif %}</tr></thead><tbody>
+    {% for d in rep.days[:300] %}<tr><td>{{ d.employee_id }}</td><td dir="auto" class="bidi">{{ rep.names[d.employee_id] }}</td><td>{{ d.date|dmy }}</td><td>{{ (d.in_time or '—')[:5] }}</td><td>{{ (d.out_time or '—')[:5] }}</td>
+      <td>{{ AR[d.kind] }} <span class="small muted">{{ EN[d.kind] }}</span></td><td class="small muted">{{ SRC[d.source] }}</td>{% if can_pending %}<td>{% if d.approved %}<span class="chip t-ok">Approved</span>{% else %}<span class="chip t-na">Not approved yet</span>{% endif %}</td>{% endif %}</tr>{% endfor %}
+    </tbody></table></div>
+</details>
+{% endblock %}

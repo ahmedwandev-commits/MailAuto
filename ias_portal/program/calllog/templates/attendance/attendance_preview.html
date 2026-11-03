@@ -1,0 +1,85 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, stepper, csrf, banner, tone_chip, kpi with context %}
+{% block att_title %}Validate HR attendance import{% endblock %}
+{% block content %}
+{% set imp = pv.import %}{% set p = pv.parsed %}
+{% set FL = {'employee_id': 'Employee ID *', 'name': 'Employee name', 'department': 'Department', 'sector': 'Sector', 'date': 'Date *', 'day_name': 'Day name', 'day_type': 'Day type',
+             'in_time': 'Check-in time', 'in_source': 'Check-in source', 'out_time': 'Check-out time', 'out_source': 'Check-out source', 'leave_text': 'Leave status',
+             'permit_text': 'Permit status', 'mission_text': 'Mission status'} %}
+<nav class="crumbs"><a href="{{ url_for('att_attendance.import_upload') }}">HR attendance import</a>{{ icon('chevron-right') }}<span dir="auto" class="bidi">{{ imp.filename }}</span></nav>
+{% call head('Validate HR attendance file', (('Header on row ' ~ p.header_row ~ ' · period ' ~ p.period[0] ~ ' → ' ~ p.period[1]) if not pv.error and p.period else 'Columns need your attention'), 'file') %}{% endcall %}
+{{ stepper(['Upload', 'Map columns & validate', 'Confirm'], 2) }}
+
+{% macro mapping_form(open) %}
+{% set hdr_row = p.manual_header_row or p.header_row or 2 %}
+{% set cols = p.header if p.header else (p.grid[hdr_row - 1] if p.grid and hdr_row <= p.grid|length else []) %}
+{% set ncols = [cols|length, (p.grid|map('length')|max) if p.grid else 0]|max %}
+<details class="card" {{ 'open' if open }}>
+  <summary class="row"><b>{{ icon('columns') }} Column mapping</b><span class="hint">{{ 'detected automatically — correct it if a column is wrong' if not pv.error else 'choose the header row and the columns' }}</span></summary>
+  <form method="post" action="{{ url_for('att_attendance.import_map', import_id=imp.id) }}" class="stack mt">
+    {{ csrf() }}
+    {% if pv.error %}
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Row</th>{% for i in range(ncols) %}<th>col {{ i }}</th>{% endfor %}</tr></thead><tbody>
+      {% for r in p.grid %}<tr><td>{{ loop.index }}</td>{% for v in r %}<td dir="auto" class="bidi small">{{ v[:28] }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div>
+    {% endif %}
+    <div class="form-grid">
+      <label class="field">Header row<input type="number" name="header_row" min="1" value="{{ p.manual_header_row or p.header_row or 2 }}"></label>
+      {% for f in pv.fields %}
+      <label class="field">{{ FL.get(f, f) }}<select name="map_{{ f }}"><option value="">— not present —</option>
+        {% for i in range(ncols) %}<option value="{{ i }}" {{ 'selected' if p.mapping.get(f) == i }}>{{ i }} · {{ (cols[i] if i < cols|length else '')[:30] }}</option>{% endfor %}</select></label>
+      {% endfor %}
+    </div>
+    <div><button class="btn btn-ghost" type="submit">{{ icon('refresh') }}Apply mapping</button> <span class="small muted">* required</span></div>
+  </form>
+</details>
+{% endmacro %}
+
+{% if pv.error %}
+  {% call banner('t-danger', 'alert-circle') %}<b>{{ pv.error }}</b> Choose the header row and map at least the employee id and the date.{% endcall %}
+  {{ mapping_form(true) }}
+  <form method="post" action="{{ url_for('att_attendance.import_cancel', import_id=imp.id) }}">{{ csrf() }}<button class="btn btn-ghost" type="submit">Cancel import</button></form>
+{% else %}
+<section class="kpis">
+  {{ kpi('New records', pv.accepted, 'will be added', 't-ok', 'check-circle') }}
+  {{ kpi('Already stored', pv.existing, 'days that are in the system already', 't-na', 'lock') }}
+  {{ kpi('…differ from stored', pv.differs, 'this file completes / corrects them (a blank never erases a stored punch)', 't-warn' if pv.differs else 't-na', 'alert-triangle') }}
+  {{ kpi('Duplicates in the file', p.duplicates_in_file, 'first occurrence wins', 't-warn' if p.duplicates_in_file else 't-na', 'layers') }}
+  {{ kpi('Rejected rows', p.rejected|length, 'invalid id / date / time', 't-danger' if p.rejected else 't-na', 'x') }}
+  {{ kpi('Unknown employee ids', pv.unknown_employees|length, pv.rows_unknown ~ ' rows', 't-warn' if pv.unknown_employees else 't-na', 'user-x') }}
+</section>
+{% set ps = pv.punch_stats %}
+<section class="card"><div class="card-head"><h2>{{ icon('clock') }}Punch quality on working days</h2><span class="hint">weekly rest days and holidays are excluded; leave and missions are not counted as missing</span></div>
+  <dl class="facts">
+    <div class="fact"><dt>Working-day rows</dt><dd>{{ ps.working_rows }}</dd></div>
+    <div class="fact"><dt>Complete (IN + OUT)</dt><dd>{{ ps.complete }}</dd></div>
+    <div class="fact {{ 't-warn' if ps.missing_out }}"><dt>Missing OUT</dt><dd>{{ ps.missing_out }}</dd></div>
+    <div class="fact {{ 't-warn' if ps.missing_in }}"><dt>Missing IN</dt><dd>{{ ps.missing_in }}</dd></div>
+    <div class="fact {{ 't-warn' if ps.missing_both }}"><dt>Missing both</dt><dd>{{ ps.missing_both }}</dd></div>
+    <div class="fact"><dt>Leave / mission</dt><dd>{{ ps.on_leave_or_mission }}</dd></div>
+  </dl>
+  <p class="small muted mt">Missing punches are reported, not penalised. Whether a day is an absence depends on the employee's planned shift and is decided in the analytics.</p></section>
+{{ mapping_form(false) }}
+
+{% if pv.unknown_employees %}
+<section class="card flush tone t-warn"><div class="card-head"><h2>{{ icon('user-x') }}Unknown employee ids</h2><span class="hint">not in the employee list yet</span></div>
+  <div class="tbl-wrap"><table class="tbl"><thead><tr><th>ID</th><th>Name in file</th><th>Department</th></tr></thead><tbody>
+  {% for i, v in pv.unknown_employees.items() %}<tr><td>{{ i }}</td><td dir="auto" class="bidi">{{ v.name }}</td><td dir="auto" class="bidi">{{ v.department }}</td></tr>{% endfor %}</tbody></table></div></section>
+{% endif %}
+{% if p.rejected %}
+<section class="card flush tone t-danger"><div class="card-head"><h2>{{ icon('x') }}Rejected rows</h2><span class="count t-danger">{{ p.rejected|length }}</span></div>
+  <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Excel row</th><th>Employee</th><th>Reason</th></tr></thead><tbody>
+  {% for r in p.rejected[:200] %}<tr><td>{{ r.row }}</td><td>{{ r.employee_id }}</td><td>{{ r.reason }}</td></tr>{% endfor %}</tbody></table></div></section>
+{% endif %}
+<section class="card flush"><div class="card-head"><h2>{{ icon('list') }}First rows</h2></div>
+  <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Employee</th><th>Date</th><th>Day type</th><th>IN</th><th>OUT</th><th>Leave</th><th>Permit</th><th>Mission</th></tr></thead><tbody>
+  {% for r in pv.sample %}<tr><td>{{ r.employee_id }}</td><td>{{ r.work_date }}</td><td dir="auto" class="bidi">{{ r.day_type }}</td><td>{{ r.in_time }}</td><td>{{ r.out_time }}</td><td dir="auto" class="bidi">{{ r.leave_text }}</td><td dir="auto" class="bidi">{{ r.permit_text }}</td><td dir="auto" class="bidi">{{ r.mission_text }}</td></tr>{% endfor %}</tbody></table></div></section>
+
+<form method="post" action="{{ url_for('att_attendance.import_confirm', import_id=imp.id) }}" class="sticky-bar">
+  {{ csrf() }}
+  <span class="grow small muted">{{ pv.accepted }} record(s) will be added; nothing existing is changed.</span>
+  {% if pv.unknown_employees and manages_employees %}<label class="check"><input type="checkbox" name="create_unknown" value="1"> Create the {{ pv.unknown_employees|length }} unknown employee(s)</label>{% elif pv.unknown_employees %}<span class="small muted">{{ pv.unknown_employees|length }} number(s) have no portal account: their rows are skipped (create the account first, then import again).</span>{% endif %}
+  <button class="btn btn-primary" type="submit">{{ icon('check') }}Confirm and import</button>
+  <button class="btn btn-ghost" type="submit" formaction="{{ url_for('att_attendance.import_cancel', import_id=imp.id) }}">Cancel import</button>
+</form>
+{% endif %}
+{% endblock %}

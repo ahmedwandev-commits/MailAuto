@@ -1,0 +1,158 @@
+{% extends "attendance/base.html" %}
+{% from "attendance/_ui.html" import icon, head, kpi, banner, shift, tone_chip, empty, person with context %}
+{% block att_title %}My attendance{% endblock %}
+{% block content %}
+{% macro hrs(h) -%}{% set mins = ((h or 0) * 60)|round|int %}{{ mins // 60 }}:{{ '%02d' % (mins % 60) }}{%- endmacro %}
+{% macro egp(v) -%}{{ '{:,.0f}'.format(v or 0) }}{%- endmacro %}
+{% set KIND_EN = {'morning': 'Morning', 'evening': 'Evening', 'night': 'Night', 'rest_day': 'Weekly rest day', 'official_holiday': 'Official holiday'} %}
+{% set KIND_CODE = {'morning': 'M', 'evening': 'E', 'night': 'N', 'rest_day': 'OFF', 'official_holiday': 'OFF'} %}
+{% set MEAL_EN = {'breakfast': 'Breakfast', 'evening_meal': 'Lunch', 'dinner': 'Dinner', 'lunch': 'Extra meal (10 h day)'} %}
+
+{% call head('My attendance', ((rep.employee.name ~ (' · ' ~ rep.employee.teams|join(', ') if rep.employee.teams else '') ~ ' · ') if rep else '') ~ label, 'user-check') %}
+  <span class="datenav">
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_myatt.index', month=prev_m, tab=tab, team=team or none) }}" aria-label="Previous month">{{ icon('chevron-left') }}</a>
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_myatt.index', tab=tab, team=team or none) }}">This month</a>
+    <a class="btn btn-ghost btn-sm" href="{{ url_for('att_myatt.index', month=next_m, tab=tab, team=team or none) }}" aria-label="Next month">{{ icon('chevron-right') }}</a>
+  </span>
+{% endcall %}
+
+<nav class="seg seg-tabs" aria-label="My attendance">
+  {% if mine %}
+  <a href="{{ url_for('att_myatt.index', month=month, tab='attendance') }}" {% if tab == 'attendance' %}aria-current="page"{% endif %}>{{ icon('clock') }}Attendance</a>
+  <a href="{{ url_for('att_myatt.index', month=month, tab='allowance') }}" {% if tab == 'allowance' %}aria-current="page"{% endif %}>{{ icon('download') }}Shift allowance</a>
+  <a href="{{ url_for('att_myatt.index', month=month, tab='overtime') }}" {% if tab == 'overtime' %}aria-current="page"{% endif %}>{{ icon('bars') }}Overtime</a>
+  {% endif %}
+  {% if can_team %}<a href="{{ url_for('att_myatt.index', month=month, tab='team') }}" {% if tab == 'team' %}aria-current="page"{% endif %}>{{ icon('users') }}Team</a>{% endif %}
+</nav>
+
+{% if tab != 'team' %}
+{% if not rep %}
+  {% call banner('t-warn', 'alert-triangle') %}<b>Your account is not linked to an HR employee number.</b> Your User ID must be your HR number for your own attendance to show. Ask an administrator.{% endcall %}
+{% else %}
+{% set o = rep.overtime %}
+{% set pending = rep.days|selectattr('note', 'equalto', 'waiting for the HR sheet')|list %}
+{% if pending and rep.data_loaded %}{% call banner('t-info', 'info') %}<b>{{ pending|length }} day(s) wait for the HR sheet</b> - until the administrator uploads them they are counted as expected from your schedule.{% endcall %}{% endif %}
+{% if not rep.data_loaded and rep.month <= today[:7] %}{% call banner('t-info', 'info') %}No HR attendance is loaded for this month yet: the days so far are empty, and the expected amounts come from your schedule.{% endcall %}{% endif %}
+
+{# ------------------------------------------------------------------------------------------------ Attendance #}
+{% if tab == 'attendance' %}
+{% set worked = rep.days|selectattr('stay')|list %}
+<section class="kpis" aria-label="This month">
+  {{ kpi('Days worked', worked|length, 'with a check-in and a check-out', 's0', 'calendar-check') }}
+  {{ kpi('Hours worked', hrs(worked|sum(attribute='stay')), 'hours:minutes', 't-ok', 'clock') }}
+  {{ kpi('Overtime', hrs(o.capped), '%.1f'|format(o.pct) ~ ' % of ' ~ o.base_hours_month|int ~ ' h · details in Overtime', 't-warn' if o.capped else 't-na', 'bars', url_for('att_myatt.index', month=month, tab='overtime')) }}
+  {{ kpi('Expected allowance', egp(rep.expected_total) ~ ' ' ~ rep.currency, 'details in Shift allowance', 't-info', 'download', url_for('att_myatt.index', month=month, tab='allowance')) }}
+</section>
+<section class="card flush" aria-labelledby="ma-h">
+  <div class="card-head"><h2 id="ma-h">{{ icon('calendar') }}{{ rep.label }}</h2><span class="hint">overtime starts after {{ rep.rules.base_hours|num }} hours of work</span></div>
+  <div class="tbl-wrap"><table class="tbl" id="my-attendance">
+    <thead><tr><th>Date</th><th>Day</th><th>Plan</th><th>Check-in</th><th>Check-out</th><th class="num">Hours</th><th class="num">Overtime</th><th class="num">Counted</th><th>Note</th></tr></thead><tbody>
+    {% for d in rep.days %}<tr class="{{ 'today' if d.date == today }}{{ ' muted' if d.expected and not d.in }}">
+      <td class="nowrap">{{ d.date|dmy }}</td><td>{{ d.date|dayname }}</td>
+      <td>{% if d.planned %}{{ shift(d.planned) }}{% elif d.day_kind %}{{ tone_chip('Holiday' if d.day_kind == 'official_holiday' else 'Rest day', 't-na') }}{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td>{{ d.in or '—' }}</td><td>{{ d.out or '—' }}</td>
+      <td class="num">{{ hrs(d.stay) if d.stay else '—' }}</td>
+      <td class="num">{{ hrs(d.raw) if d.raw else '—' }}</td>
+      <td class="num">{% if d.weighted %}<b>{{ hrs(d.weighted) }}</b>{% else %}—{% endif %}</td>
+      <td class="small muted">{{ d.note }}{% if d.expected and d.date > today %}expected{% endif %}</td></tr>{% endfor %}
+    </tbody></table></div>
+  <p class="small muted pad">“Overtime” is the time after {{ rep.rules.base_hours|num }} hours; “Counted” is that time with its rate (before {{ rep.rules.evening_from }} ×{{ rep.rules.day_rate|num(2) }}, {{ rep.rules.evening_from }}–{{ rep.rules.night_from }} ×{{ rep.rules.evening_rate|num(2) }}, after {{ rep.rules.night_from }} ×{{ rep.rules.night_rate|num(2) }}; a rest day or holiday without a comp day ×{{ rep.rules.holiday_rate|num(2) }}).</p>
+</section>
+
+{# ------------------------------------------------------------------------------------------------ Shift allowance #}
+{% elif tab == 'allowance' %}
+{% set s, r = rep.so_far, rep.rest %}
+<section class="kpis" aria-label="Shift allowance">
+  {{ kpi('Expected this month', egp(rep.expected_total) ~ ' ' ~ rep.currency, 'so far + the rest of your schedule', 't-ok', 'award') }}
+  {{ kpi('So far', egp(s.total) ~ ' ' ~ rep.currency, 'days worked up to today', 's0', 'check-circle') }}
+  {{ kpi('Still expected', egp(r.total) ~ ' ' ~ rep.currency, 'if you work your planned shifts', 't-info', 'calendar') }}
+</section>
+{% if rep.is_manager %}{% call banner('t-info', 'info') %}As a supervisor you are paid the <b>morning shift</b> (and a rest day or holiday worked) with its breakfast; a day of {{ rep.rules.long_day_hours|num }} hours or more adds an extra meal (lunch).{% endcall %}{% endif %}
+<div class="grid g2">
+  <section class="card flush" aria-labelledby="tr-h">
+    <div class="card-head"><h2 id="tr-h">{{ icon('download') }}Transport allowance</h2><span class="hint">by the shift each day counts as</span></div>
+    <table class="tbl" id="my-transport"><thead><tr><th>Shift</th><th class="num">Rate</th><th class="num">So far</th><th class="num">Expected</th><th class="num">Amount</th></tr></thead><tbody>
+    {% for k in ('morning', 'evening', 'night', 'rest_day', 'official_holiday') if rep.rates[k] and (not rep.is_manager or k != 'evening' and k != 'night') and (s.shift_counts[k] or r.shift_counts[k] or k == 'morning' or (k in ('evening', 'night') and not rep.is_manager)) %}
+      <tr><td>{{ shift(KIND_CODE[k]) }} {{ KIND_EN[k] }}</td><td class="num">{{ egp(rep.rates[k]) }}</td><td class="num">{{ s.shift_counts[k] }}</td><td class="num">{{ r.shift_counts[k] }}</td>
+        <td class="num">{{ egp((s.shift_counts[k] + r.shift_counts[k]) * rep.rates[k]) }}</td></tr>{% endfor %}
+    </tbody><tfoot><tr><td colspan="4"><b>Total</b></td><td class="num"><b>{{ egp(s.transport + r.transport) }}</b></td></tr></tfoot></table>
+  </section>
+  <section class="card flush" aria-labelledby="ml-h">
+    <div class="card-head"><h2 id="ml-h">{{ icon('coffee') }}Meals</h2><span class="hint">morning = breakfast, evening = lunch, night = dinner (a day off by its check-in time), plus an extra meal for a day of {{ rep.rules.long_day_hours|num }} hours or more</span></div>
+    <table class="tbl" id="my-meals"><thead><tr><th>Meal</th><th class="num">Price</th><th class="num">So far</th><th class="num">Expected</th><th class="num">Amount</th></tr></thead><tbody>
+    {% for k in ('breakfast', 'evening_meal', 'dinner', 'lunch') if s.meal_counts[k] or r.meal_counts[k] or k in ('breakfast', 'lunch') %}
+      <tr><td>{{ MEAL_EN[k] }}</td><td class="num">{{ egp(rep.meal_price[k]) }}</td><td class="num">{{ s.meal_counts[k] }}</td><td class="num">{{ r.meal_counts[k] }}</td>
+        <td class="num">{{ egp((s.meal_counts[k] + r.meal_counts[k]) * rep.meal_price[k]) }}</td></tr>{% endfor %}
+    </tbody><tfoot><tr><td colspan="4"><b>Total</b></td><td class="num"><b>{{ egp(s.meals + r.meals) }}</b></td></tr></tfoot></table>
+  </section>
+</div>
+<details class="card flush fold" aria-labelledby="ad-h">
+  <summary class="card-head"><h2 id="ad-h">{{ icon('calendar') }}Day by day</h2><span class="hint">every day with an amount - click to open</span></summary>
+  <div class="tbl-wrap"><table class="tbl" id="my-allowance-days"><thead><tr><th>Date</th><th>Counted as</th><th class="num">Transport</th><th>Meals</th><th class="num">Meals</th><th></th></tr></thead><tbody>
+  {% for d in rep.days if d.transport or d.meal_amount %}<tr class="{{ 'muted' if d.expected }}"><td class="nowrap">{{ d.date|dmy }} · {{ d.date|dayname }}</td>
+    <td>{% if d.kind %}{{ shift(KIND_CODE[d.kind]) }} {{ KIND_EN[d.kind] }}{% else %}—{% endif %}</td><td class="num">{{ egp(d.transport) }}</td>
+    <td class="small">{% for mm in d.meals %}<span>{{ MEAL_EN[mm] }}</span>{{ ' · ' if not loop.last }}{% endfor %}</td><td class="num">{{ egp(d.meal_amount) }}</td>
+    <td>{% if d.expected %}{{ tone_chip('Expected', 't-info') }}{% endif %}</td></tr>
+  {% else %}<tr><td colspan="6">{% call empty('download', 'Nothing yet', 'No day of this month counts for the shift allowance.') %}{% endcall %}</td></tr>{% endfor %}
+  </tbody></table></div>
+</details>
+<p class="small muted">An expectation, not the final amount: the official shift allowance is the one confirmed at the end of the month (Allowance › Confirmation).</p>
+
+{# ------------------------------------------------------------------------------------------------ Overtime #}
+{% elif tab == 'overtime' %}
+<section class="kpis" aria-label="Overtime">
+  {{ kpi('Overtime this month', hrs(o.capped), 'counted hours after the weekly deduction and the cap' if o.over_cap else 'counted hours after the weekly deduction', 't-warn' if o.capped else 't-na', 'bars') }}
+  {{ kpi('Of a normal month', '%.1f'|format(o.pct) ~ ' %', 'of ' ~ o.base_hours_month|num ~ ' h (' ~ rep.rules.base_days|num ~ ' days × ' ~ rep.rules.base_hours|num ~ ' h) · at most ' ~ o.cap_pct|num ~ ' %', 's0', 'award') }}
+  {{ kpi('Room left', hrs(o.cap - o.capped), 'until the cap of ' ~ hrs(o.cap) ~ ' h', 't-ok' if o.cap > o.capped else 't-danger', 'clock') }}
+</section>
+<section class="card" aria-label="Towards the cap">
+  {{ progress(o.capped, o.cap) }}
+  <p class="small muted">{{ hrs(o.capped) }} of {{ hrs(o.cap) }} h ({{ o.cap_pct|num }} % of a normal month).{% if o.over_cap %} <b>{{ hrs(o.over_cap) }} h above the cap are not counted.</b>{% endif %}</p>
+</section>
+<section class="card flush" aria-labelledby="wk-h">
+  <div class="card-head"><h2 id="wk-h">{{ icon('calendar-check') }}Week by week</h2><span class="hint">{{ rep.rules.weekly_deduction_hours|num }} h come off every week</span></div>
+  <table class="tbl" id="my-ot-weeks"><thead><tr><th>Week</th><th class="num">Overtime</th><th class="num">Counted</th><th class="num">Deduction</th><th class="num">Net</th></tr></thead><tbody>
+  {% for w in o.weeks %}<tr><td class="nowrap">{{ w.start|dm }} – {{ w.end|dm }}</td><td class="num">{{ hrs(w.raw) }}</td><td class="num">{{ hrs(w.weighted) }}</td><td class="num">−{{ hrs(w.deduction) }}</td><td class="num"><b>{{ hrs(w.net) }}</b></td></tr>
+  {% else %}<tr><td colspan="5">{% call empty('clock', 'No days yet', 'Days appear once the HR attendance of the month is loaded.') %}{% endcall %}</td></tr>{% endfor %}
+  </tbody>{% if o.weeks %}<tfoot><tr><td><b>Month</b></td><td class="num">{{ hrs(o.raw) }}</td><td class="num">{{ hrs(o.weighted) }}</td><td class="num">−{{ hrs(o.deducted) }}</td><td class="num"><b>{{ hrs(o.net) }}</b></td></tr></tfoot>{% endif %}</table>
+</section>
+<details class="card flush fold" aria-labelledby="od-h" open>
+  <summary class="card-head"><h2 id="od-h">{{ icon('clock') }}Days with overtime</h2><span class="hint">minutes in each part of the day</span></summary>
+  <div class="tbl-wrap"><table class="tbl" id="my-ot-days"><thead><tr><th>Date</th><th>Worked</th><th class="num">Before {{ rep.rules.evening_from }} ×{{ rep.rules.day_rate|num(2) }}</th><th class="num">{{ rep.rules.evening_from }}–{{ rep.rules.night_from }} ×{{ rep.rules.evening_rate|num(2) }}</th><th class="num">After {{ rep.rules.night_from }} ×{{ rep.rules.night_rate|num(2) }}</th><th class="num">Counted</th><th>Note</th></tr></thead><tbody>
+  {% for d in rep.days if d.raw or (d.day_kind and d.stay) %}<tr><td class="nowrap">{{ d.date|dmy }} · {{ d.date|dayname }}</td><td><span dir="ltr">{{ d.in }}–{{ d.out }}</span></td>
+    {% if d.bands %}<td class="num">{{ hrs(d.bands.day / 60) }}</td><td class="num">{{ hrs(d.bands.evening / 60) }}</td><td class="num">{{ hrs(d.bands.night / 60) }}</td>
+    {% else %}<td class="num" colspan="3">{{ tone_chip('Holiday' if d.day_kind == 'official_holiday' else 'Rest day', 't-na') }} {{ hrs(d.stay) }}</td>{% endif %}
+    <td class="num"><b>{{ hrs(d.weighted) }}</b></td><td class="small muted">{{ d.note }}</td></tr>
+  {% else %}<tr><td colspan="7">{% call empty('check-circle', 'No overtime', 'No day of this month went beyond ' ~ rep.rules.base_hours|num ~ ' hours.') %}{% endcall %}</td></tr>{% endfor %}
+  </tbody></table></div>
+</details>
+<p class="small muted">A rest day or an official holiday worked: with a comp day taken on a working day (Sunday to Thursday, not an official holiday) after it in the same week or in the following week there is no overtime (only its shift allowance); without one - a day off on the next Friday or Saturday does not count - every hour counts ×{{ rep.rules.holiday_rate|num(2) }}.</p>
+{% endif %}
+{% endif %}
+
+{# ------------------------------------------------------------------------------------------------ Team #}
+{% else %}
+<form method="get" class="card row" aria-label="Team">
+  <input type="hidden" name="tab" value="team"><input type="hidden" name="month" value="{{ month }}">
+  <label class="field">Team<select name="team" data-autosubmit><option value="">{{ 'All my teams' if att_user.role == 'manager' else 'All teams' }}</option>{% for t in teams %}<option {{ 'selected' if t == team }}>{{ t }}</option>{% endfor %}</select></label>
+  <button class="btn btn-ghost" type="submit">{{ icon('refresh') }}Show</button>
+</form>
+<section class="card flush" aria-labelledby="tm-h">
+  <div class="card-head"><h2 id="tm-h">{{ icon('users') }}{{ label }}</h2><span class="hint">{{ 'overtime and the expected shift allowance of every person you can see' if team_money else 'overtime and the expected shifts of your team - the amounts are on each person\'s own page' }}</span></div>
+  <div class="tbl-wrap"><table class="tbl" id="team-overtime"><thead><tr><th>Person</th><th class="num">Days worked</th><th class="num">Overtime (h)</th><th class="num">% of a normal month</th>{% if team_money %}<th class="num">Allowance so far</th><th class="num">Expected this month</th>{% else %}<th class="num">Shifts so far</th><th class="num">Shifts expected this month</th>{% endif %}</tr></thead><tbody>
+  {% for r in team_rows %}{% set o = r.overtime %}<tr>
+    <td>{{ person(r.employee.name, r.employee.id, r.employee.teams|join(', '), url_for('att_people.profile', emp_id=r.employee.id)) }}{% if r.is_manager %} {{ tone_chip('Supervisor', 't-na') }}{% endif %}</td>
+    <td class="num">{{ r.days|selectattr('stay')|list|length }}</td>
+    <td class="num"><b>{{ hrs(o.capped) }}</b>{% if o.over_cap %} <span class="small muted">(+{{ hrs(o.over_cap) }} over the cap)</span>{% endif %}</td>
+    <td class="num">{{ '%.1f'|format(o.pct) }} %</td>
+    {% if team_money %}<td class="num">{{ egp(r.so_far.total) }}</td><td class="num"><b>{{ egp(r.expected_total) }}</b> <span class="small muted">{{ r.currency }}</span></td>
+    {% else %}<td class="num">{{ r.so_far.shifts }}</td><td class="num"><b>{{ r.so_far.shifts + r.rest.shifts }}</b></td>{% endif %}</tr>
+  {% else %}<tr><td colspan="6">{% call empty('users', 'Nobody here', 'People appear here when they belong to your teams.') %}{% endcall %}</td></tr>{% endfor %}
+  </tbody>
+  {% if team_rows %}<tfoot><tr><td><b>Total</b></td><td></td><td class="num"><b>{{ hrs(team_rows|map(attribute='overtime')|sum(attribute='capped')) }}</b></td><td></td>
+    {% if team_money %}<td class="num">{{ egp(team_rows|map(attribute='so_far')|sum(attribute='total')) }}</td><td class="num"><b>{{ egp(team_rows|sum(attribute='expected_total')) }}</b></td>
+    {% else %}<td class="num">{{ team_rows|map(attribute='so_far')|sum(attribute='shifts') }}</td><td class="num"><b>{{ team_rows|map(attribute='so_far')|sum(attribute='shifts') + team_rows|map(attribute='rest')|sum(attribute='shifts') }}</b></td>{% endif %}</tr></tfoot>{% endif %}
+  </table></div>
+</section>
+{% endif %}
+{% endblock %}
