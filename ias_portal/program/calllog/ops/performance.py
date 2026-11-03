@@ -88,11 +88,11 @@ def sla_scope(store, hub, users, day_from, day_to, scope=None):
             "available": bool(state.get("last_history") or raw), "last_history": state.get("last_history", "")}
 
 
-def _accounts_in(users, scope):
-    """The active employees (role "user") ``scope`` may see, by user ID."""
+def _accounts_in(users, scope, roles=("user",)):
+    """The active accounts of ``roles`` (the employees by default) ``scope`` may see, by user ID."""
     out = {}
     for uid, u in (users or {}).items():
-        if not u.get("active", True) or u.get("role") != "user":
+        if not u.get("active", True) or u.get("role") not in roles:
             continue
         mine = [t for t in overlay.user_teams(u) if teams._real_team(t)]
         if scope is None or any(teams.in_scope(scope, t) for t in mine):
@@ -148,13 +148,14 @@ def day_numbers(store, hub, users, day):
     return {"available": True, "sc": sc, "by_person": nums["by_person"], "by_team": nums["by_team"]}
 
 
-def people_day(store, calls_store, hub, users, day, now, scope=None, top=None, numbers=None):
+def people_day(store, calls_store, hub, users, day, now, scope=None, top=None, numbers=None, roles=("user",)):
     """One day of each employee ``scope`` may see: [{user_id, name, team, calls, emails, executed, not_executed,
     rejected, tickets, total, exec_median_minutes, rank}] best first: ``total`` is the day's score in security
     requests (``WEIGHTS``: tickets handled + 2 per call + 3 per e-mail replied); ties by tickets, then calls.
     ``emails`` is None for every row when that day's e-mails are not known. Employees with nothing that day are left
-    out."""
-    accounts = _accounts_in(users, scope)
+    out. ``roles`` = ("user", "manager") also lists the managers (their e-mail replies count for their team's Best
+    team, owner v5.18); every row says its ``role``."""
+    accounts = _accounts_in(users, scope, roles)
     calls = _calls(calls_store, day)
     emails = _emails(store, day, now)
     tickets = {}
@@ -186,7 +187,7 @@ def people_day(store, calls_store, hub, users, day, now, scope=None, top=None, n
         if not total:
             continue
         mine = [x for x in overlay.user_teams(u) if teams._real_team(x)]
-        rows.append({"user_id": uid, "name": u.get("name") or uid, "team": mine[0] if mine else "", "calls": c,
+        rows.append({"user_id": uid, "name": u.get("name") or uid, "role": u.get("role"), "team": mine[0] if mine else "", "calls": c,
                      "emails": e, "executed": t["executed"], "not_executed": t["not_executed"],
                      "rejected": t["rejected"], "tickets": done, "total": total,
                      "exec_median_minutes": min(t["_m"]) if len(t["_m"]) == 1 else (
@@ -199,6 +200,16 @@ def people_day(store, calls_store, hub, users, day, now, scope=None, top=None, n
 
 # ------------------------------------------------------------------------- the best team of the day (owner, v5.18)
 EMAIL_SLA_OK, EMAIL_SLA_BAD = ("Met", "Within SLA"), ("Breached",)
+TEAM_ROLES = ("user", "manager")                         # who counts for the Best team: the employees and the managers
+
+
+def employees_only(rows, top=None):
+    """Best performers: the employees of ``people_day(..., roles=TEAM_ROLES)`` rows, ranked again (managers are only in
+    the Best team)."""
+    out = [dict(r) for r in rows if r.get("role", "user") == "user"]
+    for n, r in enumerate(out, 1):
+        r["rank"] = n
+    return out[:top] if top else out
 
 
 def email_team_sla_of(rows, day):
@@ -244,20 +255,21 @@ def team_day(store, calls_store, hub, users, day, now, people=None, numbers=None
     answered 200 - the work is counted PER PERSON - and a team that keeps its SLA beats one that does not:
 
     * ``work`` = the team's score in security requests (the same as Best performers: requests handled + 2 per call
-      answered + 3 per e-mail replied); ``manpower`` = the team's employees who WORKED that day (at least one call, e-mail
-      reply or request - somebody on leave, off or on another task is not counted, owner v5.18), ``team_size`` = all its
-      active employees; ``per_person`` = work / manpower;
+      answered + 3 per e-mail replied) - its managers' work too (a manager replies to e-mails: it counts for the team,
+      but a manager is never one of the people it is divided by, owner v5.18); ``manpower`` = the team's EMPLOYEES who
+      WORKED that day (at least one call, e-mail reply or request - somebody on leave, off or on another task is not
+      counted), ``team_size`` = all its active employees; ``per_person`` = work / manpower;
     * ``sla_pct`` = the share of the team's e-mails (``email_team_sla_of``) and requests (executed inside the target)
       of the day that kept their SLA; None when the team had neither;
     * ``score`` = per_person × sla_pct / 100 (per_person alone when nothing of the team had an SLA that day).
 
-    Every team is listed (only totals, never a person). ``people`` = ``people_day`` rows already read (every team),
-    ``numbers`` = ``day_numbers`` already read."""
+    Every team is listed (only totals, never a person). ``people`` = ``people_day(..., roles=TEAM_ROLES)`` rows already
+    read (every team, the managers too), ``numbers`` = ``day_numbers`` already read."""
     if people is None:
         numbers = numbers or day_numbers(store, hub, users, day)
-        people = people_day(store, calls_store, hub, users, day, now, numbers=numbers)
+        people = people_day(store, calls_store, hub, users, day, now, numbers=numbers, roles=TEAM_ROLES)
     size = {}
-    for u in _accounts_in(users, None).values():
+    for u in _accounts_in(users, None).values():          # the employees: the managers are never manpower
         mine = [t for t in overlay.user_teams(u) if teams._real_team(t)]
         if mine:
             size[mine[0]] = size.get(mine[0], 0) + 1
@@ -265,7 +277,7 @@ def team_day(store, calls_store, hub, users, day, now, people=None, numbers=None
     for p in people:                                       # people_day lists only the employees who did something that day
         if p.get("team") in size and p.get("total"):
             w = work.setdefault(p["team"], {"calls": 0, "emails": 0, "tickets": 0, "work": 0, "worked": 0})
-            w["worked"] += 1
+            w["worked"] += p.get("role", "user") == "user"      # a manager's work counts, the manager is not a person here
             w["calls"] += p["calls"]
             w["emails"] += p.get("emails") or 0
             w["tickets"] += p["tickets"]
@@ -280,6 +292,8 @@ def team_day(store, calls_store, hub, users, day, now, people=None, numbers=None
         if not w["work"]:
             continue
         n = w.pop("worked")
+        if not n:                                          # only a manager worked: no employee to divide by
+            continue
         m = mail.get(key(team)) or {"ok": 0, "breached": 0}
         t = tick.get(key(team)) or {"within": 0, "timed": 0, "median": None}
         measured = m["ok"] + m["breached"] + t["timed"]

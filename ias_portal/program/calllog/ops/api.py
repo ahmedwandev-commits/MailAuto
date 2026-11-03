@@ -1276,12 +1276,11 @@ def performance_get():
     users = auth.store().users()
     users = users if isinstance(users, dict) else {u.get("user_id"): u for u in users or []}
     numbers = performance.day_numbers(ops(), hub_cfg(), users, day)          # the SLA history, read once for both
-    everyone = performance.people_day(ops(), auth.store(), hub_cfg(), users, day, now, numbers=numbers)
+    everyone = performance.people_day(ops(), auth.store(), hub_cfg(), users, day, now, numbers=numbers,
+                                      roles=performance.TEAM_ROLES)    # the managers too: their e-mails count for the Best team
     scope = auth.team_scope()
     mine = set(performance._accounts_in(users, scope))                  # the same people as people_day(scope)
-    rows = [dict(r) for r in everyone if r["user_id"] in mine]          # a manager: their own team(s) only
-    for n, r in enumerate(rows, 1):
-        r["rank"] = n
+    rows = performance.employees_only([r for r in everyone if r["user_id"] in mine])   # a manager: their own team(s) only
     # the Best team: every team (only its totals - never a person), so a manager sees where their team stands
     team_rows = performance.team_day(ops(), auth.store(), hub_cfg(), users, day, now, people=everyone, numbers=numbers)
     return jsonify(day=day, server_time=now.isoformat(timespec="seconds"), scope=overlay.scope_label(scope),

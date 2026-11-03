@@ -154,8 +154,9 @@ def _run(ctx):
     users = ds._users(ctx.data_dir)
     calls = Store(ctx.data_dir)
     numbers = performance.day_numbers(ctx.store, ctx.hub or {}, users, day)
-    everyone = performance.people_day(ctx.store, calls, ctx.hub or {}, users, day, now, numbers=numbers)
-    stars = everyone[:max(1, int(cfg.get("top") or 3))]
+    everyone = performance.people_day(ctx.store, calls, ctx.hub or {}, users, day, now, numbers=numbers,
+                                      roles=performance.TEAM_ROLES)    # the managers count for the Team of the day only
+    stars = performance.employees_only(everyone, max(1, int(cfg.get("top") or 3)))
     if not stars:
         return JobResult(ok=True, skipped=True, summary="nobody has calls, e-mails or requests done today yet")
     best_team = None

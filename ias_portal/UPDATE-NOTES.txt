@@ -29,7 +29,9 @@ F. NEW IN v5.18
        score per person = the team's score (the same points as Best performers: a request handled 1, a call answered 2,
                           an e-mail replied 3) / the people of the team who WORKED that day (at least one call, one
                           e-mail replied or one request - somebody on leave, on a rest day or on another task is not
-                          counted; managers are not counted). The page shows "worked / of the team" (like 3 / 5).
+                          counted). The page shows "worked / of the team" (like 3 / 5).
+                          A manager's work (their e-mail replies, any call or request) counts in the team's score, but a
+                          manager is never one of the people it is divided by. Best employees still lists employees only.
        team score       = score per person x the share of the team's e-mails and requests of the day that kept their SLA
      So a team of 2 that answered 100 calls and 20 e-mails beats a team of 100 that answered 200 calls and 50 e-mails, and
      with the same work per person the team that kept its SLA wins. A manager sees every team's totals (never its people).

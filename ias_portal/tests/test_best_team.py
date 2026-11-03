@@ -19,12 +19,11 @@ def _users(sizes):
         for i in range(n):
             uid = f"{team[:3]}{i}"
             out[uid] = {"user_id": uid, "name": uid, "role": "user", "active": True, "teams": [team]}
-    out["boss"] = {"user_id": "boss", "name": "Boss", "role": "manager", "active": True, "teams": ["Small Team"]}   # not manpower
     return out
 
 
-def _person(uid, team, calls=0, emails=0, tickets=0):
-    return {"user_id": uid, "name": uid, "team": team, "calls": calls, "emails": emails, "tickets": tickets,
+def _person(uid, team, calls=0, emails=0, tickets=0, role="user"):
+    return {"user_id": uid, "name": uid, "role": role, "team": team, "calls": calls, "emails": emails, "tickets": tickets,
             "total": calls * 2 + emails * 3 + tickets}
 
 
@@ -70,6 +69,21 @@ def test_the_sla_counts(sla):
     assert fast["score"] == pytest.approx(65.3, abs=0.06) and slow["score"] == 35.0 and fast["exec_median_minutes"] == 12
 
 
+def test_a_manager_who_replies_to_e_mails_counts_for_the_team(sla):
+    """Owner (v5.18): a manager replies to e-mails too - their replies count in the team's score, but a manager is never one
+    of the people the score is divided by."""
+    users = _users({"Small Team": 2})
+    users["boss"] = {"user_id": "boss", "name": "Boss", "role": "manager", "active": True, "teams": ["Small Team"]}
+    users["idle"] = {"user_id": "idle", "name": "Idle", "role": "manager", "active": True, "teams": ["Small Team"]}
+    people = [_person("Sma0", "Small Team", calls=10), _person("boss", "Small Team", emails=10, role="manager")]
+    (row,) = perf.team_day(None, None, {}, users, DAY, NOW, people=people)
+    assert (row["manpower"], row["team_size"], row["emails"], row["work"], row["per_person"]) == (1, 2, 10, 50, 50.0)
+    users2 = _users({"Lone Team": 1})
+    users2["chief"] = {"user_id": "chief", "name": "Chief", "role": "manager", "active": True, "teams": ["Lone Team"]}
+    assert perf.team_day(None, None, {}, users2, DAY, NOW, people=[_person("chief", "Lone Team", emails=5, role="manager")]) == []
+    assert [r["user_id"] for r in perf.employees_only(people)] == ["Sma0"]                     # Best employees: employees only
+
+
 def test_a_team_without_work_or_without_people_is_not_listed(sla):
     users = _users({"Busy": 1, "Idle": 3})
     rows = perf.team_day(None, None, {}, users, DAY, NOW, people=[_person("Bus0", "Busy", calls=1), _person("x", "Nobody", calls=9)])
@@ -101,17 +115,22 @@ def test_the_page_lists_the_teams_and_a_manager_sees_every_team_but_only_their_p
     make_user(app, admin, "b1", teams=["Open System"], email="b1@nbe.test")
     make_user(app, admin, "b2", teams=["Open System"], email="b2@nbe.test")
     mgr = make_user(app, admin, "m1", role="manager", teams=["Flex Cube"], email="m1@nbe.test")
-    rows = [{"message_id": f"m{i}", "row_id": f"m{i}", "team": team, "all_teams": [team], "status": "Replied",
+    rows = [{"message_id": "mm", "row_id": "mm", "team": "Flex Cube", "all_teams": ["Flex Cube"], "status": "Replied",
+             "received_time": f"{DAY}T07:00:00", "first_reply_time": f"{DAY}T07:30:00", "first_reply_email": "m1@nbe.test",
+             "sla_status": "Met", "response_minutes": 30, "sla_minutes": 60}]                   # the manager replied
+    rows += [{"message_id": f"m{i}", "row_id": f"m{i}", "team": team, "all_teams": [team], "status": "Replied",
              "received_time": f"{DAY}T08:00:00", "first_reply_time": f"{DAY}T08:{10 + i:02d}:00", "first_reply_email": who,
              "sla_status": "Met", "response_minutes": 10, "sla_minutes": 60}
             for i, (team, who) in enumerate([("Flex Cube", "a1@nbe.test"), ("Flex Cube", "a1@nbe.test"), ("Open System", "b1@nbe.test")])]
     write_email_snapshot(app, rows)
     d = admin.get(f"/api/ops/performance?day={DAY}").get_json()
     by = {t["team"]: t for t in d["teams"]}
-    assert by["Flex Cube"]["manpower"] == 1 and by["Flex Cube"]["per_person"] == 6.0 and by["Flex Cube"]["email_sla_pct"] == 100.0
+    assert (by["Flex Cube"]["manpower"], by["Flex Cube"]["team_size"], by["Flex Cube"]["emails"]) == (1, 1, 3)   # a1; + the manager's reply
+    assert by["Flex Cube"]["per_person"] == 9.0 and by["Flex Cube"]["email_sla_pct"] == 100.0           # 9 / 1
     assert (by["Open System"]["manpower"], by["Open System"]["team_size"]) == (1, 2)                # b2 did nothing that day
     assert by["Open System"]["per_person"] == 3.0
     assert d["teams"][0]["team"] == "Flex Cube" and d["teams"][0]["rank"] == 1
     m = mgr.get(f"/api/ops/performance?day={DAY}").get_json()
     assert {t["team"] for t in m["teams"]} == {"Flex Cube", "Open System"}                        # where my team stands
-    assert {r["user_id"] for r in m["rows"]} == {"a1"}                                             # my people only
+    assert {r["user_id"] for r in m["rows"]} == {"a1"}                                             # my people only (employees)
+    assert {r["user_id"] for r in d["rows"]} == {"a1", "b1"} and [r["rank"] for r in d["rows"]] == [1, 2]   # no manager
