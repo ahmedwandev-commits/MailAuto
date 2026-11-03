@@ -239,7 +239,7 @@
     }).el;
     return h("div", { class: "op-stack", "data-teams": "" },
       h("h3", {}, "Best team"),
-      h("p", { class: "hint" }, "Team score = score per person (the team's score ÷ the employees who worked that day: at least one call, e-mail or ticket - leave, rest days and other tasks are not counted; the managers' replies count in the team's score, a manager is not counted as a person) × the share of its e-mails and tickets that kept their SLA. A small team that does more per person and keeps its SLA beats a big one."),
+      h("p", { class: "hint" }, "Team score = score per person (the team's score ÷ the people who worked that day: an employee with at least one call, e-mail or ticket, a manager with at least one e-mail replied - leave, rest days and other tasks are not counted; of a manager only the e-mail replies count) × the share of its e-mails and tickets that kept their SLA. A small team that does more per person and keeps its SLA beats a big one."),
       banner, table, h("h3", {}, "Best employees"));
   }
   function performersCard() {

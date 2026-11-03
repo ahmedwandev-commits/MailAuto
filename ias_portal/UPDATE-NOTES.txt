@@ -27,11 +27,12 @@ F. NEW IN v5.18
      ranking, and the Best Performance e-mail has a "Team of the day" part (Settings > Daily summary > "Also the Team of
      the day", on by default). The work is counted PER PERSON and the SLA counts:
        score per person = the team's score (the same points as Best performers: a request handled 1, a call answered 2,
-                          an e-mail replied 3) / the people of the team who WORKED that day (at least one call, one
-                          e-mail replied or one request - somebody on leave, on a rest day or on another task is not
+                          an e-mail replied 3) / the people of the team who WORKED that day (an employee with at least
+                          one call, one e-mail replied or one request; a manager with at least one e-mail replied - somebody on leave, on a rest day or on another task is not
                           counted). The page shows "worked / of the team" (like 3 / 5).
-                          A manager's work (their e-mail replies, any call or request) counts in the team's score, but a
-                          manager is never one of the people it is divided by. Best employees still lists employees only.
+                          A manager only replies to e-mails: their replies count in the team's score (never their calls
+                          or requests), and a manager who replied at least one e-mail that day counts as one of the
+                          team's people. Best employees still lists employees only.
        team score       = score per person x the share of the team's e-mails and requests of the day that kept their SLA
      So a team of 2 that answered 100 calls and 20 e-mails beats a team of 100 that answered 200 calls and 50 e-mails, and
      with the same work per person the team that kept its SLA wins. A manager sees every team's totals (never its people).

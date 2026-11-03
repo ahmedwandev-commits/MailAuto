@@ -255,10 +255,10 @@ def team_day(store, calls_store, hub, users, day, now, people=None, numbers=None
     answered 200 - the work is counted PER PERSON - and a team that keeps its SLA beats one that does not:
 
     * ``work`` = the team's score in security requests (the same as Best performers: requests handled + 2 per call
-      answered + 3 per e-mail replied) - its managers' work too (a manager replies to e-mails: it counts for the team,
-      but a manager is never one of the people it is divided by, owner v5.18); ``manpower`` = the team's EMPLOYEES who
-      WORKED that day (at least one call, e-mail reply or request - somebody on leave, off or on another task is not
-      counted), ``team_size`` = all its active employees; ``per_person`` = work / manpower;
+      answered + 3 per e-mail replied); a manager only replies to e-mails, so of a manager only their e-mail replies count
+      (owner v5.18); ``manpower`` = the team's people who WORKED that day: an employee with at least one call, e-mail
+      reply or request, a manager with at least one e-mail reply (somebody on leave, off or on another task is not
+      counted); ``team_size`` = all its active employees and managers; ``per_person`` = work / manpower;
     * ``sla_pct`` = the share of the team's e-mails (``email_team_sla_of``) and requests (executed inside the target)
       of the day that kept their SLA; None when the team had neither;
     * ``score`` = per_person × sla_pct / 100 (per_person alone when nothing of the team had an SLA that day).
@@ -269,19 +269,24 @@ def team_day(store, calls_store, hub, users, day, now, people=None, numbers=None
         numbers = numbers or day_numbers(store, hub, users, day)
         people = people_day(store, calls_store, hub, users, day, now, numbers=numbers, roles=TEAM_ROLES)
     size = {}
-    for u in _accounts_in(users, None).values():          # the employees: the managers are never manpower
+    for u in _accounts_in(users, None, TEAM_ROLES).values():   # the employees and the managers
         mine = [t for t in overlay.user_teams(u) if teams._real_team(t)]
         if mine:
             size[mine[0]] = size.get(mine[0], 0) + 1
     work = {}
-    for p in people:                                       # people_day lists only the employees who did something that day
-        if p.get("team") in size and p.get("total"):
-            w = work.setdefault(p["team"], {"calls": 0, "emails": 0, "tickets": 0, "work": 0, "worked": 0})
-            w["worked"] += p.get("role", "user") == "user"      # a manager's work counts, the manager is not a person here
-            w["calls"] += p["calls"]
-            w["emails"] += p.get("emails") or 0
-            w["tickets"] += p["tickets"]
-            w["work"] += p["total"]
+    for p in people:                                       # people_day lists only the people who did something that day
+        if p.get("team") not in size:
+            continue
+        if p.get("role", "user") == "manager":            # a manager replies to e-mails only: nothing else of theirs counts
+            p = {**p, "calls": 0, "tickets": 0, "total": (p.get("emails") or 0) * WEIGHTS["emails"]}
+        if not p.get("total"):
+            continue
+        w = work.setdefault(p["team"], {"calls": 0, "emails": 0, "tickets": 0, "work": 0, "worked": 0})
+        w["worked"] += 1
+        w["calls"] += p["calls"]
+        w["emails"] += p.get("emails") or 0
+        w["tickets"] += p["tickets"]
+        w["work"] += p["total"]
     mail, tick = _email_team_sla(store, day, now), _ticket_team_sla(store, hub, users, day, numbers)
     key = lambda name: str(name or "").strip().casefold()                     # noqa: E731
     mail = {key(t): v for t, v in mail.items()}
@@ -292,8 +297,6 @@ def team_day(store, calls_store, hub, users, day, now, people=None, numbers=None
         if not w["work"]:
             continue
         n = w.pop("worked")
-        if not n:                                          # only a manager worked: no employee to divide by
-            continue
         m = mail.get(key(team)) or {"ok": 0, "breached": 0}
         t = tick.get(key(team)) or {"within": 0, "timed": 0, "median": None}
         measured = m["ok"] + m["breached"] + t["timed"]

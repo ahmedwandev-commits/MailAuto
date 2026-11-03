@@ -70,17 +70,16 @@ def test_the_sla_counts(sla):
 
 
 def test_a_manager_who_replies_to_e_mails_counts_for_the_team(sla):
-    """Owner (v5.18): a manager replies to e-mails too - their replies count in the team's score, but a manager is never one
-    of the people the score is divided by."""
+    """Owner (v5.18): a manager only replies to e-mails - their replies count, and a manager who replied counts as one of
+    the team's people; their calls or requests never count."""
     users = _users({"Small Team": 2})
     users["boss"] = {"user_id": "boss", "name": "Boss", "role": "manager", "active": True, "teams": ["Small Team"]}
     users["idle"] = {"user_id": "idle", "name": "Idle", "role": "manager", "active": True, "teams": ["Small Team"]}
-    people = [_person("Sma0", "Small Team", calls=10), _person("boss", "Small Team", emails=10, role="manager")]
+    people = [_person("Sma0", "Small Team", calls=10), _person("boss", "Small Team", emails=10, calls=4, tickets=9, role="manager"),
+              _person("idle", "Small Team", calls=5, role="manager")]                       # a manager with no reply: not counted
     (row,) = perf.team_day(None, None, {}, users, DAY, NOW, people=people)
-    assert (row["manpower"], row["team_size"], row["emails"], row["work"], row["per_person"]) == (1, 2, 10, 50, 50.0)
-    users2 = _users({"Lone Team": 1})
-    users2["chief"] = {"user_id": "chief", "name": "Chief", "role": "manager", "active": True, "teams": ["Lone Team"]}
-    assert perf.team_day(None, None, {}, users2, DAY, NOW, people=[_person("chief", "Lone Team", emails=5, role="manager")]) == []
+    assert (row["manpower"], row["team_size"], row["calls"], row["emails"], row["tickets"]) == (2, 4, 10, 10, 0)
+    assert (row["work"], row["per_person"]) == (50, 25.0)                                       # (20 + 30) / 2
     assert [r["user_id"] for r in perf.employees_only(people)] == ["Sma0"]                     # Best employees: employees only
 
 
@@ -125,8 +124,8 @@ def test_the_page_lists_the_teams_and_a_manager_sees_every_team_but_only_their_p
     write_email_snapshot(app, rows)
     d = admin.get(f"/api/ops/performance?day={DAY}").get_json()
     by = {t["team"]: t for t in d["teams"]}
-    assert (by["Flex Cube"]["manpower"], by["Flex Cube"]["team_size"], by["Flex Cube"]["emails"]) == (1, 1, 3)   # a1; + the manager's reply
-    assert by["Flex Cube"]["per_person"] == 9.0 and by["Flex Cube"]["email_sla_pct"] == 100.0           # 9 / 1
+    assert (by["Flex Cube"]["manpower"], by["Flex Cube"]["team_size"], by["Flex Cube"]["emails"]) == (2, 2, 3)   # a1 + the manager
+    assert by["Flex Cube"]["per_person"] == 4.5 and by["Flex Cube"]["email_sla_pct"] == 100.0           # 9 / 2
     assert (by["Open System"]["manpower"], by["Open System"]["team_size"]) == (1, 2)                # b2 did nothing that day
     assert by["Open System"]["per_person"] == 3.0
     assert d["teams"][0]["team"] == "Flex Cube" and d["teams"][0]["rank"] == 1
