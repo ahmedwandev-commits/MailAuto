@@ -1275,9 +1275,17 @@ def performance_get():
         raise ApiError("That day has not come yet.")
     users = auth.store().users()
     users = users if isinstance(users, dict) else {u.get("user_id"): u for u in users or []}
-    rows = performance.people_day(ops(), auth.store(), hub_cfg(), users, day, now, auth.team_scope())
-    return jsonify(day=day, server_time=now.isoformat(timespec="seconds"), scope=overlay.scope_label(auth.team_scope()),
-                   rows=rows, emails_known=any(r["emails"] is not None for r in rows) or not rows)
+    numbers = performance.day_numbers(ops(), hub_cfg(), users, day)          # the SLA history, read once for both
+    everyone = performance.people_day(ops(), auth.store(), hub_cfg(), users, day, now, numbers=numbers)
+    scope = auth.team_scope()
+    mine = set(performance._accounts_in(users, scope))                  # the same people as people_day(scope)
+    rows = [dict(r) for r in everyone if r["user_id"] in mine]          # a manager: their own team(s) only
+    for n, r in enumerate(rows, 1):
+        r["rank"] = n
+    # the Best team: every team (only its totals - never a person), so a manager sees where their team stands
+    team_rows = performance.team_day(ops(), auth.store(), hub_cfg(), users, day, now, people=everyone, numbers=numbers)
+    return jsonify(day=day, server_time=now.isoformat(timespec="seconds"), scope=overlay.scope_label(scope),
+                   rows=rows, teams=team_rows, emails_known=any(r["emails"] is not None for r in rows) or not rows)
 
 
 @bp.get("/sla-analysis/request")

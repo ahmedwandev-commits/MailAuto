@@ -23,6 +23,15 @@ F. NEW IN v5.18
      everywhere - Settings > Rules & allowance "Amount per day" (100 / 150 / 200 / 300 unless you saved others) and the
      currency, the meal prices under "Overtime & meals" (100 each), the allowance sheet, the confirmation page and e-mails,
      My schedule, My attendance (transport + meals in EGP) and the guide. The days behind every count (checkpoint 4) stay.
+   - BEST TEAM (owner): Insights > Analysis > Best performers now opens with the Best team of the day and every team's
+     ranking, and the Best Performance e-mail has a "Team of the day" part (Settings > Daily summary > "Also the Team of
+     the day", on by default). The work is counted PER PERSON and the SLA counts:
+       score per person = the team's score (the same points as Best performers: a request handled 1, a call answered 2,
+                          an e-mail replied 3) / its people (the team's active employees; managers are not counted)
+       team score       = score per person x the share of the team's e-mails and requests of the day that kept their SLA
+     So a team of 2 that answered 100 calls and 20 e-mails beats a team of 100 that answered 200 calls and 50 e-mails, and
+     with the same work per person the team that kept its SLA wins. A manager sees every team's totals (never its people).
+     The e-mails' SLA of a past day is kept from this version on (earlier days count the requests' SLA only).
    - ADMIN > USERS: MANAGER PRIVILEGES (owner): editing a manager now asks "Manager only" (E-mail, Calls and the rest; in
      Workforce only their own schedule and attendance) or "Manager + the team's schedule" (makes and publishes the team's
      schedule, approves its shifts and leave, confirms its allowance). One OR SEVERAL managers of a team may have it (the

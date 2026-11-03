@@ -133,7 +133,22 @@ def _emails(store, day, now):
     return dict(kept) if isinstance(kept, dict) else None
 
 
-def people_day(store, calls_store, hub, users, day, now, scope=None, top=None):
+def day_numbers(store, hub, users, day):
+    """The day's security requests per person and per team ({"available", "sc", "by_person", "by_team"}), read ONCE for
+    Best performers and the Best team (the SLA history is big: reading it twice doubles the page time)."""
+    sc = sla_scope(store, hub, users, day, day, None)
+    if not sc["available"]:
+        return {"available": False, "sc": sc, "by_person": [], "by_team": []}
+    window = str((store.read_sla_history_state() or {}).get("grid_from") or "")[:10]
+    if window and day < window:                           # older than the inquiry: the numbers kept that day
+        log = (store.read_history("sla", day) or {}).get("day_log") or {}
+        return {"available": True, "sc": sc, "by_person": [fold_rejected(r) for r in log.get("by_person") or []],
+                "by_team": log.get("by_team") or []}
+    nums = sla_history.status_numbers(sc["grid"], sc["records"], sc["cfg"], day, day)
+    return {"available": True, "sc": sc, "by_person": nums["by_person"], "by_team": nums["by_team"]}
+
+
+def people_day(store, calls_store, hub, users, day, now, scope=None, top=None, numbers=None):
     """One day of each employee ``scope`` may see: [{user_id, name, team, calls, emails, executed, not_executed,
     rejected, tickets, total, exec_median_minutes, rank}] best first: ``total`` is the day's score in security
     requests (``WEIGHTS``: tickets handled + 2 per call + 3 per e-mail replied); ties by tickets, then calls.
@@ -145,14 +160,10 @@ def people_day(store, calls_store, hub, users, day, now, scope=None, top=None):
     tickets = {}
     # the owner's rule: an employee's score counts EVERY request they handled (as the Best Performance e-mail does); the
     # scope only picks which employees are listed
-    sc = sla_scope(store, hub, users, day, day, None)
-    if sc["available"]:                                   # the day's requests each security user handled
-        window = str((store.read_sla_history_state() or {}).get("grid_from") or "")[:10]
-        if window and day < window:                       # older than the inquiry: the numbers kept that day
-            log = (store.read_history("sla", day) or {}).get("day_log") or {}
-            person_rows = [fold_rejected(r) for r in log.get("by_person") or []]
-        else:
-            person_rows = sla_history.status_numbers(sc["grid"], sc["records"], sc["cfg"], day, day)["by_person"]
+    numbers = numbers or day_numbers(store, hub, users, day)
+    sc = numbers["sc"]
+    if numbers["available"]:                              # the day's requests each security user handled
+        person_rows = numbers["by_person"]
         by_no, by_name = sc["people"]
         display = {sla_history._norm(u.get("name")): u for u in accounts.values() if u.get("name")}
         for row in person_rows:
@@ -184,6 +195,101 @@ def people_day(store, calls_store, hub, users, day, now, scope=None, top=None):
     for n, r in enumerate(rows, 1):
         r["rank"] = n
     return rows[:top] if top else rows
+
+
+# ------------------------------------------------------------------------- the best team of the day (owner, v5.18)
+EMAIL_SLA_OK, EMAIL_SLA_BAD = ("Met", "Within SLA"), ("Breached",)
+
+
+def email_team_sla_of(rows, day):
+    """{team: {"ok": n, "breached": n}} - the SLA of each team's e-mails of ``day`` (received or replied that day): a
+    reply in time or a mail still inside its time is ok, a late reply or a mail waiting past it is breached."""
+    out = {}
+    for r in rows or []:
+        team, st = str(r.get("team") or "").strip(), r.get("sla_status")
+        if not teams._real_team(team) or st not in EMAIL_SLA_OK + EMAIL_SLA_BAD:
+            continue
+        if day not in (str(r.get("received_time") or "")[:10], str(r.get("first_reply_time") or "")[:10]):
+            continue
+        t = out.setdefault(team, {"ok": 0, "breached": 0})
+        t["ok" if st in EMAIL_SLA_OK else "breached"] += 1
+    return out
+
+
+def _email_team_sla(store, day, now):
+    """``email_team_sla_of`` for ``day``: today from the live e-mail view, an earlier day as the e-mail report kept it."""
+    snap = store.read_snapshot("email")
+    if snap and str(snap.get("date") or "")[:10] == day:
+        ovr = {name: store.overrides(name) for name in schemas.OVERRIDES}
+        view = overlay.view_email_data(snap.get("data") or {}, ovr, None, now)
+        return email_team_sla_of(view.get("rows"), day)
+    kept = (store.read_history("email", day) or {}).get("team_sla")
+    return dict(kept) if isinstance(kept, dict) else {}
+
+
+def _ticket_team_sla(store, hub, users, day, numbers=None):
+    """{team: {"within": n, "timed": n, "median": minutes}} - the day's requests each team executed inside / outside
+    the execution target (the SLA Analysis' numbers; a day older than the inquiry as it was kept)."""
+    numbers = numbers or day_numbers(store, hub, users, day)
+    out = {}
+    for r in numbers["by_team"]:
+        n = int(r.get("exec_n") or 0)
+        if r.get("team") and n:
+            out[r["team"]] = {"within": int(r.get("exec_within") or 0), "timed": n, "median": r.get("exec_median_minutes")}
+    return out
+
+
+def team_day(store, calls_store, hub, users, day, now, people=None, numbers=None):
+    """The teams of ``day``, best first (owner, v5.18): a team of 2 that answered 100 calls beats a team of 100 that
+    answered 200 - the work is counted PER PERSON - and a team that keeps its SLA beats one that does not:
+
+    * ``work`` = the team's score in security requests (the same as Best performers: requests handled + 2 per call
+      answered + 3 per e-mail replied), ``manpower`` = the team's active employees, ``per_person`` = work / manpower;
+    * ``sla_pct`` = the share of the team's e-mails (``email_team_sla_of``) and requests (executed inside the target)
+      of the day that kept their SLA; None when the team had neither;
+    * ``score`` = per_person × sla_pct / 100 (per_person alone when nothing of the team had an SLA that day).
+
+    Every team is listed (only totals, never a person). ``people`` = ``people_day`` rows already read (every team),
+    ``numbers`` = ``day_numbers`` already read."""
+    if people is None:
+        numbers = numbers or day_numbers(store, hub, users, day)
+        people = people_day(store, calls_store, hub, users, day, now, numbers=numbers)
+    size = {}
+    for u in _accounts_in(users, None).values():
+        mine = [t for t in overlay.user_teams(u) if teams._real_team(t)]
+        if mine:
+            size[mine[0]] = size.get(mine[0], 0) + 1
+    work = {}
+    for p in people:
+        if p.get("team") in size:
+            w = work.setdefault(p["team"], {"calls": 0, "emails": 0, "tickets": 0, "work": 0})
+            w["calls"] += p["calls"]
+            w["emails"] += p.get("emails") or 0
+            w["tickets"] += p["tickets"]
+            w["work"] += p["total"]
+    mail, tick = _email_team_sla(store, day, now), _ticket_team_sla(store, hub, users, day, numbers)
+    key = lambda name: str(name or "").strip().casefold()                     # noqa: E731
+    mail = {key(t): v for t, v in mail.items()}
+    tick = {key(t): v for t, v in tick.items()}
+    rows = []
+    for team, n in size.items():
+        w = work.get(team) or {"calls": 0, "emails": 0, "tickets": 0, "work": 0}
+        if not w["work"]:
+            continue
+        m = mail.get(key(team)) or {"ok": 0, "breached": 0}
+        t = tick.get(key(team)) or {"within": 0, "timed": 0, "median": None}
+        measured = m["ok"] + m["breached"] + t["timed"]
+        sla_pct = round(100.0 * (m["ok"] + t["within"]) / measured, 1) if measured else None
+        per_person = round(w["work"] / n, 1)
+        score = round(per_person * (sla_pct / 100.0 if sla_pct is not None else 1.0), 1)
+        rows.append({"team": team, "manpower": n, **w, "per_person": per_person,
+                     "email_sla_pct": round(100.0 * m["ok"] / (m["ok"] + m["breached"]), 1) if m["ok"] + m["breached"] else None,
+                     "ticket_sla_pct": round(100.0 * t["within"] / t["timed"], 1) if t["timed"] else None,
+                     "exec_median_minutes": t["median"], "sla_pct": sla_pct, "score": score})
+    rows.sort(key=lambda r: (-r["score"], -(r["sla_pct"] if r["sla_pct"] is not None else -1), -r["per_person"], r["team"].casefold()))
+    for i, r in enumerate(rows, 1):
+        r["rank"] = i
+    return rows
 
 
 # ------------------------------------------------------------------------- the day-by-day log (kept for good)

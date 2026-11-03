@@ -213,6 +213,35 @@
       ], rows,
     }).el;
   }
+  // the Best team (owner, v5.18): the team's score PER PERSON x the share of its e-mails and requests that kept their SLA
+  const pctOr = (v) => (v == null ? h("span", { class: "hint", title: "nothing with an SLA that day" }, "—") : `${fmtNum(v)}%`);
+  function teamsTable(d) {
+    const rows = d.teams || [];
+    if (!rows.length) return null;
+    const best = rows[0];
+    const banner = h("div", { class: "op-banner op-t-ok", "data-best-team": "" }, OPS.icon("check"),
+      h("span", {}, h("strong", {}, "Team of the day: "), h("strong", { dir: "auto" }, best.team),
+        ` · ${fmtNum(best.manpower)} people · ${fmtNum(best.per_person)} per person · SLA ${best.sla_pct == null ? "—" : fmtNum(best.sla_pct) + "%"} · team score ${fmtNum(best.score)}`));
+    const table = OPS.table({
+      copy: true, caption: "Best team", sort: { key: "rank", desc: false },
+      columns: [
+        { key: "rank", label: "#", num: true, sort: true, render: (r) => (r.rank === 1 ? OPS.chip("#1", "ok") : h("span", {}, `#${r.rank}`)), text: (r) => String(r.rank) },
+        { key: "team", label: "Team", sort: true, render: (r) => h("span", { dir: "auto" }, r.team), text: (r) => r.team },
+        { key: "manpower", label: "People", num: true, sort: true, render: (r) => fmtNum(r.manpower) },
+        { key: "calls", label: "Calls answered", num: true, sort: true, render: (r) => fmtNum(r.calls) },
+        { key: "emails", label: "E-mails replied", num: true, sort: true, render: (r) => fmtNum(r.emails) },
+        { key: "tickets", label: "Tickets handled", num: true, sort: true, render: (r) => fmtNum(r.tickets) },
+        { key: "per_person", label: "Score per person", num: true, sort: true, render: (r) => h("span", { title: `${fmtNum(r.work)} ÷ ${fmtNum(r.manpower)} people` }, fmtNum(r.per_person)) },
+        { key: "email_sla_pct", label: "E-mails in SLA", num: true, sort: true, render: (r) => pctOr(r.email_sla_pct) },
+        { key: "ticket_sla_pct", label: "Tickets in SLA", num: true, sort: true, render: (r) => pctOr(r.ticket_sla_pct) },
+        { key: "score", label: "Team score", num: true, sort: true, render: (r) => h("strong", {}, fmtNum(r.score)) },
+      ], rows,
+    }).el;
+    return h("div", { class: "op-stack", "data-teams": "" },
+      h("h3", {}, "Best team"),
+      h("p", { class: "hint" }, "Team score = score per person (the team's score ÷ its people) × the share of its e-mails and tickets that kept their SLA. A small team that does more per person and keeps its SLA beats a big one."),
+      banner, table, h("h3", {}, "Best employees"));
+  }
   function performersCard() {
     const body = h("div", { "data-perf": "" }, h("p", { class: "hint" }, "Loading…"));
     const dayI = h("input", { type: "date", "aria-label": "Day", "data-perf-day": "", value: perf.day || state.to || "" });
@@ -224,7 +253,7 @@
       if (seq !== perf.seq) return;
       perf.day = d.day;
       dayI.value = d.day;
-      body.replaceChildren(performersTable(d));
+      body.replaceChildren(...[teamsTable(d), performersTable(d)].filter(Boolean));
     }
     dayI.addEventListener("change", load);
     load();

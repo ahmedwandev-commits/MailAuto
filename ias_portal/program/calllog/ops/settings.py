@@ -150,6 +150,7 @@ DEFAULTS = {
             "cc": [],
             "subject": "\U0001F3C6 Best Performance of the day: {names}",
             "messages": [],                     # the owner's words of encouragement, one a day in turn ({names}); [] = built-in
+            "team": True,                       # also the Team of the day (performance.team_day: work per person x SLA)
             "display_only": False,
         },
     },
@@ -500,7 +501,7 @@ FIELDS = {
         "modules": {"calls": _bool, "email": _bool, "tickets": _bool, "crs": _bool},
         "per_team": _bool, "display_only": _bool,
         "best_performer": {"enabled": _bool, "send_times": _times, "top": _int(1, 5), "cc": _emails,
-                           "subject": _str(150), "messages": _strs(500), "display_only": _bool},
+                           "subject": _str(150), "messages": _strs(500), "team": _bool, "display_only": _bool},
     },
     "assign": {
         "enabled": _bool, "base_url": _str(300, False), "login_path": _str(300), "app_url_fragment": _str(100),

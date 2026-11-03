@@ -582,6 +582,7 @@
         { path: "summary.best_performer.enabled", type: "switch", label: "Send the Best Performance e-mail" },
         { path: "summary.best_performer.send_times", type: "times", label: "Send at", hint: "One 24-hour time, like 15:30: it goes once a day, on the summary's days above." },
         { path: "summary.best_performer.top", type: "number", min: 1, max: 5, label: "How many are celebrated", hint: "The first of Best performers: 3 = the top 3." },
+        { path: "summary.best_performer.team", type: "switch", label: "Also the Team of the day", hint: "The best team (Insights › Analysis › Best team): its score per person × the share of its e-mails and requests that kept their SLA - a small team that works more per person and keeps its SLA wins." },
         { path: "summary.best_performer.cc", type: "lines", kind: "email", label: "Cc", hint: "One address per line (managers, the team…). The top 3 are the To." },
         { path: "summary.best_performer.subject", type: "text", max: 150, label: "Subject", hint: "{names} is replaced by their names." },
         { path: "summary.best_performer.messages", type: "lines", kind: "text", label: "Your words of encouragement (optional)", hint: "One per line, used in turn: a different one each day. {names} is replaced by their names. Empty: a built-in one, a different one each day." },
